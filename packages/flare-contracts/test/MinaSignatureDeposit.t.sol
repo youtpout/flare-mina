@@ -6,6 +6,7 @@ import {MinaPortBridge} from "../src/MinaPortBridge.sol";
 import {FMINA} from "../src/FMINA.sol";
 import {MockSettlementVerifier} from "../src/mocks/MockSettlementVerifier.sol";
 import {MinaSchnorr} from "../src/libraries/MinaSchnorr.sol";
+import {SignaturePurpose} from "../src/libraries/SignaturePurpose.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /// @dev The Mina -> Flare signature path is a 2-of-2: the depositor's Schnorr
@@ -53,14 +54,15 @@ contract MinaSignatureDepositTest is Test {
 
         // The tool signs (chainId, account, actionHash hi/lo, nonce, expiry).
         // `--action` feeds it the bridge's own intent commitment directly.
-        string[] memory a = new string[](7);
+        string[] memory a = new string[](8);
         a[0] = "node";
         a[1] = "../shared/tools/signAuthorization.mjs";
         a[2] = "--action";
-        a[3] = vm.toString(address(bridge));
-        a[4] = vm.toString(action);
-        a[5] = vm.toString(uint256(nonce));
-        a[6] = vm.toString(CHAIN_ID);
+        a[3] = vm.toString(SignaturePurpose.DEPOSIT_INTENT);
+        a[4] = vm.toString(address(bridge));
+        a[5] = vm.toString(action);
+        a[6] = vm.toString(uint256(nonce));
+        a[7] = vm.toString(CHAIN_ID);
 
         return abi.decode(vm.parseJson(string(vm.ffi(a))), (Signed));
     }

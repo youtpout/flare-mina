@@ -5,6 +5,7 @@ import {Test, console} from "forge-std/Test.sol";
 import {MinaAccount, MinaAccountFactory} from "../src/MinaAccount.sol";
 import {MinaAuthRegistry} from "../src/MinaAuthRegistry.sol";
 import {MinaSchnorr} from "../src/libraries/MinaSchnorr.sol";
+import {SignaturePurpose} from "../src/libraries/SignaturePurpose.sol";
 
 contract DemoToken {
     string public constant name = "Demo";
@@ -119,15 +120,16 @@ contract MinaAccountTest is Test {
         bytes memory data,
         uint64 nonce
     ) internal returns (Signed memory) {
-        string[] memory argv = new string[](8);
+        string[] memory argv = new string[](9);
         argv[0] = "node";
         argv[1] = "../shared/tools/signAuthorization.mjs";
-        argv[2] = vm.toString(forAccount);
-        argv[3] = vm.toString(target);
-        argv[4] = vm.toString(value);
-        argv[5] = vm.toString(data);
-        argv[6] = vm.toString(uint256(nonce));
-        argv[7] = vm.toString(CHAIN_ID);
+        argv[2] = vm.toString(SignaturePurpose.ACCOUNT_CALL);
+        argv[3] = vm.toString(forAccount);
+        argv[4] = vm.toString(target);
+        argv[5] = vm.toString(value);
+        argv[6] = vm.toString(data);
+        argv[7] = vm.toString(uint256(nonce));
+        argv[8] = vm.toString(CHAIN_ID);
 
         bytes memory out = vm.ffi(argv);
         return abi.decode(vm.parseJson(string(out)), (Signed));
@@ -286,20 +288,18 @@ contract MinaAccountTest is Test {
         internal
         returns (Signed memory)
     {
-        string[] memory argv = new string[](5 + calls.length * 3);
-        argv[0] = "node";
-        argv[1] = "../shared/tools/signAuthorization.mjs";
-        argv[2] = "--batch";
-        argv[3] = vm.toString(forAccount);
-        argv[4] = vm.toString(uint256(nonce));
-        // chainId is appended by position in the tool; pass it as the next arg.
-        string[] memory full = new string[](6 + calls.length * 3);
-        for (uint256 i; i < 5; ++i) full[i] = argv[i];
-        full[5] = vm.toString(CHAIN_ID);
+        string[] memory full = new string[](7 + calls.length * 3);
+        full[0] = "node";
+        full[1] = "../shared/tools/signAuthorization.mjs";
+        full[2] = "--batch";
+        full[3] = vm.toString(SignaturePurpose.ACCOUNT_BATCH);
+        full[4] = vm.toString(forAccount);
+        full[5] = vm.toString(uint256(nonce));
+        full[6] = vm.toString(CHAIN_ID);
         for (uint256 i; i < calls.length; ++i) {
-            full[6 + i * 3] = vm.toString(calls[i].target);
-            full[7 + i * 3] = vm.toString(calls[i].value);
-            full[8 + i * 3] = vm.toString(calls[i].data);
+            full[7 + i * 3] = vm.toString(calls[i].target);
+            full[8 + i * 3] = vm.toString(calls[i].value);
+            full[9 + i * 3] = vm.toString(calls[i].data);
         }
 
         return abi.decode(vm.parseJson(string(vm.ffi(full))), (Signed));

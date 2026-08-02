@@ -5,6 +5,7 @@ import {Test, console} from "forge-std/Test.sol";
 import {MinaAccount, MinaAccountFactory} from "../src/MinaAccount.sol";
 import {MinaAuthRegistry} from "../src/MinaAuthRegistry.sol";
 import {MinaSchnorr} from "../src/libraries/MinaSchnorr.sol";
+import {SignaturePurpose} from "../src/libraries/SignaturePurpose.sol";
 
 /// @dev Runs the full flow against forked Coston2 state, so the numbers reflect
 /// the real chain's gas schedule and block limit rather than Foundry's defaults.
@@ -59,15 +60,16 @@ contract Coston2ForkTest is Test {
         bytes memory data,
         uint64 nonce
     ) internal returns (Signed memory) {
-        string[] memory argv = new string[](8);
+        string[] memory argv = new string[](9);
         argv[0] = "node";
         argv[1] = "../shared/tools/signAuthorization.mjs";
-        argv[2] = vm.toString(forAccount);
-        argv[3] = vm.toString(target);
-        argv[4] = vm.toString(value);
-        argv[5] = vm.toString(data);
-        argv[6] = vm.toString(uint256(nonce));
-        argv[7] = vm.toString(COSTON2_CHAIN_ID);
+        argv[2] = vm.toString(SignaturePurpose.ACCOUNT_CALL);
+        argv[3] = vm.toString(forAccount);
+        argv[4] = vm.toString(target);
+        argv[5] = vm.toString(value);
+        argv[6] = vm.toString(data);
+        argv[7] = vm.toString(uint256(nonce));
+        argv[8] = vm.toString(COSTON2_CHAIN_ID);
 
         return abi.decode(vm.parseJson(string(vm.ffi(argv))), (Signed));
     }

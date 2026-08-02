@@ -12,6 +12,7 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
 import {FMINA} from "./FMINA.sol";
 import {MinaAddressLib} from "./libraries/MinaAddress.sol";
 import {MinaSchnorr} from "./libraries/MinaSchnorr.sol";
+import {SignaturePurpose} from "./libraries/SignaturePurpose.sol";
 import {MinaPortEncoding} from "./libraries/MinaPortEncoding.sol";
 import {IMinaSettlementVerifier, SettlementPublicValues} from "./interfaces/IMinaSettlementVerifier.sol";
 
@@ -265,13 +266,16 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
         bytes32 action =
             keccak256(abi.encode(DEPOSIT_INTENT_DOMAIN, recipient, amountNanomina));
 
-        fields = new uint256[](6);
-        fields[0] = block.chainid;
-        fields[1] = uint256(uint160(address(this)));
-        fields[2] = uint256(uint128(bytes16(action)));
-        fields[3] = uint256(uint128(uint256(action)));
-        fields[4] = nonce;
-        fields[5] = expiry;
+        // The purpose tag is first, so this can never collide with an account
+        // authorization even though the remaining fields are laid out the same.
+        fields = new uint256[](7);
+        fields[0] = SignaturePurpose.DEPOSIT_INTENT;
+        fields[1] = block.chainid;
+        fields[2] = uint256(uint160(address(this)));
+        fields[3] = uint256(uint128(bytes16(action)));
+        fields[4] = uint256(uint128(uint256(action)));
+        fields[5] = nonce;
+        fields[6] = expiry;
     }
 
     /// @notice Mint FMINA against a Mina-side escrow, on two independent

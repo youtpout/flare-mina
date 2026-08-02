@@ -3,7 +3,7 @@ import { encodeFunctionData, type Hex } from 'viem';
 import type { Session } from '@/App';
 import { CONTRACTS, MINA, explorerTx } from '@/lib/config';
 import { bridgeAbi, submit } from '@/lib/flare';
-import { depositActionHash, signAuthorization } from '@/lib/mina';
+import { PURPOSE, depositActionHash, signAuthorization } from '@/lib/mina';
 
 /**
  * Deposit status, as the API reports it.
@@ -92,6 +92,7 @@ export function Bridge({ session }: { session: Session }) {
       const expiry = BigInt('18446744073709551615');
 
       const signature = await signAuthorization(session.provider, {
+        purpose: PURPOSE.depositIntent,
         chainId: 114n,
         target: CONTRACTS.bridge,
         actionHash: depositActionHash(recipient, amount),

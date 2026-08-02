@@ -18,11 +18,11 @@ export const COSTON2 = {
 } as const;
 
 export const CONTRACTS = {
-  authRegistry: '0x36fFF00a188BA180a3A1db0be848e02D1F55D305',
-  accountFactory: '0x1d28b787739B1da05E28E2803D92c4F34c00C661',
-  bridge: '0x339B3058680045eDE271B0F960E2931a1D720675',
-  fmina: '0xB29232047CFC72f75151a9F43E26F7e7849e9e2F',
-  wrapperFactory: '0xC1fE05dA890d01D97A5C9E310B8C42f110788197',
+  authRegistry: '0xcf12aCe3f7D13EE714D57ee22EfA14cbb662fc56',
+  accountFactory: '0x2a2AcdD54B93675828028fb8108fACc0A387fe23',
+  bridge: '0xdb78DA6dd5eC73b7089799eE85Fc2E43126CBae2',
+  fmina: '0x68189e3a6F0Ef2D1accFd62b6De9abF791B3722e',
+  wrapperFactory: '0x98f0CA385dBe0724b4D9211fA4e515eB4d6848b7',
 } as const satisfies Record<string, Address>;
 
 /**

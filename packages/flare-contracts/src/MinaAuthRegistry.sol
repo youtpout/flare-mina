@@ -4,6 +4,7 @@ pragma solidity ^0.8.28;
 import {MinaSchnorr} from "./libraries/MinaSchnorr.sol";
 import {MinaAddressLib} from "./libraries/MinaAddress.sol";
 import {Pallas} from "./libraries/Pallas.sol";
+import {SignaturePurpose} from "./libraries/SignaturePurpose.sol";
 
 /// @title MinaAuthRegistry
 /// @notice Lets a Mina key authorise actions on Flare, by verifying its Schnorr
@@ -63,16 +64,22 @@ contract MinaAuthRegistry {
 
     /// @notice Field encoding of an authorization: exactly what the Mina key signs.
     ///
-    /// @dev Six Pallas field elements:
+    /// @dev Seven Pallas field elements:
     ///
     /// | index | content                          | width    |
     /// |-------|----------------------------------|----------|
-    /// | 0     | `chainId`                        | 64 bits  |
-    /// | 1     | `target`, big-endian             | 160 bits |
-    /// | 2     | `actionHash` high 16 bytes       | 128 bits |
-    /// | 3     | `actionHash` low 16 bytes        | 128 bits |
-    /// | 4     | `nonce`                          | 64 bits  |
-    /// | 5     | `expiry`                         | 64 bits  |
+    /// | 0     | purpose tag                      | small    |
+    /// | 1     | `chainId`                        | 64 bits  |
+    /// | 2     | `target`, big-endian             | 160 bits |
+    /// | 3     | `actionHash` high 16 bytes       | 128 bits |
+    /// | 4     | `actionHash` low 16 bytes        | 128 bits |
+    /// | 5     | `nonce`                          | 64 bits  |
+    /// | 6     | `expiry`                         | 64 bits  |
+    ///
+    /// The purpose tag comes first so that no two features can produce the same
+    /// signed message, whatever follows. Without it these fields are identical
+    /// to the bridge's deposit intent, and the two would be separated only by
+    /// their target addresses happening to differ.
     ///
     /// `actionHash` is split across two elements because a 256-bit digest does
     /// not fit in one ~254-bit field: packing it whole would reduce modulo the
@@ -81,18 +88,19 @@ contract MinaAuthRegistry {
     /// The signer's own public key is deliberately absent — Mina's signing
     /// scheme already absorbs `pk.x` and `pk.y` into the challenge, so
     /// repeating it here would add size without adding binding.
-    function encodeAuthorization(Authorization calldata auth)
+    function encodeAuthorization(Authorization calldata auth, uint256 purpose)
         public
         pure
         returns (uint256[] memory fields)
     {
-        fields = new uint256[](6);
-        fields[0] = auth.chainId;
-        fields[1] = uint256(uint160(auth.target));
-        fields[2] = uint256(uint128(bytes16(auth.actionHash)));
-        fields[3] = uint256(uint128(uint256(auth.actionHash)));
-        fields[4] = auth.nonce;
-        fields[5] = auth.expiry;
+        fields = new uint256[](7);
+        fields[0] = purpose;
+        fields[1] = auth.chainId;
+        fields[2] = uint256(uint160(auth.target));
+        fields[3] = uint256(uint128(bytes16(auth.actionHash)));
+        fields[4] = uint256(uint128(uint256(auth.actionHash)));
+        fields[5] = auth.nonce;
+        fields[6] = auth.expiry;
     }
 
     /// @notice Verify a Mina-signed authorization and consume its nonce.
@@ -113,10 +121,14 @@ contract MinaAuthRegistry {
     ///        that mina-signer's `signFields` always uses the devnet domain
     ///        regardless of its configured network, so this is normally false;
     ///        chain binding comes from `chainId`, not from this flag.
+    /// @param purpose Which feature this signature is for. The caller supplies
+    ///        it, and it is the first signed field, so a signature issued for
+    ///        one purpose can never satisfy another.
     function consume(
         MinaSchnorr.PublicKey calldata publicKey,
         MinaSchnorr.Signature calldata signature,
         Authorization calldata auth,
+        uint256 purpose,
         bool mainnet
     ) external returns (bytes32 minaKey) {
         if (auth.chainId != block.chainid) revert WrongChain(block.chainid, auth.chainId);
@@ -130,7 +142,7 @@ contract MinaAuthRegistry {
 
         // Cheap checks first: signature verification is ~809k gas, so every
         // rejectable condition is tested before paying for it.
-        if (!MinaSchnorr.verify(publicKey, signature, encodeAuthorization(auth), mainnet)) {
+        if (!MinaSchnorr.verify(publicKey, signature, encodeAuthorization(auth, purpose), mainnet)) {
             revert InvalidSignature();
         }
 
@@ -143,6 +155,7 @@ contract MinaAuthRegistry {
         MinaSchnorr.PublicKey calldata publicKey,
         MinaSchnorr.Signature calldata signature,
         Authorization calldata auth,
+        uint256 purpose,
         bool mainnet
     ) external view returns (bool) {
         if (auth.chainId != block.chainid) return false;
@@ -152,7 +165,7 @@ contract MinaAuthRegistry {
             bytes32(MinaAddressLib.raw(MinaAddressLib.pack(publicKey.x, publicKey.isOdd)));
         if (auth.nonce != nextNonce[minaKey]) return false;
 
-        return MinaSchnorr.verify(publicKey, signature, encodeAuthorization(auth), mainnet);
+        return MinaSchnorr.verify(publicKey, signature, encodeAuthorization(auth, purpose), mainnet);
     }
 
     /// @notice Next nonce for a Mina key given its curve coordinates.

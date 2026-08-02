@@ -3,7 +3,7 @@ import { encodeFunctionData, formatUnits, parseUnits, type Hex } from 'viem';
 import type { Session } from '@/App';
 import { DEX, TOKENS, explorerTx } from '@/lib/config';
 import { accountAbi, erc20Abi, nextNonce, quote, routerAbi, submit } from '@/lib/flare';
-import { batchHash, signAuthorization } from '@/lib/mina';
+import { PURPOSE, batchHash, signAuthorization } from '@/lib/mina';
 
 /** Slippage the user tolerates, in basis points. */
 const SLIPPAGE_BPS = 500n;
@@ -85,6 +85,7 @@ export function Swap({ session }: { session: Session }) {
 
       setStatus('Waiting for your Mina wallet…');
       const signature = await signAuthorization(session.provider, {
+        purpose: PURPOSE.accountBatch,
         chainId: 114n,
         target: session.account,
         actionHash: batchHash(calls),

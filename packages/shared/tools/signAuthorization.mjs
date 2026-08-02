@@ -6,9 +6,13 @@
  * against constants pasted into a test file that could drift.
  *
  * Usage:
- *   node signAuthorization.mjs <account> <target> <value> <calldata> <nonce> <chainId>
- *   node signAuthorization.mjs --batch <account> <nonce> <chainId> <t1> <v1> <d1> [t2 v2 d2 ...]
- *   node signAuthorization.mjs --action <account> <actionHash> <nonce> <chainId>
+ *   node signAuthorization.mjs <purpose> <account> <target> <value> <calldata> <nonce> <chainId>
+ *   node signAuthorization.mjs --batch <purpose> <account> <nonce> <chainId> <t1> <v1> <d1> ...
+ *   node signAuthorization.mjs --action <purpose> <account> <actionHash> <nonce> <chainId>
+ *
+ * `purpose` is the first signed field and is what keeps two features from ever
+ * sharing a signature. See SignaturePurpose.sol: 1 account call, 2 account
+ * batch, 3 deposit intent.
  *
  * Prints a JSON object; Foundry reads it with `vm.parseJson`.
  */
@@ -41,15 +45,16 @@ function callHash(target, value, data) {
   );
 }
 
+let purpose;
 let account;
 let nonce;
 let chainId;
 let actionHash;
 
 if (isBatch) {
-  // --batch <account> <nonce> <chainId> then (target, value, data) triples.
-  [, account, nonce, chainId] = argv;
-  const triples = argv.slice(4);
+  // --batch <purpose> <account> <nonce> <chainId> then (target, value, data) triples.
+  [, purpose, account, nonce, chainId] = argv;
+  const triples = argv.slice(5);
   if (triples.length === 0 || triples.length % 3 !== 0) {
     throw new Error('batch calls must be (target, value, data) triples');
   }
@@ -59,20 +64,18 @@ if (isBatch) {
     items.push(callHash(triples[i], triples[i + 1], triples[i + 2]));
   }
 
-  // Mirrors MinaAccount.batchHash: domain-separated so a one-call batch and a
-  // lone call are different statements.
-  const BATCH_DOMAIN = keccak256(toHex('MinaAccount.Batch.v1'));
-  actionHash = keccak256(
-    encodeAbiParameters([{ type: 'bytes32' }, { type: 'bytes32[]' }], [BATCH_DOMAIN, items]),
-  );
+  // Mirrors MinaAccount.batchHash. No domain tag here: a batch and a lone call
+  // are already separated by their purpose tags, which are signed first.
+  actionHash = keccak256(encodeAbiParameters([{ type: 'bytes32[]' }], [items]));
 } else if (isRawAction) {
-  // --action <account> <actionHash> <nonce> <chainId>
+  // --action <purpose> <account> <actionHash> <nonce> <chainId>
   //
   // For callers that build their own action commitment — the bridge's deposit
   // intent, for instance — rather than committing to a call.
-  [, account, actionHash, nonce, chainId] = argv;
+  [, purpose, account, actionHash, nonce, chainId] = argv;
 } else {
-  const [acct, target, value, calldata, n, cid] = argv;
+  const [p, acct, target, value, calldata, n, cid] = argv;
+  purpose = p;
   account = acct;
   nonce = n;
   chainId = cid;
@@ -82,6 +85,8 @@ if (isBatch) {
 // The six-field authorization encoding: see MinaAuthRegistry.encodeAuthorization.
 const ah = BigInt(actionHash);
 const fields = [
+  // Purpose first: no two features can produce the same signed message.
+  BigInt(purpose),
   BigInt(chainId),
   BigInt(account),
   ah >> 128n,

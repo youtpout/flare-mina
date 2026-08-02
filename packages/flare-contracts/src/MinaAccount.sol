@@ -4,6 +4,7 @@ pragma solidity ^0.8.28;
 import {MinaAuthRegistry} from "./MinaAuthRegistry.sol";
 import {MinaSchnorr} from "./libraries/MinaSchnorr.sol";
 import {MinaAddressLib} from "./libraries/MinaAddress.sol";
+import {SignaturePurpose} from "./libraries/SignaturePurpose.sol";
 
 /// @title MinaAccount
 /// @notice A Flare account owned by a Mina key.
@@ -30,9 +31,6 @@ contract MinaAccount {
 
     /// @notice Registry performing signature verification and nonce accounting.
     MinaAccountRegistryRef public immutable REGISTRY;
-
-    /// @notice Domain tag separating a batch commitment from a single call.
-    bytes32 public constant BATCH_DOMAIN = keccak256("MinaAccount.Batch.v1");
 
     event Executed(address indexed target, uint256 value, bytes32 indexed actionHash);
     event BatchExecuted(uint256 calls, bytes32 indexed batchHash);
@@ -75,9 +73,10 @@ contract MinaAccount {
 
     /// @notice Commitment to an ordered batch of calls.
     ///
-    /// @dev Domain-separated from {actionHash} by the `BATCH` tag, so a
-    /// single-call batch and a lone call are different statements and neither
-    /// signature can be presented as the other.
+    /// @dev A batch and a lone call are already different statements: they are
+    /// signed under different purpose tags ({SignaturePurpose-ACCOUNT_BATCH}
+    /// versus {SignaturePurpose-ACCOUNT_CALL}), which is the first field of the
+    /// signed message. A second domain tag here would be redundant.
     ///
     /// The order is part of the commitment: `approve` then `swap` is not the
     /// same authorisation as `swap` then `approve`.
@@ -86,7 +85,7 @@ contract MinaAccount {
         for (uint256 i; i < calls.length; ++i) {
             items[i] = actionHash(calls[i].target, calls[i].value, calls[i].data);
         }
-        return keccak256(abi.encode(BATCH_DOMAIN, items));
+        return keccak256(abi.encode(items));
     }
 
     /// @notice Execute a call authorised by this account's Mina key.
@@ -128,6 +127,7 @@ contract MinaAccount {
                 nonce: nonce,
                 expiry: expiry
             }),
+            SignaturePurpose.ACCOUNT_CALL,
             false
         );
 
@@ -176,6 +176,7 @@ contract MinaAccount {
                 nonce: nonce,
                 expiry: expiry
             }),
+            SignaturePurpose.ACCOUNT_BATCH,
             false
         );
 
@@ -197,6 +198,7 @@ interface MinaAccountRegistryRef {
         MinaSchnorr.PublicKey calldata publicKey,
         MinaSchnorr.Signature calldata signature,
         MinaAuthRegistry.Authorization calldata auth,
+        uint256 purpose,
         bool mainnet
     ) external returns (bytes32);
 

@@ -30,6 +30,20 @@ export function getMinaProvider(): MinaProvider | null {
 }
 
 /**
+ * What a Mina key is being asked to authorise.
+ *
+ * The first signed field, and the reason two features can never share a
+ * signature: without it, an account authorization and a deposit intent are the
+ * same seven fields separated only by their target addresses happening to
+ * differ. Mirrors `SignaturePurpose.sol`.
+ */
+export const PURPOSE = {
+  accountCall: 1n,
+  accountBatch: 2n,
+  depositIntent: 3n,
+} as const;
+
+/**
  * Field encoding of an authorization — exactly what the contracts recompute.
  *
  * Mirrors `MinaAuthRegistry.encodeAuthorization`. `actionHash` is split across
@@ -38,6 +52,7 @@ export function getMinaProvider(): MinaProvider | null {
  * share an encoding.
  */
 export function authorizationFields(params: {
+  purpose: bigint;
   chainId: bigint;
   target: Address;
   actionHash: Hex;
@@ -46,6 +61,7 @@ export function authorizationFields(params: {
 }): string[] {
   const action = BigInt(params.actionHash);
   return [
+    params.purpose,
     params.chainId,
     BigInt(params.target),
     action >> 128n,
@@ -84,15 +100,15 @@ export function depositActionHash(recipient: Address, amountNanomina: bigint): H
   );
 }
 
-/** Domain tag separating a batch from a lone call. */
-const BATCH_DOMAIN = keccak256(toHex('MinaAccount.Batch.v1'));
-
-/** Commitment to an ordered batch, mirroring `MinaAccount.batchHash`. */
+/**
+ * Commitment to an ordered batch, mirroring `MinaAccount.batchHash`.
+ *
+ * No domain tag here: a batch and a lone call are already separated by their
+ * purpose tags, which are signed first.
+ */
 export function batchHash(calls: { target: Address; value: bigint; data: Hex }[]): Hex {
   const items = calls.map((c) => callHash(c.target, c.value, c.data));
-  return keccak256(
-    encodeAbiParameters([{ type: 'bytes32' }, { type: 'bytes32[]' }], [BATCH_DOMAIN, items]),
-  );
+  return keccak256(encodeAbiParameters([{ type: 'bytes32[]' }], [items]));
 }
 
 export type MinaSignature = {

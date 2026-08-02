@@ -196,12 +196,12 @@ Deployed and **live on Coston2** (chain 114).
 
 | Contract | Address |
 |---|---|
-| `MinaAuthRegistry` | [`0x36fFF00a188BA180a3A1db0be848e02D1F55D305`](https://coston2-explorer.flare.network/address/0x36fFF00a188BA180a3A1db0be848e02D1F55D305) |
-| `MinaAccountFactory` | [`0x1d28b787739B1da05E28E2803D92c4F34c00C661`](https://coston2-explorer.flare.network/address/0x1d28b787739B1da05E28E2803D92c4F34c00C661) |
-| `FMINA` | [`0xB29232047CFC72f75151a9F43E26F7e7849e9e2F`](https://coston2-explorer.flare.network/address/0xB29232047CFC72f75151a9F43E26F7e7849e9e2F) |
-| `MinaPortBridge` | [`0x339B3058680045eDE271B0F960E2931a1D720675`](https://coston2-explorer.flare.network/address/0x339B3058680045eDE271B0F960E2931a1D720675) |
-| `BridgeWrapperFactory` | [`0xC1fE05dA890d01D97A5C9E310B8C42f110788197`](https://coston2-explorer.flare.network/address/0xC1fE05dA890d01D97A5C9E310B8C42f110788197) |
-| `MockSettlementVerifier` | [`0xB56Ad24940F8fDdbf93663f1420677201477E05d`](https://coston2-explorer.flare.network/address/0xB56Ad24940F8fDdbf93663f1420677201477E05d) — **accepts any proof, testnet only** |
+| `MinaAuthRegistry` | [`0xcf12aCe3f7D13EE714D57ee22EfA14cbb662fc56`](https://coston2-explorer.flare.network/address/0xcf12aCe3f7D13EE714D57ee22EfA14cbb662fc56) |
+| `MinaAccountFactory` | [`0x2a2AcdD54B93675828028fb8108fACc0A387fe23`](https://coston2-explorer.flare.network/address/0x2a2AcdD54B93675828028fb8108fACc0A387fe23) |
+| `FMINA` | [`0x68189e3a6F0Ef2D1accFd62b6De9abF791B3722e`](https://coston2-explorer.flare.network/address/0x68189e3a6F0Ef2D1accFd62b6De9abF791B3722e) |
+| `MinaPortBridge` | [`0xdb78DA6dd5eC73b7089799eE85Fc2E43126CBae2`](https://coston2-explorer.flare.network/address/0xdb78DA6dd5eC73b7089799eE85Fc2E43126CBae2) |
+| `BridgeWrapperFactory` | [`0x98f0CA385dBe0724b4D9211fA4e515eB4d6848b7`](https://coston2-explorer.flare.network/address/0x98f0CA385dBe0724b4D9211fA4e515eB4d6848b7) |
+| `MockSettlementVerifier` | [`0xDF7519725DE130Ce083395D0e9Da6E31b5D04eEe`](https://coston2-explorer.flare.network/address/0xDF7519725DE130Ce083395D0e9Da6E31b5D04eEe) — **accepts any proof, testnet only** |
 
 ### The bridge path, exercised on-chain
 
