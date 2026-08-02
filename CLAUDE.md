@@ -1,8 +1,12 @@
-# MinaPort — Project Memory
+# Flare x Mina — Project Memory
 
 ## Product
 
-MinaPort brings native MINA liquidity to Flare, and gives Mina wallets authority
+**Flare x Mina.** Package and crate identifiers still use the `minaport` prefix
+from the original working name; those are internal and unrelated to the product
+name.
+
+Flare x Mina brings native MINA liquidity to Flare, and gives Mina wallets authority
 on Flare without an EVM key.
 
 Two independent rails, deliberately decoupled so neither blocks the other:
@@ -37,15 +41,31 @@ Snap Schnorr signature ─────────┘                           
 | Route | What SP1 verifies | Cost | Used for |
 |-------|-------------------|------|----------|
 | **A** | A full Pickles proof, via the existing `o1js-to-zkvm` universal verifier | Heavy (dominated by a 2^16 Vesta MSM) | The real bridge, post-hackathon |
-| **B** | A Mina Schnorr signature directly, in Rust | ~1–3 M cycles | **Everything in the hackathon MVP** |
+| **B** | A Mina Schnorr signature directly, in Rust | **~2.0 M cycles**, measured | **Everything in the hackathon MVP** |
 
 Route A is NOT used for the hackathon. Route B is implemented in
 `packages/prover`.
 
-**The Groth16 wrap cost is fixed and dominates.** Verifying 1 or 200 signatures
-in one guest run costs nearly the same wall clock. Therefore: always batch.
+### Measured cost (not estimated)
+
+`minaport-host execute --batch N`:
+
+| Batch | Total cycles | Per authorization |
+|-------|--------------|-------------------|
+| 1     | 3,214,892    | 3,214,892         |
+| 4     | 9,322,399    | 2,330,599         |
+| 16    | 33,322,147   | 2,082,634         |
+
+Marginal cost **~2.0 M cycles/signature**, fixed guest overhead **~1.2 M cycles**.
+
+**What batching does and does not buy.** Execution scales linearly — extra
+signatures are never free. What is fixed is the Groth16 wrap, not the STARK.
+Batching amortizes the wrap; core proving still grows with cycles, so the useful
+batch size is on the order of tens, not hundreds. (An earlier draft of this file
+claimed 1 and 200 signatures cost the same; the measurement disproved it.)
+
 On-chain verification on Flare is ~250–300k gas and is independent of the Mina
-signature scheme — the exotic curve is absorbed entirely off-chain.
+signature scheme — the exotic Pallas curve is absorbed entirely off-chain.
 
 ## Repository layout
 

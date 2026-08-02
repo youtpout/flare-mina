@@ -1,11 +1,16 @@
-# MinaPort
+# Flare x Mina
 
 **Native MINA liquidity on Flare, and Mina wallets with authority on Flare.**
 
-MinaPort solves two problems at once:
+> Mina has assets but little DeFi. Flare has DeFi but no MINA. Flare x Mina
+> bridges native MINA into a fully collateralized wMINA on Flare and lets a Mina
+> wallet authorize Flare transactions directly — so Mina users trade on Flare's
+> liquidity without ever needing an EVM key.
+
+Flare x Mina solves two problems at once:
 
 - **Mina lacks liquidity.** Flare has assets — FXRP, USD₮0, WETH — and a working
-  DeFi ecosystem. MinaPort brings MINA there as a fully collateralized ERC-20.
+  DeFi ecosystem. Flare x Mina brings MINA there as a fully collateralized ERC-20.
 - **DeFi on Mina is thin, and proving is expensive.** So instead of building DeFi
   on Mina, let a Mina wallet act on Flare's DeFi directly, and bridge back when
   it wants to.
@@ -40,15 +45,38 @@ The two rails are independent on purpose: neither blocks the other.
 Once a user holds `wMINA`, swapping is an ordinary MetaMask transaction against
 Flare liquidity. No proof is generated per swap.
 
-That is a deliberate consequence of where the cost sits. The dominant cost of an
-SP1 proof is not execution — it is the fixed recursion + Groth16 wrap. Proving
-one signature and proving two hundred take almost the same wall clock. So:
+That is a deliberate consequence of where the cost sits. A Mina signature costs
+**~2.0M SP1 cycles** to verify — measured, not estimated (see below). That is
+cheap in absolute terms but it is not free, and the Groth16 wrap on top is a
+fixed cost of its own. Paying both on every swap would be absurd. So:
 
-- **Prove once** to establish authority, then transact freely.
-- **Batch** authorizations when they are needed per-action.
+- **Prove once** to establish authority, then transact freely with an ordinary
+  EVM key.
+- **Batch** authorizations for users who genuinely have no EVM key.
 
 On-chain verification on Flare is ~250–300k gas and is **independent of Mina's
-signature scheme** — the exotic curve is absorbed entirely off-chain.
+signature scheme** — the exotic Pallas curve is absorbed entirely off-chain.
+
+### Measured cost
+
+| Batch | Total cycles | Per authorization |
+|-------|--------------|-------------------|
+| 1     | 3,214,892    | 3,214,892         |
+| 2     | 5,267,124    | 2,633,562         |
+| 4     | 9,322,399    | 2,330,599         |
+| 8     | 17,302,166   | 2,162,770         |
+| 16    | 33,322,147   | 2,082,634         |
+
+Marginal cost is **~2.0M cycles per additional signature**, on top of **~1.2M
+cycles** of fixed guest overhead. Pasta field arithmetic routes through SP1's
+`sys_bigint` precompile, which is what keeps a 255-bit scalar multiplication
+affordable.
+
+**What batching does and does not buy.** Execution scales linearly, so extra
+signatures are never free. What is fixed is the Groth16 wrap, not the STARK.
+Batching amortizes the wrap; core proving still grows with cycles. The useful
+batch size is bounded by where core proving time meets wrap time — on the order
+of tens of signatures, not hundreds.
 
 ## Layout
 
@@ -131,7 +159,7 @@ Groth16 proof bytes — the three inputs `MinaAuthRegistry.consume` expects.
 | `minaport-schnorr` | 9 tests passing against real o1js signatures |
 | `flare-contracts` (token, bridge) | 28 tests passing |
 | `MinaAuthRegistry.sol` | Written, tests pending |
-| `minaport-guest` / `minaport-host` | Written, first measurement pending |
+| `minaport-guest` / `minaport-host` | Builds and executes; cost measured |
 | `mina-contracts` zkApp | Written, tests pending |
 | Swap adapter, frontend, relayer | Not started |
 
@@ -150,6 +178,13 @@ Stated plainly so they are never mistaken for solved problems:
 - The hackathon MVP verifies **Mina signatures** in SP1, not full Pickles proofs.
   Verifying arbitrary zkApp proofs is the production design and is served by the
   separate [`o1js-to-zkvm`](https://github.com/youtpout) universal verifier.
+
+## Naming
+
+The product is **Flare x Mina**. Package and crate identifiers still carry the
+`minaport` / `@minaport` prefix from the original working name — they are
+internal names, not user-facing, and renaming them is a mechanical change kept
+separate from behaviour.
 
 ## Licence
 
