@@ -6,3 +6,4 @@ export * from './merkle.js';
 export * from './linkAccounts.js';
 export * from './batch.js';
 export * from './decimals.js';
+export * from './tokens.js';

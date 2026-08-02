@@ -31,11 +31,17 @@ contract MinaAccount {
     /// @notice Registry performing signature verification and nonce accounting.
     MinaAccountRegistryRef public immutable REGISTRY;
 
+    /// @notice Domain tag separating a batch commitment from a single call.
+    bytes32 public constant BATCH_DOMAIN = keccak256("MinaAccount.Batch.v1");
+
     event Executed(address indexed target, uint256 value, bytes32 indexed actionHash);
+    event BatchExecuted(uint256 calls, bytes32 indexed batchHash);
     event Received(address indexed from, uint256 value);
 
     error WrongOwner(bytes32 expected, bytes32 actual);
     error CallFailed(bytes returnData);
+    error CallFailedAt(uint256 index, bytes returnData);
+    error EmptyBatch();
 
     constructor(bytes32 minaKey, address registry) {
         MINA_KEY = minaKey;
@@ -44,6 +50,13 @@ contract MinaAccount {
 
     receive() external payable {
         emit Received(msg.sender, msg.value);
+    }
+
+    /// @notice One call in a batch.
+    struct Call {
+        address target;
+        uint256 value;
+        bytes data;
     }
 
     /// @notice Commitment to a call. This is what the Mina key actually signs.
@@ -58,6 +71,22 @@ contract MinaAccount {
         returns (bytes32)
     {
         return keccak256(abi.encode(target, value, keccak256(data)));
+    }
+
+    /// @notice Commitment to an ordered batch of calls.
+    ///
+    /// @dev Domain-separated from {actionHash} by the `BATCH` tag, so a
+    /// single-call batch and a lone call are different statements and neither
+    /// signature can be presented as the other.
+    ///
+    /// The order is part of the commitment: `approve` then `swap` is not the
+    /// same authorisation as `swap` then `approve`.
+    function batchHash(Call[] calldata calls) public pure returns (bytes32) {
+        bytes32[] memory items = new bytes32[](calls.length);
+        for (uint256 i; i < calls.length; ++i) {
+            items[i] = actionHash(calls[i].target, calls[i].value, calls[i].data);
+        }
+        return keccak256(abi.encode(BATCH_DOMAIN, items));
     }
 
     /// @notice Execute a call authorised by this account's Mina key.
@@ -107,6 +136,57 @@ contract MinaAccount {
 
         emit Executed(target, value, action);
         return ret;
+    }
+
+    /// @notice Execute an ordered batch of calls under a single authorisation.
+    ///
+    /// @dev This is what makes trading from a Mina wallet practical. Swapping an
+    /// ERC-20 needs `approve` and then `swap`; without batching that is two
+    /// signatures, two nonces and two transactions, with the account briefly
+    /// holding a live approval in between. Here it is one signature over an
+    /// ordered list, executed atomically — a failure anywhere reverts the whole
+    /// batch, so a granted approval cannot survive a failed swap.
+    ///
+    /// Nothing about the batch is restricted: any target, any calldata. The
+    /// account does not know what a DEX is, which is why it works with all of
+    /// them and needs no allowlist, no adapter and no upgrade to support the
+    /// next one.
+    function executeBatch(
+        MinaSchnorr.PublicKey calldata publicKey,
+        MinaSchnorr.Signature calldata signature,
+        uint64 nonce,
+        uint64 expiry,
+        Call[] calldata calls
+    ) external returns (bytes[] memory results) {
+        if (calls.length == 0) revert EmptyBatch();
+
+        bytes32 owner =
+            bytes32(MinaAddressLib.raw(MinaAddressLib.pack(publicKey.x, publicKey.isOdd)));
+        if (owner != MINA_KEY) revert WrongOwner(MINA_KEY, owner);
+
+        bytes32 action = batchHash(calls);
+
+        REGISTRY.consume(
+            publicKey,
+            signature,
+            MinaAuthRegistry.Authorization({
+                chainId: block.chainid,
+                target: address(this),
+                actionHash: action,
+                nonce: nonce,
+                expiry: expiry
+            }),
+            false
+        );
+
+        results = new bytes[](calls.length);
+        for (uint256 i; i < calls.length; ++i) {
+            (bool ok, bytes memory ret) = calls[i].target.call{value: calls[i].value}(calls[i].data);
+            if (!ok) revert CallFailedAt(i, ret);
+            results[i] = ret;
+        }
+
+        emit BatchExecuted(calls.length, action);
     }
 }
 

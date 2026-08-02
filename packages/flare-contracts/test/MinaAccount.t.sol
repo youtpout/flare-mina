@@ -14,11 +14,50 @@ contract DemoToken {
         balanceOf[to] = amount;
     }
 
+    mapping(address => mapping(address => uint256)) public allowance;
+
     function transfer(address to, uint256 amount) external returns (bool) {
         require(balanceOf[msg.sender] >= amount, "insufficient");
         balanceOf[msg.sender] -= amount;
         balanceOf[to] += amount;
         return true;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        require(allowance[from][msg.sender] >= amount, "not approved");
+        require(balanceOf[from] >= amount, "insufficient");
+        allowance[from][msg.sender] -= amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+
+    function mintTo(address to, uint256 amount) external {
+        balanceOf[to] += amount;
+    }
+}
+
+/// @dev A constant-product pool, standing in for whatever DEX the user picks.
+/// The account has no idea what this is, which is the point.
+contract MiniDex {
+    DemoToken public immutable IN_TOKEN;
+    DemoToken public immutable OUT_TOKEN;
+
+    constructor(DemoToken tokenIn, DemoToken tokenOut) {
+        IN_TOKEN = tokenIn;
+        OUT_TOKEN = tokenOut;
+    }
+
+    /// @dev Fixed 1:2 rate; the arithmetic is irrelevant to what is being tested.
+    function swap(uint256 amountIn) external returns (uint256 amountOut) {
+        require(IN_TOKEN.transferFrom(msg.sender, address(this), amountIn), "pull failed");
+        amountOut = amountIn * 2;
+        require(OUT_TOKEN.transfer(msg.sender, amountOut), "pay failed");
     }
 }
 
@@ -235,6 +274,181 @@ contract MinaAccountTest is Test {
         account.execute(_key(s), _sig(s), 0, type(uint64).max, address(token), 0, _transferCall());
         uint256 used = before - gasleft();
         console.log("MinaAccount.execute, ERC-20 transfer, total gas:", used);
+        assertGt(used, 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Batched execution: the swap path
+    // -------------------------------------------------------------------------
+
+    /// @dev Sign an ordered batch of calls with the real Mina key.
+    function _signBatch(address forAccount, uint64 nonce, MinaAccount.Call[] memory calls)
+        internal
+        returns (Signed memory)
+    {
+        string[] memory argv = new string[](5 + calls.length * 3);
+        argv[0] = "node";
+        argv[1] = "../shared/tools/signAuthorization.mjs";
+        argv[2] = "--batch";
+        argv[3] = vm.toString(forAccount);
+        argv[4] = vm.toString(uint256(nonce));
+        // chainId is appended by position in the tool; pass it as the next arg.
+        string[] memory full = new string[](6 + calls.length * 3);
+        for (uint256 i; i < 5; ++i) full[i] = argv[i];
+        full[5] = vm.toString(CHAIN_ID);
+        for (uint256 i; i < calls.length; ++i) {
+            full[6 + i * 3] = vm.toString(calls[i].target);
+            full[7 + i * 3] = vm.toString(calls[i].value);
+            full[8 + i * 3] = vm.toString(calls[i].data);
+        }
+
+        return abi.decode(vm.parseJson(string(vm.ffi(full))), (Signed));
+    }
+
+    /// @dev The headline swap scenario: approve and swap under ONE Mina
+    /// signature. Without batching this is two signatures, two nonces, two
+    /// transactions, and a live approval sitting between them.
+    function test_approveAndSwapUnderOneSignature() public {
+        factory.deploy(minaKey);
+
+        DemoToken tokenOut = new DemoToken(address(0), 0);
+        MiniDex dex = new MiniDex(token, tokenOut);
+        tokenOut.mintTo(address(dex), BALANCE);
+
+        uint256 amountIn = 100_000_000_000;
+
+        MinaAccount.Call[] memory calls = new MinaAccount.Call[](2);
+        calls[0] = MinaAccount.Call({
+            target: address(token),
+            value: 0,
+            data: abi.encodeCall(DemoToken.approve, (address(dex), amountIn))
+        });
+        calls[1] = MinaAccount.Call({
+            target: address(dex),
+            value: 0,
+            data: abi.encodeCall(MiniDex.swap, (amountIn))
+        });
+
+        Signed memory s = _signBatch(address(account), 0, calls);
+
+        // Submitted by an unrelated account.
+        vm.prank(address(0xDEAD));
+        account.executeBatch(_key(s), _sig(s), 0, type(uint64).max, calls);
+
+        assertEq(tokenOut.balanceOf(address(account)), amountIn * 2, "swap output");
+        assertEq(token.balanceOf(address(account)), BALANCE - amountIn);
+        assertEq(registry.nextNonce(minaKey), 1, "one nonce for the whole batch");
+    }
+
+    /// @dev Order is part of the commitment: swapping before approving is a
+    /// different authorisation, and the signature must not cover it.
+    function test_rejectsReorderedBatch() public {
+        factory.deploy(minaKey);
+
+        DemoToken tokenOut = new DemoToken(address(0), 0);
+        MiniDex dex = new MiniDex(token, tokenOut);
+        tokenOut.mintTo(address(dex), BALANCE);
+
+        MinaAccount.Call[] memory calls = new MinaAccount.Call[](2);
+        calls[0] = MinaAccount.Call({
+            target: address(token),
+            value: 0,
+            data: abi.encodeCall(DemoToken.approve, (address(dex), 1))
+        });
+        calls[1] = MinaAccount.Call({
+            target: address(dex),
+            value: 0,
+            data: abi.encodeCall(MiniDex.swap, (1))
+        });
+
+        Signed memory s = _signBatch(address(account), 0, calls);
+
+        MinaAccount.Call[] memory reordered = new MinaAccount.Call[](2);
+        reordered[0] = calls[1];
+        reordered[1] = calls[0];
+
+        vm.expectRevert(MinaAuthRegistry.InvalidSignature.selector);
+        account.executeBatch(_key(s), _sig(s), 0, type(uint64).max, reordered);
+    }
+
+    /// @dev A failure anywhere reverts the whole batch, so a granted approval
+    /// cannot survive a failed swap.
+    function test_batchIsAtomic() public {
+        factory.deploy(minaKey);
+        Reverter reverter = new Reverter();
+
+        MinaAccount.Call[] memory calls = new MinaAccount.Call[](2);
+        calls[0] = MinaAccount.Call({
+            target: address(token),
+            value: 0,
+            data: abi.encodeCall(DemoToken.approve, (address(0xDEAD), type(uint256).max))
+        });
+        calls[1] = MinaAccount.Call({
+            target: address(reverter),
+            value: 0,
+            data: abi.encodeCall(Reverter.boom, ())
+        });
+
+        Signed memory s = _signBatch(address(account), 0, calls);
+
+        vm.expectRevert();
+        account.executeBatch(_key(s), _sig(s), 0, type(uint64).max, calls);
+
+        assertEq(token.allowance(address(account), address(0xDEAD)), 0, "approval must not survive");
+    }
+
+    /// @dev A single-call batch and a lone call are different statements; a
+    /// signature for one must not authorise the other.
+    function test_batchIsDomainSeparatedFromSingleCall() public {
+        factory.deploy(minaKey);
+
+        MinaAccount.Call[] memory calls = new MinaAccount.Call[](1);
+        calls[0] = MinaAccount.Call({
+            target: address(token),
+            value: 0,
+            data: _transferCall()
+        });
+
+        Signed memory s = _signBatch(address(account), 0, calls);
+
+        vm.expectRevert(MinaAuthRegistry.InvalidSignature.selector);
+        account.execute(_key(s), _sig(s), 0, type(uint64).max, address(token), 0, _transferCall());
+    }
+
+    function test_rejectsEmptyBatch() public {
+        factory.deploy(minaKey);
+        MinaAccount.Call[] memory empty = new MinaAccount.Call[](0);
+        Signed memory s = _sign(address(account), address(token), 0, _transferCall(), 0);
+
+        vm.expectRevert(MinaAccount.EmptyBatch.selector);
+        account.executeBatch(_key(s), _sig(s), 0, type(uint64).max, empty);
+    }
+
+    function test_gas_approveAndSwapBatch() public {
+        factory.deploy(minaKey);
+
+        DemoToken tokenOut = new DemoToken(address(0), 0);
+        MiniDex dex = new MiniDex(token, tokenOut);
+        tokenOut.mintTo(address(dex), BALANCE);
+
+        MinaAccount.Call[] memory calls = new MinaAccount.Call[](2);
+        calls[0] = MinaAccount.Call({
+            target: address(token),
+            value: 0,
+            data: abi.encodeCall(DemoToken.approve, (address(dex), 1_000_000))
+        });
+        calls[1] = MinaAccount.Call({
+            target: address(dex),
+            value: 0,
+            data: abi.encodeCall(MiniDex.swap, (1_000_000))
+        });
+
+        Signed memory s = _signBatch(address(account), 0, calls);
+
+        uint256 before = gasleft();
+        account.executeBatch(_key(s), _sig(s), 0, type(uint64).max, calls);
+        uint256 used = before - gasleft();
+        console.log("approve + swap under one Mina signature, total gas:", used);
         assertGt(used, 0);
     }
 }
