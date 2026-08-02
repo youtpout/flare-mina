@@ -84,8 +84,8 @@ the heavier machinery.
 | Component | How it is used | Status |
 |---|---|---|
 | Coston2 | Every contract is deployed and exercised here | **Done** |
-| FXRP | Swap pair against FMINA — the priority asset for this bounty | TODO |
-| FTSO | Price feed for MINA/USD and swap quoting in the UI | TODO |
+| FXRP | Swapped on-chain from a Mina-owned account, against live BlazeSwap liquidity | **Done** |
+| FTSO | Price feed for portfolio valuation and quoting | Resolved from the registry; UI pending |
 | FDC | `EVMTransaction` attestation of the burn, for the trust-minimised return path | Roadmap — see below |
 
 ### FMINA and FAssets
@@ -199,14 +199,29 @@ Coston2, with a Mina key that has no EVM key of its own:
 | Deploy the account for Mina key `B62…` | [`0x540928c4…`](https://coston2-explorer.flare.network/tx/0x540928c4bd9c606f2023789d3bba7086a8f4178aeb3e9ff082687d8020d73a4b) | 835,688 |
 | Fund it with 5 USD₮0 | [`0x175c7134…`](https://coston2-explorer.flare.network/tx/0x175c71344471d43c50ef2fc978df7961a2449269f265da7b99de43eadc4c77d5) | — |
 | **Transfer 2 USD₮0, authorised only by a Mina Schnorr signature** | [`0x2158871c…`](https://coston2-explorer.flare.network/tx/0x2158871cb9392f83789e15d140fc7923e98fc5d3e5d2d608bb4aca1cde9a69c6) | **889,791** |
+| **Swap 1 USD₮0 → FXRP on BlazeSwap — `approve` + `swap` under one signature** | [`0x496968b3…`](https://coston2-explorer.flare.network/tx/0x496968b30ddc54162d3c56c02c5f986b5e315d154cb2e48dbea365a3454fcdf3) | **1,075,599** |
 
 The account is [`0xF110b6095EbaA987191F555093c9357eb8C61b7b`](https://coston2-explorer.flare.network/address/0xF110b6095EbaA987191F555093c9357eb8C61b7b),
 which is `CREATE2` over the Mina public key — it was computable, and shown by
 `accountOf()`, before any of the three transactions existed.
 
-The USD₮0 is the real faucet token, not a mock. After the third transaction the
-recipient holds 2.000000 USD₮0, the account holds 3.000000, and the registry
-nonce for that Mina key has advanced to 1.
+The USD₮0 is the real faucet token, not a mock, and the swap is against a real
+DEX with real liquidity — not a pool we deployed for the demo:
+
+| | |
+|---|---|
+| DEX | BlazeSwap, router [`0x440602f4…`](https://coston2-explorer.flare.network/address/0x440602f459D7Dd500a74528003e6A20A46d6e2A6) |
+| Pair | FXRP / USD₮0, [`0xDD598473…`](https://coston2-explorer.flare.network/address/0xDD598473f738df117Ee331bc07172481db60acBE) |
+| Quoted | 1.000000 USD₮0 → 0.792091 FXRP |
+| Received | **0.792091 FXRP**, exactly |
+
+The account ends holding 2.000000 USD₮0 and 0.792091 FXRP. `approve` and `swap`
+went through as **one Mina signature** over an ordered batch, so no live approval
+ever sat between two transactions.
+
+Nothing in the account knows what BlazeSwap is. It executes a signed list of
+calls, which is why it works with any DEX on Flare and needs no adapter, no
+allowlist, and no upgrade when the next one launches.
 
 ## Demo
 
