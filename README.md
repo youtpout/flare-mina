@@ -155,6 +155,32 @@ silently stranding funds.
 collateral invariant `totalSupply(FMINA) == escrowedNanomina` is an integer
 equality with no conversion or rounding.
 
+### Decimals: exact parity, never converted
+
+A bridged token keeps the **same decimals on both chains**, and the bridge
+performs no arithmetic on amounts. `100000` base units is `0.1 USDT` on Flare and
+`0.1 USDT` on Mina, checkable by comparing two integers.
+
+That is only achievable for tokens Mina can represent: its fungible token
+standard holds balances in `UInt64`, capping a supply at ~1.845e19 base units.
+
+| Asset | Decimals | Max supply on Mina | Path |
+|-------|----------|--------------------|------|
+| USD₮0 | 6 | 18 trillion | crosses unchanged |
+| FXRP | 6 | 18 trillion | crosses unchanged |
+| FMINA | 9 | 18 billion | crosses unchanged |
+| WETH | 18 | **18.4** | **must be wrapped** |
+
+WETH cannot be represented at all, so it goes through `BridgeWrapper` to a
+9-decimal `bWETH` first. That wrap is the only place decimals ever change, and it
+**refuses** any amount that would lose dust rather than truncating — `roundDown`
+and `dust` let the frontend show what would be given up before the user commits.
+Losing precision is a decision, not a side effect of bridging.
+
+9 is not arbitrary: it is MINA's own precision, and the largest value leaving
+realistic supplies representable. At 12 decimals `UInt64` caps at ~18 million
+whole tokens, below ETH's circulating supply.
+
 ## A note on Mina network domains
 
 Both Mina signature domains are implemented and positively tested. But

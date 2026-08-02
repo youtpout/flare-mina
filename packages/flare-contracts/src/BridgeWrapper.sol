@@ -8,22 +8,35 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title BridgeWrapper
-/// @notice A 9-decimal ERC-20 wrapper, so any Flare asset can cross to Mina.
+/// @notice A 9-decimal ERC-20 wrapper, so a high-precision Flare asset can cross
+/// to Mina.
 ///
-/// @dev **Why 9 decimals is the bridge's universal unit.** Mina's fungible token
-/// standard represents balances as `UInt64`, which caps a supply at about
-/// 1.845e19 base units. At 18 decimals that is 18.4 whole tokens in existence —
-/// WETH simply cannot be represented. At 9 decimals the same cap allows 18
-/// billion whole tokens, which is comfortable for every asset we care about, and
-/// it is already MINA's own precision.
+/// @dev **The rule this contract exists to preserve: bridged decimals are never
+/// converted.** A token that crosses keeps the exact same number of decimals on
+/// both chains, so `100000` base units is `0.1 USDT` on Flare and `0.1 USDT` on
+/// Mina, checkable by inspection. The bridge performs no arithmetic on amounts
+/// at all.
 ///
-/// **Why a wrapper rather than rescaling inside the bridge.** Going from 18
-/// decimals to 9 discards the low 9 digits. Doing that silently inside a bridge
-/// deposit would destroy user funds in a place no one is looking. Here the
-/// truncation cannot happen at all: {wrap} rejects any amount that is not an
-/// exact multiple of the scale factor, so the user converts a clean amount
-/// deliberately, before the bridge is ever involved. The bridge then only ever
-/// handles 9-decimal tokens and needs no per-asset decimal logic.
+/// That rule is only achievable for tokens Mina can represent. Its fungible
+/// token standard holds balances in `UInt64`, capping a supply at about 1.845e19
+/// base units:
+///
+/// | decimals | max whole tokens | verdict                          |
+/// |----------|------------------|----------------------------------|
+/// | 6        | 1.8e13           | crosses unchanged (USD₮0, FXRP)  |
+/// | 9        | 1.8e10           | crosses unchanged (MINA)         |
+/// | 18       | 18.4             | cannot be represented (WETH)     |
+///
+/// So tokens at or below 9 decimals cross directly, untouched. Tokens above it
+/// have to lose precision somewhere, and this contract is that somewhere —
+/// deliberately outside the bridge, and deliberately in the user's hands.
+///
+/// **Why here and not inside the bridge.** Going from 18 decimals to 9 discards
+/// the low nine digits. Doing that silently during a deposit would destroy funds
+/// in a place nobody is looking. Here it cannot happen at all: {wrap} rejects
+/// any amount that is not an exact multiple of {SCALE}, and {roundDown} and
+/// {dust} let a frontend show exactly what would be given up before the user
+/// commits. Wrapping is a decision, not a side effect.
 ///
 /// Wrapping is fully reversible and 1:1 in value: `SCALE` underlying base units
 /// in, one wrapper base unit out, and the reverse on the way back.
@@ -47,9 +60,11 @@ contract BridgeWrapper is ERC20, ReentrancyGuard {
     error ZeroAmount();
     error FeeOnTransferNotSupported(uint256 expected, uint256 received);
 
-    /// @param underlying Token to wrap. Must have MORE than 9 decimals; a token
-    ///        with 9 or fewer is already representable on Mina and must go
-    ///        through the bridge directly rather than be wrapped pointlessly.
+    /// @param underlying Token to wrap. Must have MORE than 9 decimals. A token
+    ///        with 9 or fewer already crosses to Mina unchanged, keeping its own
+    ///        decimals exactly; wrapping it would introduce a conversion where
+    ///        none is needed, split its liquidity across two representations,
+    ///        and break the "same number on both chains" property for no gain.
     constructor(IERC20 underlying)
         ERC20(
             string.concat("Bridgeable ", IERC20Metadata(address(underlying)).name()),
