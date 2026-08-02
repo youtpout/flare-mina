@@ -29,6 +29,30 @@ contract PallasHarness {
         Pallas.Point memory p = Pallas.pointFromKey(x, isOdd, y);
         return (p.x, p.y);
     }
+
+    /// @dev The shape a real signature check has: `s*G + e*(-pk)`.
+    function mulAdd(uint256 a, uint256 x, bool isOdd, uint256 y, uint256 b)
+        external
+        view
+        returns (uint256, uint256, uint256)
+    {
+        Pallas.Point memory key = Pallas.pointFromKey(x, isOdd, y);
+        Pallas.Point memory r = Pallas.mulAdd(Pallas.generator(), a, key, b);
+        return (r.x, r.y, r.z);
+    }
+
+    /// @dev Baseline for comparison: the same result via two separate scalar
+    /// multiplications, which is what an unoptimised verifier does.
+    function mulAddNaive(uint256 a, uint256 x, bool isOdd, uint256 y, uint256 b)
+        external
+        pure
+        returns (uint256, uint256, uint256)
+    {
+        Pallas.Point memory key = Pallas.pointFromKey(x, isOdd, y);
+        Pallas.Point memory r =
+            Pallas.add(Pallas.mul(Pallas.generator(), a), Pallas.mul(key, b));
+        return (r.x, r.y, r.z);
+    }
 }
 
 contract PallasTest is Test {
@@ -125,5 +149,46 @@ contract PallasTest is Test {
         uint256 used = before - gasleft();
         console.log("key recovery + variable-base scalar mul gas:", used);
         assertGt(used, 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Strauss-Shamir
+    // -------------------------------------------------------------------------
+
+    /// @dev The optimised path must agree with the naive one.
+    function test_mulAddMatchesNaive() public view {
+        uint256 a = uint256(keccak256("scalar a")) % Pallas.Q;
+        uint256 b = uint256(keccak256("scalar b")) % Pallas.Q;
+
+        (uint256 x1, uint256 y1, uint256 z1) = harness.mulAdd(a, PK_X, PK_IS_ODD, PK_Y, b);
+        (uint256 x2, uint256 y2, uint256 z2) = harness.mulAddNaive(a, PK_X, PK_IS_ODD, PK_Y, b);
+
+        // Compare projectively: X1/Z1^2 == X2/Z2^2 and Y1/Z1^3 == Y2/Z2^3.
+        uint256 z1s = mulmod(z1, z1, Pallas.P);
+        uint256 z2s = mulmod(z2, z2, Pallas.P);
+        assertEq(mulmod(x1, z2s, Pallas.P), mulmod(x2, z1s, Pallas.P), "x mismatch");
+        assertEq(
+            mulmod(y1, mulmod(z2s, z2, Pallas.P), Pallas.P),
+            mulmod(y2, mulmod(z1s, z1, Pallas.P), Pallas.P),
+            "y mismatch"
+        );
+    }
+
+    /// @dev The headline comparison: one shared doubling chain against two.
+    function test_gas_mulAddVersusNaive() public view {
+        uint256 a = uint256(keccak256("scalar a")) % Pallas.Q;
+        uint256 b = uint256(keccak256("scalar b")) % Pallas.Q;
+
+        uint256 before = gasleft();
+        harness.mulAddNaive(a, PK_X, PK_IS_ODD, PK_Y, b);
+        uint256 naive = before - gasleft();
+
+        before = gasleft();
+        harness.mulAdd(a, PK_X, PK_IS_ODD, PK_Y, b);
+        uint256 strauss = before - gasleft();
+
+        console.log("naive   (two scalar muls) gas:", naive);
+        console.log("strauss (shared chain)    gas:", strauss);
+        console.log("saving  (percent)            :", 100 - (strauss * 100) / naive);
     }
 }
