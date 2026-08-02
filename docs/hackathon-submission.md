@@ -264,7 +264,9 @@ allowlist, and no upgrade when the next one launches.
 
 ## Trust assumptions
 
-Stated so they are never mistaken for solved problems.
+Stated so they are never mistaken for solved problems. Analysed in full — assets,
+actors, attack scenarios, and what removes each gap — in
+[docs/threat-model.md](threat-model.md).
 
 1. **The Flare → Mina return path uses a trusted attestor**, not FDC + Relay
    signing-policy verification. It is one explicit state field on the Mina side;
@@ -277,6 +279,11 @@ Stated so they are never mistaken for solved problems.
    binding comes from the `chainId` inside the signed message.
 4. **Gas.** A Mina key authorises but cannot pay; some EVM account must submit.
    It need not be trusted, but it must exist.
+5. **The Mina → Flare escrow attestor can mint unbacked FMINA.** It cannot choose
+   a recipient or an amount — the depositor's on-chain-verified Schnorr signature
+   covers both — so this is a solvency risk to holders, not a theft from an
+   individual. Bounded on chain by a per-deposit ceiling and a cumulative cap,
+   which can be lowered instantly and raised only after a 2-day timelock.
 
 ## Roadmap
 

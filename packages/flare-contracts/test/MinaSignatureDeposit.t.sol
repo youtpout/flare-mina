@@ -23,6 +23,11 @@ contract MinaSignatureDepositTest is Test {
     address internal recipient = address(0xBEEF);
     uint64 internal constant AMOUNT = 5_000_000_000;
 
+    /// @dev A genuine Pallas x coordinate (isOdd == false, so the packed form is
+    /// the coordinate itself), for tests that need a burn to a valid recipient.
+    uint256 internal constant PALLAS_X =
+        14124943907817976952427102951112060621286297402986099085035387890279416817272;
+
     struct Signed {
         bytes32 actionHash;
         bool isOdd;
@@ -147,6 +152,127 @@ contract MinaSignatureDepositTest is Test {
         _claim(sig, recipient, AMOUNT, 0, att);
         vm.expectRevert();
         _claim(sig, recipient, AMOUNT, 0, att);
+    }
+
+    // -------------------------------------------------------------------------
+    // Mint ceilings
+    //
+    // These do not make the attestor trustless — nothing on this path does. They
+    // convert an unbounded loss into a bounded one that the operator chose, and
+    // they are on-chain precisely because the relayer's own policy is worth
+    // nothing once the key is out of the relayer's hands.
+    // -------------------------------------------------------------------------
+
+    /// @dev A bridge must never be live with an unlimited signature path, so the
+    /// ceilings exist before anyone can call a setter.
+    function test_limitsAreSetAtConstruction() public view {
+        assertEq(bridge.maxAttestedDepositNanomina(), bridge.DEFAULT_MAX_ATTESTED_DEPOSIT());
+        assertEq(bridge.attestedMintCapNanomina(), bridge.DEFAULT_ATTESTED_MINT_CAP());
+        assertEq(bridge.attestedMintedNanomina(), 0);
+    }
+
+    function test_rejectsDepositAbovePerDepositCap() public {
+        uint64 cap = 1_000_000_000; // 1 MINA, below AMOUNT
+        // Read before the prank: an external call inside the arguments would
+        // consume it and leave the setter called by this test contract.
+        uint256 cumulative = bridge.attestedMintCapNanomina();
+        vm.prank(owner);
+        bridge.lowerAttestedMintLimits(cap, cumulative);
+
+        Signed memory sig = _signDeposit(recipient, AMOUNT, 0);
+        bytes memory att = _attest(sig.minaKey, recipient, AMOUNT, 0);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(MinaPortBridge.DepositAbovePerDepositCap.selector, AMOUNT, cap)
+        );
+        _claim(sig, recipient, AMOUNT, 0, att);
+    }
+
+    /// @dev The cumulative cap is what actually bounds a compromised key: a
+    /// per-deposit ceiling alone only forces an attacker to loop.
+    function test_rejectsOnceCumulativeCapIsReached() public {
+        vm.prank(owner);
+        bridge.lowerAttestedMintLimits(AMOUNT, AMOUNT);
+
+        Signed memory first = _signDeposit(recipient, AMOUNT, 0);
+        _claim(first, recipient, AMOUNT, 0, _attest(first.minaKey, recipient, AMOUNT, 0));
+        assertEq(bridge.remainingAttestedMintAllowance(), 0);
+
+        Signed memory second = _signDeposit(recipient, AMOUNT, 1);
+        // Built before `expectRevert`, which otherwise attaches to the external
+        // call `_attest` makes to read the domain tag.
+        bytes memory att = _attest(second.minaKey, recipient, AMOUNT, 1);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MinaPortBridge.AttestedMintCapExceeded.selector,
+                uint256(AMOUNT),
+                AMOUNT,
+                uint256(AMOUNT)
+            )
+        );
+        _claim(second, recipient, AMOUNT, 1, att);
+    }
+
+    /// @dev Burning must not refill the allowance. The cap bounds how much the
+    /// attestor key can ever have been worth, and a round trip through the
+    /// bridge is not evidence that the key stayed honest.
+    function test_burningDoesNotRefillTheAllowance() public {
+        vm.prank(owner);
+        bridge.lowerAttestedMintLimits(AMOUNT, AMOUNT);
+
+        Signed memory sig = _signDeposit(recipient, AMOUNT, 0);
+        _claim(sig, recipient, AMOUNT, 0, _attest(sig.minaKey, recipient, AMOUNT, 0));
+
+        // A genuine Pallas x coordinate, so the recipient check passes.
+        vm.prank(recipient);
+        bridge.burnToMina(AMOUNT, bytes32(uint256(PALLAS_X)));
+
+        assertEq(bridge.remainingAttestedMintAllowance(), 0, "burning must not restore allowance");
+    }
+
+    /// @dev Lowering is instant, because reacting to a suspected compromise
+    /// within one block is the whole point.
+    function test_loweringIsImmediate() public {
+        vm.prank(owner);
+        bridge.lowerAttestedMintLimits(1, 1);
+        assertEq(bridge.maxAttestedDepositNanomina(), 1);
+        assertEq(bridge.attestedMintCapNanomina(), 1);
+    }
+
+    /// @dev And raising is not, so an attacker holding the owner key can mint
+    /// only up to the ceiling already in force.
+    function test_raisingRequiresTheTimelock() public {
+        uint64 higher = type(uint64).max;
+
+        vm.prank(owner);
+        vm.expectRevert(MinaPortBridge.NotARaise.selector);
+        bridge.lowerAttestedMintLimits(higher, type(uint256).max);
+
+        vm.prank(owner);
+        bridge.proposeAttestedMintLimitsRaise(higher, type(uint256).max);
+
+        vm.prank(owner);
+        vm.expectRevert();
+        bridge.executeAttestedMintLimitsRaise();
+
+        // Unchanged while pending.
+        assertEq(bridge.maxAttestedDepositNanomina(), bridge.DEFAULT_MAX_ATTESTED_DEPOSIT());
+
+        vm.warp(block.timestamp + bridge.VERIFIER_UPDATE_DELAY());
+        vm.prank(owner);
+        bridge.executeAttestedMintLimitsRaise();
+
+        assertEq(bridge.maxAttestedDepositNanomina(), higher);
+        assertEq(bridge.attestedMintCapNanomina(), type(uint256).max);
+    }
+
+    function test_onlyOwnerCanTouchLimits() public {
+        vm.expectRevert();
+        bridge.lowerAttestedMintLimits(1, 1);
+
+        vm.expectRevert();
+        bridge.proposeAttestedMintLimitsRaise(type(uint64).max, type(uint256).max);
     }
 
     function test_rejectsWhenNoAttestorConfigured() public {

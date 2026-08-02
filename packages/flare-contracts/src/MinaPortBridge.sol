@@ -157,6 +157,13 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
         BRIDGE_ID = bridgeId_;
         currentMinaActionState = genesisActionState;
         TOKEN = new FMINA(address(this));
+
+        // Bounded from block zero. An unset ceiling would make the signature
+        // path unlimited by default, which is the exact exposure the ceiling
+        // exists to remove.
+        maxAttestedDepositNanomina = DEFAULT_MAX_ATTESTED_DEPOSIT;
+        attestedMintCapNanomina = DEFAULT_ATTESTED_MINT_CAP;
+        emit AttestedMintLimitsUpdated(DEFAULT_MAX_ATTESTED_DEPOSIT, DEFAULT_ATTESTED_MINT_CAP);
     }
 
     // -------------------------------------------------------------------------
@@ -236,21 +243,53 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
 
     /// @notice Key attesting that a Mina-side escrow exists.
     /// @dev See {claimWithMinaSignature} for exactly what this key can and
-    /// cannot do. Rotating it runs through the same timelock as the verifier.
+    /// cannot do, and {setAttestedMintLimits} for how much it is worth.
     address public escrowAttestor;
 
     /// @notice Deposit intents already minted, keyed by their digest.
     mapping(bytes32 => bool) public consumedIntents;
 
+    /// @notice Largest single signature-path mint, in nanomina.
+    uint64 public maxAttestedDepositNanomina;
+
+    /// @notice Cumulative ceiling on signature-path minting, in nanomina.
+    uint256 public attestedMintCapNanomina;
+
+    /// @notice Signature-path minting so far, in nanomina. Never decreases.
+    /// @dev Deliberately not reduced by `burnToMina`: the cap bounds how much
+    /// an attestor key can ever have been worth, and a round trip through the
+    /// bridge must not refill that allowance.
+    uint256 public attestedMintedNanomina;
+
+    /// @notice Pending limit raise, executable after `limitsUpdateReadyAt`.
+    uint64 public pendingMaxAttestedDeposit;
+    uint256 public pendingAttestedMintCap;
+    uint256 public limitsUpdateReadyAt;
+
+    /// @notice Default ceilings, applied at construction so the signature path
+    /// is never live without one. 10,000 MINA per deposit, 100,000 cumulative.
+    uint64 public constant DEFAULT_MAX_ATTESTED_DEPOSIT = 10_000e9;
+    uint256 public constant DEFAULT_ATTESTED_MINT_CAP = 100_000e9;
+
     event EscrowAttestorUpdated(address indexed oldAttestor, address indexed newAttestor);
     event DepositMintedFromSignature(
         bytes32 indexed minaSender, address indexed recipient, uint64 nonce, uint64 amount
     );
+    event AttestedMintLimitsUpdated(uint64 maxPerDeposit, uint256 cumulativeCap);
+    event AttestedMintLimitsRaiseProposed(
+        uint64 maxPerDeposit, uint256 cumulativeCap, uint256 readyAt
+    );
+    event AttestedMintLimitsRaiseCancelled();
 
     error IntentAlreadyConsumed(bytes32 intent);
     error InvalidMinaSignature();
     error InvalidAttestation();
     error AttestorNotSet();
+    error DepositAbovePerDepositCap(uint64 amount, uint64 cap);
+    error AttestedMintCapExceeded(uint256 minted, uint64 amount, uint256 cap);
+    error NotARaise();
+    error NoPendingLimits();
+    error LimitsUpdateNotReady(uint256 readyAt);
 
     /// @notice Digest a Mina depositor signs to direct their escrow.
     ///
@@ -316,6 +355,17 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
         if (expiry < block.timestamp) revert Expired(expiry, block.timestamp);
         if (escrowAttestor == address(0)) revert AttestorNotSet();
 
+        // The ceilings the attestor cannot ignore. The relayer applies its own
+        // per-deposit policy, but that is an honest attestor restraining itself
+        // and is worth nothing against a compromised key.
+        if (amountNanomina > maxAttestedDepositNanomina) {
+            revert DepositAbovePerDepositCap(amountNanomina, maxAttestedDepositNanomina);
+        }
+        uint256 minted = attestedMintedNanomina;
+        if (minted + amountNanomina > attestedMintCapNanomina) {
+            revert AttestedMintCapExceeded(minted, amountNanomina, attestedMintCapNanomina);
+        }
+
         bytes32 minaSender =
             bytes32(MinaAddressLib.raw(MinaAddressLib.pack(publicKey.x, publicKey.isOdd)));
 
@@ -345,6 +395,7 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
 
         consumedIntents[intent] = true;
         escrowedNanomina += amountNanomina;
+        attestedMintedNanomina = minted + amountNanomina;
 
         emit DepositMintedFromSignature(minaSender, recipient, nonce, amountNanomina);
 
@@ -355,6 +406,73 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
     function setEscrowAttestor(address attestor) external onlyOwner {
         emit EscrowAttestorUpdated(escrowAttestor, attestor);
         escrowAttestor = attestor;
+    }
+
+    /// @notice Lower either signature-path ceiling. Takes effect immediately.
+    ///
+    /// @dev Asymmetric on purpose. Lowering only ever reduces what an attestor
+    /// key is worth, so making it instant is what lets an operator react to a
+    /// suspected compromise within one block. Raising is the dangerous
+    /// direction and goes through {proposeAttestedMintLimitsRaise}.
+    ///
+    /// The asymmetry is also what bounds a compromised *owner*: rotating the
+    /// attestor is instant, so an attacker holding the owner key can mint — but
+    /// only up to the ceiling in force today, not one they set themselves.
+    function lowerAttestedMintLimits(uint64 maxPerDeposit, uint256 cumulativeCap)
+        external
+        onlyOwner
+    {
+        if (maxPerDeposit > maxAttestedDepositNanomina || cumulativeCap > attestedMintCapNanomina) {
+            revert NotARaise();
+        }
+        maxAttestedDepositNanomina = maxPerDeposit;
+        attestedMintCapNanomina = cumulativeCap;
+        emit AttestedMintLimitsUpdated(maxPerDeposit, cumulativeCap);
+    }
+
+    /// @notice Propose raising either signature-path ceiling.
+    /// @dev Subject to {VERIFIER_UPDATE_DELAY}, for the same reason the verifier
+    /// rotation is: it increases how much unbacked supply a trusted key could
+    /// produce, and holders are entitled to a window in which to exit.
+    function proposeAttestedMintLimitsRaise(uint64 maxPerDeposit, uint256 cumulativeCap)
+        external
+        onlyOwner
+    {
+        pendingMaxAttestedDeposit = maxPerDeposit;
+        pendingAttestedMintCap = cumulativeCap;
+        limitsUpdateReadyAt = block.timestamp + VERIFIER_UPDATE_DELAY;
+        emit AttestedMintLimitsRaiseProposed(maxPerDeposit, cumulativeCap, limitsUpdateReadyAt);
+    }
+
+    /// @notice Cancel a pending raise.
+    function cancelAttestedMintLimitsRaise() external onlyOwner {
+        if (limitsUpdateReadyAt == 0) revert NoPendingLimits();
+        delete pendingMaxAttestedDeposit;
+        delete pendingAttestedMintCap;
+        delete limitsUpdateReadyAt;
+        emit AttestedMintLimitsRaiseCancelled();
+    }
+
+    /// @notice Execute a pending raise once the timelock has elapsed.
+    function executeAttestedMintLimitsRaise() external onlyOwner {
+        if (limitsUpdateReadyAt == 0) revert NoPendingLimits();
+        if (block.timestamp < limitsUpdateReadyAt) {
+            revert LimitsUpdateNotReady(limitsUpdateReadyAt);
+        }
+
+        maxAttestedDepositNanomina = pendingMaxAttestedDeposit;
+        attestedMintCapNanomina = pendingAttestedMintCap;
+        delete pendingMaxAttestedDeposit;
+        delete pendingAttestedMintCap;
+        delete limitsUpdateReadyAt;
+
+        emit AttestedMintLimitsUpdated(maxAttestedDepositNanomina, attestedMintCapNanomina);
+    }
+
+    /// @notice Signature-path minting still available under the cumulative cap.
+    function remainingAttestedMintAllowance() external view returns (uint256) {
+        uint256 minted = attestedMintedNanomina;
+        return minted >= attestedMintCapNanomina ? 0 : attestedMintCapNanomina - minted;
     }
 
     // -------------------------------------------------------------------------

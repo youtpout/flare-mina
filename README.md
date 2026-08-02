@@ -296,21 +296,27 @@ discipline.
 |-----------|-------|
 | `Pallas`, `PoseidonPallas`, `MinaSchnorr` | Working, 33 tests |
 | `MinaAuthRegistry` | Working end to end, 12 tests |
-| `MinaAccount` + factory | Working, 11 tests, signatures via FFI at run time |
+| `MinaAccount` + factory | Working, 17 tests, signatures via FFI at run time |
 | Coston2 fork test | Passing against live chain state |
-| `FMINA`, `MinaPortBridge` | Working, 28 tests |
-| `packages/shared` | 32 tests |
+| `FMINA`, `MinaPortBridge` | Working, 41 tests (118 Solidity in total) |
+| `packages/shared` | 50 tests |
 | `minaport-schnorr` (Rust) | 9 tests against real Mina signatures |
-| `mina-contracts` zkApp | Written, tests pending |
-| Swap adapter, frontend | Not started |
+| `mina-contracts` zkApp | Deployed to devnet, 12 + 16 tests |
+| Frontend + attestor API | Working, 8 relayer tests |
 
 ## Known limitations
 
-Stated plainly so they are never mistaken for solved problems:
+Stated plainly so they are never mistaken for solved problems. Each one is
+analysed in full — bound, mitigation, and what removes it — in
+[docs/threat-model.md](docs/threat-model.md).
 
 - **The Flare → Mina return path uses a trusted attestor**, not FDC + Relay
   signing-policy verification. Full trust-minimisation of the return path is out
   of reach in the hackathon window.
+- **The Mina → Flare deposit path uses a trusted escrow attestor.** It cannot
+  choose a recipient or an amount — the depositor's Schnorr signature covers
+  both — but it can attest to an escrow that never happened. On-chain per-deposit
+  and cumulative mint ceilings bound what that is worth.
 - **`MockSettlementVerifier` accepts any proof.** It exists so the bridge tests
   can exercise the deposit flow, and must never be deployed to a network holding
   value.
