@@ -26,7 +26,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use alloy_sol_types::sol;
-use ark_ff::PrimeField;
+use ark_ff::{BigInteger, PrimeField};
 use minaport_schnorr::{BaseField, NetworkId, PublicKey, Signature, VerifyError};
 
 sol! {
@@ -111,8 +111,10 @@ impl Authorization {
     pub fn packed_public_key(&self) -> [u8; 32] {
         let mut packed = [0u8; 32];
         let x = self.mina_public_key.x.into_bigint().to_bytes_be();
-        // `to_bytes_be` is already 32 bytes for a 255-bit field.
-        packed.copy_from_slice(&x);
+        // Right-align: `to_bytes_be` strips leading zero limbs, so a small `x`
+        // yields fewer than 32 bytes and must not be left-aligned.
+        debug_assert!(x.len() <= 32);
+        packed[32 - x.len()..].copy_from_slice(&x);
         if self.mina_public_key.is_odd {
             packed[0] |= 0x80;
         }

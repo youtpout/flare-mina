@@ -2799,6 +2799,7 @@ dependencies = [
  "serde_json",
  "sp1-build",
  "sp1-sdk",
+ "tokio",
 ]
 
 [[package]]
@@ -5938,6 +5939,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2 0.6.5",

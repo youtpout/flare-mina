@@ -103,24 +103,29 @@ pub fn main() {
 /// be silently reduced, letting two distinct byte strings denote the same field
 /// element and breaking the binding between the wire form and what was signed.
 fn field_from_be(bytes: &[u8; 32]) -> BaseField {
-    use ark_ff::{BigInteger, PrimeField};
+    use ark_ff::PrimeField;
     let value = BaseField::from_be_bytes_mod_order(bytes);
-    assert_eq!(
-        value.into_bigint().to_bytes_be().as_slice(),
-        bytes.as_slice(),
-        "non-canonical base field encoding",
-    );
+    assert_eq!(&to_be32(value), bytes, "non-canonical base field encoding");
     value
 }
 
 /// Same, for the scalar field.
 fn scalar_from_be(bytes: &[u8; 32]) -> ScalarField {
-    use ark_ff::{BigInteger, PrimeField};
+    use ark_ff::PrimeField;
     let value = ScalarField::from_be_bytes_mod_order(bytes);
-    assert_eq!(
-        value.into_bigint().to_bytes_be().as_slice(),
-        bytes.as_slice(),
-        "non-canonical scalar field encoding",
-    );
+    assert_eq!(&to_be32(value), bytes, "non-canonical scalar field encoding");
     value
+}
+
+/// Canonical 32-byte big-endian encoding of a field element.
+///
+/// `to_bytes_be` strips leading zero limbs, so a small element yields fewer than
+/// 32 bytes and must be right-aligned before it can be compared against the wire
+/// form.
+fn to_be32<F: ark_ff::PrimeField>(value: F) -> [u8; 32] {
+    use ark_ff::{BigInteger, PrimeField};
+    let bytes = value.into_bigint().to_bytes_be();
+    let mut out = [0u8; 32];
+    out[32 - bytes.len()..].copy_from_slice(&bytes);
+    out
 }

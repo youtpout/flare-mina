@@ -16,6 +16,7 @@ clap = { version = "4", features = ["derive"] }
 ark-ff = "0.5"
 hex = "0.4"
 anyhow = "1"
+tokio = { version = "1", features = ["full"] }
 
 [build-dependencies]
 sp1-build = { git = "https://github.com/succinctlabs/sp1", tag = "v6.2.2" }
