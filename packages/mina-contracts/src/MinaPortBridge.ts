@@ -164,14 +164,24 @@ export class MinaPortBridge extends SmartContract {
   }
 
   /**
-   * Configure the withdrawal attestor.
+   * Rotate the withdrawal attestor. Admin only.
    *
-   * Guarded by `this.requireSignature()`, i.e. the zkApp account's own key must
-   * co-sign. This is the documented administrative path; there is no other way
-   * to change who can authorise a release.
+   * Authorised by a SEPARATE signed account update from the admin, not by
+   * `this.requireSignature()`. That distinction is not stylistic: requiring the
+   * zkApp's own signature switches this account update's authorisation kind
+   * from proof to signature, which `editState: Permissions.proof()` then
+   * rejects — the method simply cannot succeed. An earlier version shipped that
+   * way and could never have rotated anything.
+   *
+   * The admin's only power is this rotation. It cannot move the escrow, mint,
+   * or touch any accounting state, all of which are reachable only through
+   * proof-authorised methods.
    */
   @method async setWithdrawalAttestor(attestor: PublicKey) {
-    this.requireSignature();
+    const admin = this.admin.getAndRequireEquals();
+    const adminUpdate = AccountUpdate.createSigned(admin);
+    adminUpdate.body.useFullCommitment = Bool(true);
+
     this.withdrawalAttestor.getAndRequireEquals();
     this.withdrawalAttestor.set(attestor);
   }
@@ -193,8 +203,11 @@ export class MinaPortBridge extends SmartContract {
     new FlareAddress({ value: flareRecipient }).assertValid();
 
     const nonce = this.nextDepositNonce.getAndRequireEquals();
-    // UInt64.assertEquals takes no message argument in this o1js version.
-    nonce.assertEquals(expectedNonce);
+    // `UInt64.assertEquals` takes no message in this o1js version, and its
+    // default reads `Field.assertEquals(): 1 != 0` — which tells a user nothing
+    // about what they got wrong. Going through `equals().assertTrue()` keeps
+    // the message.
+    nonce.equals(expectedNonce).assertTrue('unexpected deposit nonce');
 
     // Pull the funds. `createSigned` forces the sender to authorise this exact
     // account update, so the bridge can never move funds it was not given.

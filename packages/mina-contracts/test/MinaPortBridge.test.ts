@@ -205,3 +205,26 @@ describe('withdrawal release', () => {
     ).rejects.toThrow(/collateral/);
   }, 120_000);
 });
+
+describe('attestor rotation', () => {
+  it('separates admin from attestor: the admin can rotate, and only the admin', async () => {
+    const fresh = PrivateKey.random().toPublicKey();
+
+    // A non-admin cannot rotate, even with a valid proof: the admin's account
+    // update is unsigned.
+    const bad = await Mina.transaction(user, async () => {
+      await bridge.setWithdrawalAttestor(fresh);
+    });
+    await bad.prove();
+    await expect(bad.sign([userKey]).send()).rejects.toThrow();
+
+    // The admin can.
+    const good = await Mina.transaction(deployer, async () => {
+      await bridge.setWithdrawalAttestor(fresh);
+    });
+    await good.prove();
+    await good.sign([deployerKey]).send();
+
+    expect(bridge.withdrawalAttestor.get().toBase58()).toBe(fresh.toBase58());
+  }, 180_000);
+});
