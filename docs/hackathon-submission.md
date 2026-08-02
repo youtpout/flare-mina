@@ -55,6 +55,30 @@ viable at all. A judge can verify this by comparing the two right-hand columns.
 Measured against live Coston2 state, one full account operation costs **865,845
 gas — 3% of a block** (block gas limit 28,000,000, base fee 500 gwei).
 
+### Flare's attestation layer makes the return path tractable
+
+Bridging out of Flare is structurally cheaper than bridging in, and that is a
+property of Flare's architecture rather than a convenience.
+
+| Direction | What must be proven | Cost |
+|---|---|---|
+| Mina → Flare | A recursive Pickles/Kimchi proof | Heavy — hundreds of millions of zkVM cycles |
+| **Flare → Mina** | **ECDSA signatures from a known signing policy, plus a Merkle proof** | **31,810 constraints per signature** |
+
+Flare's data layer publishes Merkle roots signed by a weighted validator set
+using secp256k1 ECDSA. Proving a Flare event on Mina therefore reduces to
+verifying those signatures — no recursive SNARK verification anywhere. We
+measured one verification inside a zkApp at **31,810 constraints**
+(`packages/mina-contracts/bench/ecdsaConstraints.mjs`), which fits comfortably
+inside a single Mina method, so a full signing-policy threshold is a routine
+recursive fold rather than a research problem.
+
+Note that FDC cannot help in the inbound direction: **Mina is not an FDC source
+chain**, so a Mina deposit cannot be attested to Flare and must be proven by the
+escrow zkApp instead. The asymmetry is real and is what shapes the design — it
+is why the outbound path is on the near roadmap while the inbound path carries
+the heavier machinery.
+
 ### Flare infrastructure used
 
 | Component | How it is used | Status |
@@ -75,17 +99,21 @@ an official FAsset**, and the difference favours the holder:
 | Guarantee | Economic — liquidation, price feeds | Cryptographic — proven escrow |
 | Failure mode | Agent default, collateral volatility | None of the above |
 
-## What existed before the hackathon
+## Dependencies
 
-Stated plainly, because the rules ask for it and because the optimisation story
-only means something against a baseline.
+Flare x Mina is a new product built during the program. It stands on libraries,
+some of which we wrote earlier — listed here for completeness, not because a
+prior version of this product existed.
 
-| Repository | What it is | Author |
+| Library | What it provides | Author |
 |---|---|---|
-| [`pallas_curve_verifier`](https://github.com/youtpout/pallas_curve_verifier) | Pallas curve + Mina Poseidon + signature verification in Solidity | Ours, pre-existing |
-| [`o1js-to-zkvm`](https://github.com/youtpout) | Universal Pickles verifier inside SP1, settleable on an EVM chain | Ours, pre-existing |
-| `ethereum-settlement` | Zeko↔Ethereum bridge; source of the `ZekoAddress` packing scheme | Ours, pre-existing |
+| [`pallas_curve_verifier`](https://github.com/youtpout/pallas_curve_verifier) | Reference Pallas + Poseidon + signature verification in Solidity | Ours, earlier work |
+| [`o1js-to-zkvm`](https://github.com/youtpout) | Universal Pickles verifier inside SP1 | Ours, earlier work |
 | `mina-signer`, `o1js`, `mina-fungible-token` | Mina's official libraries | o1Labs |
+| `forge-std`, OpenZeppelin contracts | Solidity tooling and primitives | — |
+
+The optimisation figures below are quoted against the first of these, since a
+2.2x improvement only means something relative to a baseline.
 
 ## What was newly built during the hackathon
 
