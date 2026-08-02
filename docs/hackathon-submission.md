@@ -185,9 +185,28 @@ Deployed and **live on Coston2** (chain 114).
 |---|---|
 | `MinaAuthRegistry` | [`0x36fFF00a188BA180a3A1db0be848e02D1F55D305`](https://coston2-explorer.flare.network/address/0x36fFF00a188BA180a3A1db0be848e02D1F55D305) |
 | `MinaAccountFactory` | [`0x1d28b787739B1da05E28E2803D92c4F34c00C661`](https://coston2-explorer.flare.network/address/0x1d28b787739B1da05E28E2803D92c4F34c00C661) |
-| `FMINA` | TODO |
-| `MinaPortBridge` | TODO |
-| `BridgeWrapperFactory` | TODO |
+| `FMINA` | [`0x922119709e607E3C476a1fE83597BED6DC6807f5`](https://coston2-explorer.flare.network/address/0x922119709e607E3C476a1fE83597BED6DC6807f5) |
+| `MinaPortBridge` | [`0x236D8c691FAB863e2f0439b058dB4c8B786f9f0B`](https://coston2-explorer.flare.network/address/0x236D8c691FAB863e2f0439b058dB4c8B786f9f0B) |
+| `BridgeWrapperFactory` | [`0x49a074b66296385EA77a71C332C934096Adfd010`](https://coston2-explorer.flare.network/address/0x49a074b66296385EA77a71C332C934096Adfd010) |
+| `MockSettlementVerifier` | [`0x3Ebc0b536cE3890dFfd2aaBB8F24a8bF26B77d8d`](https://coston2-explorer.flare.network/address/0x3Ebc0b536cE3890dFfd2aaBB8F24a8bF26B77d8d) — **accepts any proof, testnet only** |
+
+### The bridge path, exercised on-chain
+
+| Step | Result |
+|---|---|
+| Submit a two-deposit batch | root `0xd463d4a6…` accepted, batch nonce 1 |
+| Claim deposit 0 (2,000 FMINA) | minted to the deployer |
+| Claim deposit 1 (500 FMINA) | minted to the Mina-owned account |
+| `collateralInvariantHolds()` | **true** |
+
+Both claims carried a real Merkle proof against the accepted root. The mint
+authority is the bridge and nothing else: `FMINA.mint` reverts for any other
+caller, which the test suite covers.
+
+The deployment script **refuses to run on Flare mainnet**, because it deploys the
+mock verifier and a mock verifier on a live chain is an unbounded mint. Swapping
+in the real verifier is a `proposeVerifier` / `executeVerifierUpdate` pair behind
+a two-day timelock — no redeployment, and the rotation is visible on-chain.
 
 ### A Mina key moving real tokens on Flare
 
