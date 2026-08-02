@@ -185,10 +185,10 @@ Deployed and **live on Coston2** (chain 114).
 |---|---|
 | `MinaAuthRegistry` | [`0x36fFF00a188BA180a3A1db0be848e02D1F55D305`](https://coston2-explorer.flare.network/address/0x36fFF00a188BA180a3A1db0be848e02D1F55D305) |
 | `MinaAccountFactory` | [`0x1d28b787739B1da05E28E2803D92c4F34c00C661`](https://coston2-explorer.flare.network/address/0x1d28b787739B1da05E28E2803D92c4F34c00C661) |
-| `FMINA` | [`0x922119709e607E3C476a1fE83597BED6DC6807f5`](https://coston2-explorer.flare.network/address/0x922119709e607E3C476a1fE83597BED6DC6807f5) |
-| `MinaPortBridge` | [`0x236D8c691FAB863e2f0439b058dB4c8B786f9f0B`](https://coston2-explorer.flare.network/address/0x236D8c691FAB863e2f0439b058dB4c8B786f9f0B) |
-| `BridgeWrapperFactory` | [`0x49a074b66296385EA77a71C332C934096Adfd010`](https://coston2-explorer.flare.network/address/0x49a074b66296385EA77a71C332C934096Adfd010) |
-| `MockSettlementVerifier` | [`0x3Ebc0b536cE3890dFfd2aaBB8F24a8bF26B77d8d`](https://coston2-explorer.flare.network/address/0x3Ebc0b536cE3890dFfd2aaBB8F24a8bF26B77d8d) — **accepts any proof, testnet only** |
+| `FMINA` | [`0xB29232047CFC72f75151a9F43E26F7e7849e9e2F`](https://coston2-explorer.flare.network/address/0xB29232047CFC72f75151a9F43E26F7e7849e9e2F) |
+| `MinaPortBridge` | [`0x339B3058680045eDE271B0F960E2931a1D720675`](https://coston2-explorer.flare.network/address/0x339B3058680045eDE271B0F960E2931a1D720675) |
+| `BridgeWrapperFactory` | [`0xC1fE05dA890d01D97A5C9E310B8C42f110788197`](https://coston2-explorer.flare.network/address/0xC1fE05dA890d01D97A5C9E310B8C42f110788197) |
+| `MockSettlementVerifier` | [`0xB56Ad24940F8fDdbf93663f1420677201477E05d`](https://coston2-explorer.flare.network/address/0xB56Ad24940F8fDdbf93663f1420677201477E05d) — **accepts any proof, testnet only** |
 
 ### The bridge path, exercised on-chain
 

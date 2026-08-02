@@ -18,6 +18,25 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)
 
+  apps/relayer:
+    dependencies:
+      '@minaport/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      viem:
+        specifier: ^2.21.54
+        version: 2.55.10(typescript@5.9.3)
+    devDependencies:
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.4
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
   packages/mina-contracts:
     dependencies:
       '@minaport/shared':
