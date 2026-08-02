@@ -336,9 +336,12 @@ proving artifacts, no multi-minute wait, no trusted setup.
 
 Where proving is irreplaceable is the **trust-minimised bridge** — attesting to
 Mina zkApp *state transitions*, which no amount of on-chain curve arithmetic can
-do. That is not speculative here. A universal Mina Pickles verifier already runs
-in a zkVM against a real Mina **mainnet** blockchain SNARK, in two ports sharing
-one verifier core:
+do. That is well beyond a hackathon window: it means running a prover in
+production, deploying a verifier, and getting the whole thing audited.
+
+What can be said is that the cryptography is not the blocker. A universal Mina
+Pickles verifier already runs in a zkVM against a real Mina **mainnet**
+blockchain SNARK, in two ports sharing one verifier core:
 
 | | measured on the same input |
 |---|---|
@@ -352,11 +355,13 @@ the cross-zkVM ratio is indicative only; see
 [docs/threat-model.md §6.3](docs/threat-model.md) for the full table and the
 caveats.
 
-What remains is wiring, not research: bind the settlement statement, and
-implement `IMinaSettlementVerifier` against the OpenVM Solidity SDK — which
-verifies on any EVM chain for **under 330k gas**, less than the 809k this
-project already pays for a single Schnorr verification. Rotation into it is
-timelocked, which is what the timelock was built for.
+Both are **research prototypes — unaudited, and not ready to secure a bridge.**
+They establish feasibility and cost, and they show there is gas headroom: the
+OpenVM Solidity SDK verifies on any EVM chain for **under 330k gas**, less than
+the 809k this project already pays for a single Schnorr verification. Turning
+that into a settlement path means binding the statement, running a prover, and
+an audit — a programme of work, not a next commit. `IMinaSettlementVerifier` and
+its timelocked rotation exist so that day is a swap rather than a redesign.
 
 Also on the roadmap: batching. The wrap is a fixed cost, so amortising it across
 many deposits is what keeps proving competitive — and it is why settlement is

@@ -172,9 +172,8 @@ compromised key cannot ignore it.
 **Still not bounded by** anything that makes the loss *recoverable*. A cap
 chooses the size of the hole; it does not fill it.
 
-**Removed by.** Proving Mina state on Flare (§6.3) — for which the Pickles
-verifier already exists and is measured, so what remains is wiring rather than
-research.
+**Removed by.** Proving Mina state on Flare (§6.3). The verifier for it exists
+and is measured, but as an unaudited prototype — feasibility, not a control.
 
 ### GAP 2 — The withdrawal attestor can release escrow
 
@@ -269,10 +268,18 @@ improvement below.
 
 ### 6.3 Proving Mina state on Flare — closes GAP 1 and GAP 3
 
-This is the real fix. It is normally where a bridge design says "future work",
-and the honest reason it does not here is that **the hard part already exists and
-is measured**: a universal Mina Pickles verifier running inside a zkVM,
-verifying a real Mina *mainnet* blockchain SNARK.
+This is the real fix, and it is out of reach in a hackathon window — not because
+the cryptography is missing, but because the operational side of it is a
+programme of work: a prover to run, artifacts to manage, a verifier to deploy,
+and an audit before any of it should hold value.
+
+What can be said is that the missing piece is not research. A universal Mina
+Pickles verifier already runs inside a zkVM against a real Mina *mainnet*
+blockchain SNARK, in two ports sharing one verifier core, measured below. Those
+are **research prototypes**: unaudited, exercised on fixtures rather than in
+production, and nothing here should be read as a claim that they are ready to
+secure a bridge. They establish feasibility and cost. Proving them out and having
+them audited is the work that stands between this document and GAP 1 closing.
 
 **Where the cost is.** Mina's proof system is Pickles over Kimchi on the Pasta
 cycle, so verifying it means arithmetic in the Pallas and Vesta base fields. No
@@ -313,23 +320,23 @@ same unit, and SP1 exposes no trace-cell count, which is the number that actuall
 tracks proving cost. The comparison worth trusting is rv32-vs-rv64 *within*
 OpenVM, where both metrics exist and agree (×2.48 and ×2.68).
 
-**What this changes for the bridge.** GAP 1 and GAP 3 are no longer blocked on
-whether Pickles verification in a zkVM is feasible. Three things remain, none of
-them research:
+**What this changes for the bridge, and what it does not.** It settles the
+question of whether the trust-minimised path is reachable at all, and it says
+what the eventual shape is: the guest reveals
+`keccak256(abi.encode(bytes32 vkHash, bytes32[] statement))`, and
+`IMinaSettlementVerifier` already consumes a `SettlementPublicValues` struct, so
+`MockSettlementVerifier` is replaced through the timelocked rotation the contract
+already has rather than by a redesign. On the gas side there is room: the OpenVM
+Solidity SDK verifies a Halo2/KZG proof on any EVM chain for under 330k gas,
+*less than the 809k this project already pays for one Schnorr verification*.
 
-1. **The statement.** The guest reveals
-   `keccak256(abi.encode(bytes32 vkHash, bytes32[] statement))` — 32 bytes, with
-   the consumer supplying the preimage. `IMinaSettlementVerifier` already consumes
-   `SettlementPublicValues`; binding `depositsRoot`, `previousActionState` and
-   `newActionState` into that statement is an encoding decision, and the encoding
-   discipline for exactly this already exists in `packages/shared`.
-2. **The on-chain verifier.** The OpenVM Solidity SDK verifies a Halo2/KZG proof
-   on any EVM chain for **under 330k gas** — *less than the 809k we already pay
-   for one Schnorr verification*. Implementing `IMinaSettlementVerifier` against
-   it retires `MockSettlementVerifier` through the existing timelocked rotation,
-   which is what that timelock was built for.
-3. **Proving cost.** ~900M instructions is the binding constraint, not gas. This
-   is why settlement is batched: the cost is per *batch*, not per deposit.
+It does not make any of that shippable in this window. Binding the settlement
+statement, running a prover in production, and auditing the verifier core are
+each real work, and the ~900M-instruction proving cost is an operational
+commitment rather than a line of code — it is why settlement is batched, and why
+someone has to run it.
+
+Until then GAP 1 and GAP 3 stand, and §6.1 and §6.2 are what actually bound them.
 
 The guest panics rather than revealing a validity flag, so a proof exists only
 for accepted inputs and a consumer cannot forget to check a boolean — the same
