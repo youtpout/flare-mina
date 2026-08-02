@@ -64,7 +64,7 @@ export const MINA = {
   network: 'devnet',
   explorer: 'https://minascan.io/devnet',
   /** Escrow account. Deposits are plain payments here, with the Flare recipient in the memo. */
-  bridgeAccount: 'B62qq2k9am4nVrsqUSZ1EjUok4awJyuKpzE5bEvZqHUiVo2gYtNJMAY',
+  bridgeAccount: 'B62qjzS4P9wxqnYjx5ey3Jpm9po9SqkUgCwz3QfwGPQ6iXwUVMZ7nc3',
 } as const;
 
 export const explorerTx = (hash: string) => `${COSTON2.explorer}/tx/${hash}`;

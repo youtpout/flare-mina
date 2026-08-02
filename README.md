@@ -273,7 +273,16 @@ than from documentation:
 
 | Contract | Address |
 |----------|---------|
-| Bridge escrow zkApp | Not yet deployed |
+| Bridge escrow zkApp | [`B62qjzS4P9wxqnYjx5ey3Jpm9po9SqkUgCwz3QfwGPQ6iXwUVMZ7nc3`](https://minascan.io/devnet/account/B62qjzS4P9wxqnYjx5ey3Jpm9po9SqkUgCwz3QfwGPQ6iXwUVMZ7nc3) |
+
+Deposits are **plain payments** to that account, with the Flare recipient in the
+memo. No zkApp interaction, no client-side proof, any Mina wallet. The account's
+permissions still make it non-custodial: `send` and `editState` are
+`Permissions.proof()`, so nothing leaves except through a proved method. A key
+holding the escrow could rug it; this cannot.
+
+Verification key hash:
+`17363485780734729146616842652012504567483608174933417875385175420873748559489`
 
 ### Flare mainnet (chain 14) / Mina mainnet
 
