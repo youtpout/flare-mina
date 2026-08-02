@@ -1,71 +1,51 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {MinaAddress, MinaAddressLib} from "./libraries/MinaAddress.sol";
-
-/// @notice Minimal SP1 verifier gateway interface, declared inline so this
-/// contract has no external dependency. Matches `ISP1Verifier` from
-/// sp1-contracts and the interface used by `MinaKimchiVerifier`.
-interface ISP1Verifier {
-    function verifyProof(bytes32 programVKey, bytes calldata publicValues, bytes calldata proofBytes)
-        external
-        view;
-}
-
-/// @notice One Mina-signed authorization, as committed by the `minaport-guest`
-/// SP1 program.
-/// @dev ABI-identical to `MinaAuthorization` in `minaport-core` (Rust). The
-/// guest commits `abi.encode(MinaAuthorization[])`.
-struct MinaAuthorization {
-    /// @dev Mina public key packed as `x | isOdd << 255`.
-    bytes32 minaPublicKey;
-    /// @dev EVM chain the authorization is valid on.
-    uint256 chainId;
-    /// @dev Contract the authorization is addressed to.
-    address target;
-    /// @dev Opaque commitment to the authorised action.
-    bytes32 actionHash;
-    /// @dev Per-key anti-replay nonce.
-    uint64 nonce;
-    /// @dev Unix seconds after which the authorization is void.
-    uint64 expiry;
-}
+import {MinaSchnorr} from "./libraries/MinaSchnorr.sol";
+import {MinaAddressLib} from "./libraries/MinaAddress.sol";
+import {Pallas} from "./libraries/Pallas.sol";
 
 /// @title MinaAuthRegistry
-/// @notice Turns a Mina Schnorr signature into an on-chain authorization on Flare.
+/// @notice Lets a Mina key authorise actions on Flare, by verifying its Schnorr
+/// signature directly on-chain.
 ///
-/// @dev A Mina key is a Pallas key: it cannot produce an ECDSA signature and can
-/// therefore never control an EOA on an EVM chain. This contract is the bridge
-/// across that gap. An SP1 program verifies the Schnorr signature off-chain and
-/// commits the authorization; this contract verifies the resulting Groth16 proof
-/// and records the authorization as consumed.
+/// @dev **Why this contract exists.** A Mina key is a Pallas key. It cannot
+/// produce an ECDSA secp256k1 signature, so it can never control an EOA on an
+/// EVM chain. This contract is the bridge across that gap.
 ///
-/// **What the proof does and does not say.** The proof attests only that the
-/// Mina key signed the authorization. It says nothing about whether the action
-/// is currently appropriate. Chain binding, target binding, expiry and nonce are
-/// enforced *here*, not in the circuit, because they are properties of the
-/// current chain state rather than of the signature.
+/// **Why there is no proof.** The Pallas base field is a 255-bit prime, so it
+/// fits in one EVM word and `mulmod` handles it natively. Verification costs
+/// roughly 809k gas — under a cent on Flare. A zero-knowledge proof would only
+/// be worth its complexity on a chain where gas is expensive; see
+/// docs/roadmap for where SP1 does earn its place.
 ///
-/// **Batching.** The guest verifies N authorizations per proof. The dominant
-/// cost of an SP1 proof is the fixed Groth16 wrap, not execution, so batching is
-/// what makes per-user authorization economical. `submit` therefore takes an
-/// array and each entry is settled independently.
+/// **What a signature does and does not authorise.** It attests that the Mina
+/// key signed this exact authorization. Whether the action is appropriate right
+/// now is enforced here: chain binding, target binding, expiry and nonce are
+/// properties of current chain state, not of the signature.
 contract MinaAuthRegistry {
-    using MinaAddressLib for MinaAddress;
+    /// @notice The canonical authorization a Mina key signs.
+    /// @dev Field order is protocol. Mirrored by `Authorization::to_fields` in
+    /// `minaport-core` (Rust) and by the TypeScript encoder in packages/shared.
+    struct Authorization {
+        /// @dev EVM chain this authorization is valid on.
+        uint256 chainId;
+        /// @dev Contract addressed by this authorization.
+        address target;
+        /// @dev Opaque commitment to the authorised action. Its meaning is the
+        /// target contract's business, which is what lets one verifier serve
+        /// account binding, swap approval, and anything added later.
+        bytes32 actionHash;
+        /// @dev Per-key anti-replay nonce, strictly sequential.
+        uint64 nonce;
+        /// @dev Unix seconds after which the authorization is void.
+        uint64 expiry;
+    }
 
-    /// @notice SP1 verifier gateway.
-    address public immutable SP1_GATEWAY;
-
-    /// @notice Verification key of the `minaport-guest` program.
-    /// @dev Immutable: rotating it would let a different program mint
-    /// authorizations. A new guest means a new deployment, which is a visible,
-    /// auditable event rather than a silent storage write.
-    bytes32 public immutable PROGRAM_VKEY;
-
-    /// @notice Next expected nonce per Mina key.
-    /// @dev Strictly sequential rather than a bitmap: it makes replay impossible
-    /// with one storage slot, and makes the expected next nonce readable by the
-    /// frontend without an archive query.
+    /// @notice Next expected nonce per Mina key, keyed by `x | isOdd << 255`.
+    /// @dev Sequential rather than a bitmap: replay becomes impossible with one
+    /// storage slot, and the frontend can read the next nonce without an
+    /// archive query.
     mapping(bytes32 => uint64) public nextNonce;
 
     event AuthorizationConsumed(
@@ -75,71 +55,108 @@ contract MinaAuthRegistry {
         uint64 nonce
     );
 
-    error EmptyBatch();
     error WrongChain(uint256 expected, uint256 actual);
     error WrongTarget(address expected, address actual);
-    error Expired(uint64 expiry);
+    error Expired(uint64 expiry, uint256 nowSeconds);
     error UnexpectedNonce(bytes32 minaPublicKey, uint64 expected, uint64 actual);
-    error InvalidMinaKey(bytes32 minaPublicKey);
+    error InvalidSignature();
 
-    constructor(address gateway, bytes32 programVkey) {
-        SP1_GATEWAY = gateway;
-        PROGRAM_VKEY = programVkey;
+    /// @notice Field encoding of an authorization: exactly what the Mina key signs.
+    ///
+    /// @dev Six Pallas field elements:
+    ///
+    /// | index | content                          | width    |
+    /// |-------|----------------------------------|----------|
+    /// | 0     | `chainId`                        | 64 bits  |
+    /// | 1     | `target`, big-endian             | 160 bits |
+    /// | 2     | `actionHash` high 16 bytes       | 128 bits |
+    /// | 3     | `actionHash` low 16 bytes        | 128 bits |
+    /// | 4     | `nonce`                          | 64 bits  |
+    /// | 5     | `expiry`                         | 64 bits  |
+    ///
+    /// `actionHash` is split across two elements because a 256-bit digest does
+    /// not fit in one ~254-bit field: packing it whole would reduce modulo the
+    /// field order and let two distinct actions share an encoding.
+    ///
+    /// The signer's own public key is deliberately absent — Mina's signing
+    /// scheme already absorbs `pk.x` and `pk.y` into the challenge, so
+    /// repeating it here would add size without adding binding.
+    function encodeAuthorization(Authorization calldata auth)
+        public
+        pure
+        returns (uint256[] memory fields)
+    {
+        fields = new uint256[](6);
+        fields[0] = auth.chainId;
+        fields[1] = uint256(uint160(auth.target));
+        fields[2] = uint256(uint128(bytes16(auth.actionHash)));
+        fields[3] = uint256(uint128(uint256(auth.actionHash)));
+        fields[4] = auth.nonce;
+        fields[5] = auth.expiry;
     }
 
-    /// @notice Verify a batch of Mina-signed authorizations and consume the ones
-    /// addressed to `msg.sender`.
+    /// @notice Verify a Mina-signed authorization and consume its nonce.
     ///
-    /// @dev Called by the contract that wants to act on the authorization, so
-    /// `target` is checked against `msg.sender`. That is what prevents an
-    /// authorization intended for one contract from being replayed at another:
-    /// the signer names its target, and only that target can consume it.
+    /// @dev Called by the contract acting on the authorization, so `target` is
+    /// checked against `msg.sender`. That is what stops an authorization
+    /// intended for one contract from being replayed at another: the signer
+    /// names its target, and only that target can consume it.
     ///
-    /// Entries in the batch that are not addressed to `msg.sender` are skipped
-    /// rather than reverting, so one proof can carry authorizations for several
-    /// contracts and each settles independently.
+    /// Anyone may submit the transaction — the signature is the authorisation,
+    /// and the submitter cannot influence any field. There is therefore no
+    /// relayer to trust and none to be censored by.
     ///
-    /// @return consumed The authorizations that were addressed to `msg.sender`
-    /// and passed every check.
+    /// @param publicKey The signer's Mina key. `y` is supplied by the caller and
+    ///        pinned by the curve equation plus the parity bit; see
+    ///        {Pallas-pointFromKey}.
+    /// @param mainnet Which Mina domain the signature was produced under. Note
+    ///        that mina-signer's `signFields` always uses the devnet domain
+    ///        regardless of its configured network, so this is normally false;
+    ///        chain binding comes from `chainId`, not from this flag.
     function consume(
-        bytes calldata publicValues,
-        bytes calldata sp1Proof
-    ) external returns (MinaAuthorization[] memory consumed) {
-        // Reverts unless the proof attests to exactly these public values.
-        ISP1Verifier(SP1_GATEWAY).verifyProof(PROGRAM_VKEY, publicValues, sp1Proof);
+        MinaSchnorr.PublicKey calldata publicKey,
+        MinaSchnorr.Signature calldata signature,
+        Authorization calldata auth,
+        bool mainnet
+    ) external returns (bytes32 minaKey) {
+        if (auth.chainId != block.chainid) revert WrongChain(block.chainid, auth.chainId);
+        if (auth.target != msg.sender) revert WrongTarget(msg.sender, auth.target);
+        if (auth.expiry < block.timestamp) revert Expired(auth.expiry, block.timestamp);
 
-        MinaAuthorization[] memory batch = abi.decode(publicValues, (MinaAuthorization[]));
-        if (batch.length == 0) revert EmptyBatch();
+        minaKey = bytes32(MinaAddressLib.raw(MinaAddressLib.pack(publicKey.x, publicKey.isOdd)));
 
-        consumed = new MinaAuthorization[](batch.length);
-        uint256 count;
+        uint64 expected = nextNonce[minaKey];
+        if (auth.nonce != expected) revert UnexpectedNonce(minaKey, expected, auth.nonce);
 
-        for (uint256 i; i < batch.length; ++i) {
-            MinaAuthorization memory auth = batch[i];
-            if (auth.target != msg.sender) continue;
-
-            if (auth.chainId != block.chainid) revert WrongChain(block.chainid, auth.chainId);
-            if (auth.expiry < block.timestamp) revert Expired(auth.expiry);
-            if (!MinaAddressLib.isValid(auth.minaPublicKey)) {
-                revert InvalidMinaKey(auth.minaPublicKey);
-            }
-
-            uint64 expected = nextNonce[auth.minaPublicKey];
-            if (auth.nonce != expected) {
-                revert UnexpectedNonce(auth.minaPublicKey, expected, auth.nonce);
-            }
-            nextNonce[auth.minaPublicKey] = expected + 1;
-
-            emit AuthorizationConsumed(
-                auth.minaPublicKey, auth.target, auth.actionHash, auth.nonce
-            );
-
-            consumed[count++] = auth;
+        // Cheap checks first: signature verification is ~809k gas, so every
+        // rejectable condition is tested before paying for it.
+        if (!MinaSchnorr.verify(publicKey, signature, encodeAuthorization(auth), mainnet)) {
+            revert InvalidSignature();
         }
 
-        // Shrink to the number actually consumed.
-        assembly {
-            mstore(consumed, count)
-        }
+        nextNonce[minaKey] = expected + 1;
+        emit AuthorizationConsumed(minaKey, auth.target, auth.actionHash, auth.nonce);
+    }
+
+    /// @notice Verify an authorization without consuming it. For previews.
+    function isValid(
+        MinaSchnorr.PublicKey calldata publicKey,
+        MinaSchnorr.Signature calldata signature,
+        Authorization calldata auth,
+        bool mainnet
+    ) external view returns (bool) {
+        if (auth.chainId != block.chainid) return false;
+        if (auth.expiry < block.timestamp) return false;
+
+        bytes32 minaKey =
+            bytes32(MinaAddressLib.raw(MinaAddressLib.pack(publicKey.x, publicKey.isOdd)));
+        if (auth.nonce != nextNonce[minaKey]) return false;
+
+        return MinaSchnorr.verify(publicKey, signature, encodeAuthorization(auth), mainnet);
+    }
+
+    /// @notice Next nonce for a Mina key given its curve coordinates.
+    function nextNonceFor(uint256 x, bool isOdd) external view returns (uint64) {
+        return nextNonce[bytes32(MinaAddressLib.raw(MinaAddressLib.pack(x, isOdd)))];
     }
 }

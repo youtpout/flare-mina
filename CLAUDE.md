@@ -13,8 +13,8 @@ Two independent rails, deliberately decoupled so neither blocks the other:
 
 1. **Bridge** — lock native MINA in a Mina zkApp, mint fully collateralized
    `wMINA` on Flare, swap it against Flare assets, burn it to withdraw.
-2. **Authorization** — a Mina Schnorr signature, verified inside an SP1 guest and
-   settled on Flare as a Groth16 proof, authorises actions on Flare contracts.
+2. **Authorization** — a Mina Schnorr signature, verified DIRECTLY in Solidity
+   on Flare, authorises actions on Flare contracts. No proof, no relayer.
 
 Target: Flare Summer Signal hackathon, **MVP due 14 August 2026**.
 Bounty: *Interoperable Asset Products*.
@@ -23,28 +23,46 @@ Bounty: *Interoperable Asset Products*.
 
 A Mina key is a **Pallas** key. It cannot produce an ECDSA secp256k1 signature,
 so it can never control an EOA on Flare. Any "Mina controls Flare" design must
-therefore route through a contract plus a proof. We never reuse the Mina private
-key as an ECDSA key.
+therefore route through a contract. We never reuse the Mina private key as an
+ECDSA key.
+
+The usual answer is a proof. On Flare it is not needed: the Pallas base field is
+a 255-bit prime, so it fits in one EVM word and `mulmod` handles it natively.
 
 ## Architecture
 
 ```
 Mina                                  Flare (Coston2, chainId 114)
 ────                                  ───────────────────────────
-zkApp escrow ──deposit actions──┐
-                                ├──► SP1 guest ──Groth16──► MinaPortBridge ──► wMINA
-Snap Schnorr signature ─────────┘                           MinaAuthRegistry
+zkApp escrow ──deposit batch──────────────► MinaPortBridge ──► wMINA ──► swaps
+Mina wallet signature ─────────────────────► MinaAuthRegistry
+                                             (direct Schnorr verify, ~809k gas)
 ```
 
-### Two proving routes — pick per use case
+### MVP: direct on-chain verification, no proof
+
+**Decision: SP1 is OFF the MVP path.** A Mina Schnorr signature is verified
+directly in Solidity for ~809k gas (under a cent on Flare). No prover, no
+relayer, no trusted setup, no proving artifacts, no multi-minute wait.
+
+This works because the Pallas base field is a 255-bit prime: it fits in one EVM
+word, so `mulmod`/`addmod` handle it natively at 8 gas each. It is a Flare
+answer, not a portable one — the same code on Ethereum would cost tens of
+dollars, where Groth16 at ~200k gas wins.
+
+`packages/prover` stays in the repo as roadmap: SP1 earns its place proving Mina
+zkApp *state transitions* for a trust-minimised bridge, which curve arithmetic
+on-chain cannot replace.
+
+### Historical: the two proving routes considered
 
 | Route | What SP1 verifies | Cost | Used for |
 |-------|-------------------|------|----------|
 | **A** | A full Pickles proof, via the existing `o1js-to-zkvm` universal verifier | Heavy (dominated by a 2^16 Vesta MSM) | The real bridge, post-hackathon |
 | **B** | A Mina Schnorr signature directly, in Rust | **~2.0 M cycles**, measured | **Everything in the hackathon MVP** |
 
-Route A is NOT used for the hackathon. Route B is implemented in
-`packages/prover`.
+Neither is used for the hackathon MVP; direct verification replaced both.
+Route B is implemented in `packages/prover` and kept for the bridge work.
 
 ### Measured cost (not estimated)
 
@@ -105,6 +123,50 @@ caught by `packages/shared/fixtures/deposit-batch.json`, which all three read.
 - **Authorization field encoding**: 6 Pallas field elements. `actionHash` is
   split 128/128 across two elements because a 256-bit digest does not fit in one
   ~254-bit field without silent reduction.
+
+## Measured gas (Foundry, optimizer_runs = 100000)
+
+| Operation | Gas |
+|-----------|-----|
+| Full signature verification, 6-field message | 808,891 |
+| `MinaAuthRegistry.consume` incl. storage write | 834,588 |
+| Rejected early (wrong chain/target/nonce) | 6,488 |
+| Poseidon permutation | 47,608 |
+| Pallas scalar multiplication | 613,432 |
+| `s*G + e*P` via Strauss-Shamir | 806,713 |
+
+Flare block gas limit: 28,000,000. Base fee observed: 500 gwei.
+
+### What produced the savings, in order of value
+
+1. Round constants in bytecode, not a storage array — removes 165 cold SLOADs
+2. Strauss-Shamir, one shared doubling chain for both scalars — −43% on curve work
+3. `optimizer_runs` 200 -> 100,000 — −26% overall
+4. Mixed addition against affine window tables
+5. Comparing `R.x` projectively instead of a second inversion
+
+### What did NOT work
+
+- **Hand-written Yul was 1.83x slower** than the Solidity it replaced (92k vs
+  50k per Poseidon permutation). With 10+ live values per round the binding
+  constraint is stack scheduling, and the IR allocator beats hand assembly.
+  Do not reach for Yul on this codebase without measuring first.
+- **Computing the public key `y` on-chain.** `a^((P+1)/4)` needs `P = 3 (mod 4)`;
+  Pallas has `P = 1 (mod 4)` with 2-adicity 32. `y` is a caller argument, pinned
+  by the curve equation plus the parity bit.
+
+## Mina network domains — important
+
+`mina-signer` 4.1.0 hardcodes `'devnet'` in `signFields`/`verifyFields`
+(mina-signer.js:120). `signMessage`, `signTransaction` and `signZkappCommand`
+thread `this.network` through; the field path does not.
+
+**Every field signature from standard tooling carries the devnet domain on every
+network.** Do not rely on Mina network separation for replay protection. Chain
+binding comes from the `chainId` field inside the signed message.
+
+Both domains are implemented and positively tested anyway, since signatures from
+other paths do carry the network.
 
 ## Key design decisions
 
