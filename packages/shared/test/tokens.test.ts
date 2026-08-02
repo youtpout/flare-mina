@@ -28,6 +28,16 @@ describe('default token list', () => {
     }
   });
 
+  /// Three tokens on Coston2 answer to some form of "USDT0". Picking by name
+  /// would have been a coin flip with user funds on the outcome.
+  it('carries the faucet USD₮0, identified by usage not by name', () => {
+    const usdt = COSTON2_TOKENS.find((t) => t.symbol === 'USD₮0')!;
+    expect(usdt.address).toBe('0xC1A5B41512496B80903D1f32d6dEa3a73212E71F');
+    expect(usdt.decimals).toBe(6);
+    expect(usdt.bridge.kind).toBe('direct');
+    expect(usdt.source).toMatch(/holders|transfers/i);
+  });
+
   it('carries FXRP, the bounty priority asset, verified on-chain', () => {
     const fxrp = COSTON2_TOKENS.find((t) => t.symbol === 'FXRP')!;
     expect(fxrp.address).toBe('0x0b6A3645c240605887a5532109323A3E12273dc7');

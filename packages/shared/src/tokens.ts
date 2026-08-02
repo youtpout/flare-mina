@@ -95,10 +95,13 @@ export const COSTON2_TOKENS: TokenInfo[] = [
   ),
   token(
     'USD₮0',
-    'Tether USD₮0',
+    'USDT0 test',
     6,
-    null,
-    'Not present on Coston2 at the time of writing. Verify before adding.',
+    '0xC1A5B41512496B80903D1f32d6dEa3a73212E71F',
+    'Distributed by the Coston2 faucet. Identified against three same-named ' +
+      'impostors by usage rather than by name: 4,384 holders, and 36 of 50 ' +
+      'recent transfers are exactly 10.000000 — the faucet\'s advertised ' +
+      'per-address allowance. The look-alikes have 252 and 75 holders.',
   ),
   token(
     'WETH',
