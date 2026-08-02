@@ -1,0 +1,16 @@
+[package]
+name = "minaport-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Canonical MinaPort authorization encoding, shared by guest and host"
+
+[dependencies]
+minaport-schnorr = { path = "../minaport-schnorr", default-features = false }
+ark-ff.workspace = true
+alloy-sol-types = { version = "1", default-features = false }
+
+[features]
+default = ["std"]
+std = ["minaport-schnorr/std", "ark-ff/std", "alloy-sol-types/std"]
+sp1 = ["minaport-schnorr/sp1"]

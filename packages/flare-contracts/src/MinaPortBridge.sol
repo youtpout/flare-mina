@@ -1,0 +1,325 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
+
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+
+import {WrappedMINA} from "./WrappedMINA.sol";
+import {MinaAddressLib} from "./libraries/MinaAddress.sol";
+import {MinaPortEncoding} from "./libraries/MinaPortEncoding.sol";
+import {IMinaSettlementVerifier, SettlementPublicValues} from "./interfaces/IMinaSettlementVerifier.sol";
+
+/// @title MinaPortBridge
+/// @notice Flare side of the MINA <-> wMINA bridge.
+///
+/// @dev Two independent flows:
+///
+/// **Mina -> Flare.** A relayer submits a proof that the Mina bridge zkApp
+/// advanced its action state by a batch of deposits, committing a Merkle root
+/// over those deposits. The bridge records the root; recipients then claim
+/// individually with a Merkle proof, which mints wMINA. Splitting settlement
+/// from claiming keeps the relayer off the critical path for user funds: once a
+/// root is accepted, the relayer can disappear and every recipient can still
+/// claim permissionlessly.
+///
+/// **Flare -> Mina.** A holder burns wMINA and the bridge emits a canonical
+/// `WithdrawToMina` event carrying a monotonic nonce. The Mina side releases the
+/// escrow against a proof of that event.
+///
+/// Collateral invariant: `totalSupply(wMINA) == escrowedNanomina`, and both only
+/// change inside `claimDeposit` (up) and `burnToMina` (down).
+contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
+    using MinaPortEncoding for MinaPortEncoding.Deposit;
+
+    // -------------------------------------------------------------------------
+    // Immutables
+    // -------------------------------------------------------------------------
+
+    /// @notice The wMINA token. Deployed by this contract so the mint/burn
+    /// authority can never be pointed at a token the bridge does not control.
+    WrappedMINA public immutable WMINA;
+
+    /// @notice Binds this bridge to one Mina zkApp on one Mina network.
+    /// @dev Every accepted batch must carry this exact id, so a proof produced
+    /// for a devnet deployment can never settle on a mainnet bridge.
+    bytes32 public immutable BRIDGE_ID;
+
+    /// @notice Delay enforced on verifier rotation.
+    uint256 public constant VERIFIER_UPDATE_DELAY = 2 days;
+
+    // -------------------------------------------------------------------------
+    // State
+    // -------------------------------------------------------------------------
+
+    /// @notice Verifier for settlement proofs.
+    IMinaSettlementVerifier public verifier;
+
+    /// @notice Pending verifier rotation, executable after `verifierUpdateReadyAt`.
+    IMinaSettlementVerifier public pendingVerifier;
+    uint256 public verifierUpdateReadyAt;
+
+    /// @notice Latest Mina action state this bridge has settled up to.
+    bytes32 public currentMinaActionState;
+
+    /// @notice Batch nonce of the most recently accepted batch.
+    uint64 public lastBatchNonce;
+
+    /// @notice Deposit roots accepted by a verified settlement proof.
+    mapping(bytes32 => bool) public acceptedDepositRoots;
+
+    /// @notice Deposit leaves already claimed. Keyed by leaf digest.
+    mapping(bytes32 => bool) public claimedDeposits;
+
+    /// @notice Withdrawal nonces already emitted.
+    mapping(uint256 => bool) public processedWithdrawalNonces;
+
+    /// @notice Next withdrawal nonce to assign.
+    uint256 public nextWithdrawalNonce;
+
+    /// @notice Nanomina currently escrowed on Mina against circulating wMINA.
+    uint256 public escrowedNanomina;
+
+    // -------------------------------------------------------------------------
+    // Events
+    // -------------------------------------------------------------------------
+
+    event DepositBatchAccepted(
+        uint64 indexed batchNonce,
+        bytes32 indexed depositsRoot,
+        bytes32 previousActionState,
+        bytes32 newActionState
+    );
+
+    event DepositClaimed(
+        bytes32 indexed leaf,
+        address indexed recipient,
+        uint64 indexed nonce,
+        uint64 amountNanomina
+    );
+
+    /// @notice Canonical withdrawal event. This is the event the Mina side
+    /// proves against, so its signature and field order are protocol.
+    event WithdrawToMina(
+        uint256 indexed nonce,
+        address indexed sender,
+        bytes32 indexed minaRecipient,
+        uint256 amount
+    );
+
+    event VerifierUpdateProposed(address indexed newVerifier, uint256 readyAt);
+    event VerifierUpdateCancelled(address indexed cancelledVerifier);
+    event VerifierUpdated(address indexed oldVerifier, address indexed newVerifier);
+
+    // -------------------------------------------------------------------------
+    // Errors
+    // -------------------------------------------------------------------------
+
+    error ZeroAddress();
+    error ZeroAmount();
+    error AmountExceedsUint64();
+    error InvalidProof();
+    error UnexpectedBridgeId(bytes32 expected, bytes32 actual);
+    error UnexpectedActionState(bytes32 expected, bytes32 actual);
+    error NonMonotonicBatchNonce(uint64 last, uint64 submitted);
+    error DepositRootAlreadyAccepted(bytes32 root);
+    error DepositRootNotAccepted(bytes32 root);
+    error DepositAlreadyClaimed(bytes32 leaf);
+    error InvalidMerkleProof();
+    error WithdrawalNonceAlreadyUsed(uint256 nonce);
+    error NoPendingVerifier();
+    error VerifierUpdateNotReady(uint256 readyAt);
+
+    // -------------------------------------------------------------------------
+    // Construction
+    // -------------------------------------------------------------------------
+
+    /// @param owner_ Initial owner (two-step transferable).
+    /// @param verifier_ Settlement verifier. May be a mock during development.
+    /// @param bridgeId_ Identifier of the Mina zkApp + network this bridge serves.
+    /// @param genesisActionState Mina action state the bridge starts from,
+    ///        i.e. the zkApp's `Reducer.initialActionState` at deployment.
+    constructor(
+        address owner_,
+        IMinaSettlementVerifier verifier_,
+        bytes32 bridgeId_,
+        bytes32 genesisActionState
+    ) Ownable(owner_) {
+        if (owner_ == address(0) || address(verifier_) == address(0)) revert ZeroAddress();
+        verifier = verifier_;
+        BRIDGE_ID = bridgeId_;
+        currentMinaActionState = genesisActionState;
+        WMINA = new WrappedMINA(address(this));
+    }
+
+    // -------------------------------------------------------------------------
+    // Mina -> Flare
+    // -------------------------------------------------------------------------
+
+    /// @notice Accept a batch of Mina deposits proven by a settlement proof.
+    /// @dev Permissionless: the proof is the authorisation, so anyone may pay
+    /// the gas to advance the bridge. A censoring relayer can therefore be
+    /// routed around by any party holding a valid proof.
+    function submitDepositBatch(
+        bytes calldata proofBytes,
+        bytes calldata publicValuesBytes
+    ) external whenNotPaused {
+        // Reverts if the proof does not attest to these exact public values.
+        verifier.verifySettlement(publicValuesBytes, proofBytes);
+
+        SettlementPublicValues memory pv =
+            abi.decode(publicValuesBytes, (SettlementPublicValues));
+
+        if (!pv.proofValid) revert InvalidProof();
+        if (pv.bridgeId != BRIDGE_ID) revert UnexpectedBridgeId(BRIDGE_ID, pv.bridgeId);
+        if (pv.previousActionState != currentMinaActionState) {
+            revert UnexpectedActionState(currentMinaActionState, pv.previousActionState);
+        }
+        // Strictly monotonic: replaying an old batch, or skipping one, is rejected.
+        if (pv.batchNonce != lastBatchNonce + 1) {
+            revert NonMonotonicBatchNonce(lastBatchNonce, pv.batchNonce);
+        }
+        if (acceptedDepositRoots[pv.depositsRoot]) {
+            revert DepositRootAlreadyAccepted(pv.depositsRoot);
+        }
+
+        currentMinaActionState = pv.newActionState;
+        lastBatchNonce = pv.batchNonce;
+        acceptedDepositRoots[pv.depositsRoot] = true;
+
+        emit DepositBatchAccepted(
+            pv.batchNonce, pv.depositsRoot, pv.previousActionState, pv.newActionState
+        );
+    }
+
+    /// @notice Claim a deposit from an accepted batch, minting wMINA.
+    ///
+    /// @dev Permissionless by design: the minted tokens always go to
+    /// `deposit.recipientFlare`, which is bound inside the leaf and therefore
+    /// inside the proof. Letting a third party pay the gas is strictly a UX win
+    /// with no security cost — there is no `msg.sender` check because there is
+    /// nothing `msg.sender` could influence.
+    function claimDeposit(
+        MinaPortEncoding.Deposit calldata deposit,
+        bytes32 depositsRoot,
+        bytes32[] calldata merkleProof
+    ) external whenNotPaused nonReentrant {
+        if (!acceptedDepositRoots[depositsRoot]) revert DepositRootNotAccepted(depositsRoot);
+        if (deposit.amountNanomina == 0) revert ZeroAmount();
+        if (deposit.recipientFlare == address(0)) revert ZeroAddress();
+
+        bytes32 leaf = MinaPortEncoding.hashDepositLeaf(deposit);
+        if (claimedDeposits[leaf]) revert DepositAlreadyClaimed(leaf);
+        if (!MerkleProof.verify(merkleProof, depositsRoot, leaf)) revert InvalidMerkleProof();
+
+        claimedDeposits[leaf] = true;
+        escrowedNanomina += deposit.amountNanomina;
+
+        emit DepositClaimed(leaf, deposit.recipientFlare, deposit.nonce, deposit.amountNanomina);
+
+        WMINA.mint(deposit.recipientFlare, deposit.amountNanomina);
+    }
+
+    // -------------------------------------------------------------------------
+    // Flare -> Mina
+    // -------------------------------------------------------------------------
+
+    /// @notice Burn wMINA and request the corresponding native MINA on Mina.
+    /// @param amount Amount in wMINA base units (== nanomina).
+    /// @param minaRecipient Mina account, packed as `x | isOdd << 255`.
+    ///
+    /// @dev The recipient is validated as a Pallas field element here rather
+    /// than on the Mina side: a malformed key corresponds to no Mina account, so
+    /// accepting it would burn the user's wMINA against an unclaimable escrow.
+    function burnToMina(uint256 amount, bytes32 minaRecipient)
+        external
+        whenNotPaused
+        nonReentrant
+        returns (uint256 nonce)
+    {
+        if (amount == 0) revert ZeroAmount();
+        // The Mina side accounts in uint64 nanomina; reject anything it cannot represent.
+        if (amount > type(uint64).max) revert AmountExceedsUint64();
+        MinaAddressLib.fromBytes32(minaRecipient);
+
+        nonce = nextWithdrawalNonce;
+        if (processedWithdrawalNonces[nonce]) revert WithdrawalNonceAlreadyUsed(nonce);
+        processedWithdrawalNonces[nonce] = true;
+        nextWithdrawalNonce = nonce + 1;
+
+        escrowedNanomina -= amount;
+
+        // Burn before emitting so a reverting burn cannot leave a claimable event.
+        WMINA.burn(msg.sender, amount);
+
+        emit WithdrawToMina(nonce, msg.sender, minaRecipient, amount);
+    }
+
+    // -------------------------------------------------------------------------
+    // Administration
+    // -------------------------------------------------------------------------
+
+    /// @notice Propose a new settlement verifier.
+    ///
+    /// @dev Rotating the verifier is the single most dangerous action available
+    /// on this contract: a malicious verifier can mint unbacked wMINA. It is
+    /// therefore gated by a two-step owner transfer (inherited), a
+    /// {VERIFIER_UPDATE_DELAY} timelock, and an event at each step, so that
+    /// holders have a window to exit before a rotation takes effect.
+    function proposeVerifier(IMinaSettlementVerifier newVerifier) external onlyOwner {
+        if (address(newVerifier) == address(0)) revert ZeroAddress();
+        pendingVerifier = newVerifier;
+        verifierUpdateReadyAt = block.timestamp + VERIFIER_UPDATE_DELAY;
+        emit VerifierUpdateProposed(address(newVerifier), verifierUpdateReadyAt);
+    }
+
+    /// @notice Cancel a pending verifier rotation.
+    function cancelVerifierUpdate() external onlyOwner {
+        address cancelled = address(pendingVerifier);
+        if (cancelled == address(0)) revert NoPendingVerifier();
+        delete pendingVerifier;
+        delete verifierUpdateReadyAt;
+        emit VerifierUpdateCancelled(cancelled);
+    }
+
+    /// @notice Execute a pending verifier rotation once the timelock elapsed.
+    function executeVerifierUpdate() external onlyOwner {
+        if (address(pendingVerifier) == address(0)) revert NoPendingVerifier();
+        if (block.timestamp < verifierUpdateReadyAt) {
+            revert VerifierUpdateNotReady(verifierUpdateReadyAt);
+        }
+
+        address old = address(verifier);
+        verifier = pendingVerifier;
+        delete pendingVerifier;
+        delete verifierUpdateReadyAt;
+        emit VerifierUpdated(old, address(verifier));
+    }
+
+    /// @notice Emergency stop for every user-facing flow.
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+
+    // -------------------------------------------------------------------------
+    // Views
+    // -------------------------------------------------------------------------
+
+    /// @notice Leaf digest for a deposit, for off-chain claim tooling.
+    function depositLeaf(MinaPortEncoding.Deposit calldata deposit) external pure returns (bytes32) {
+        return MinaPortEncoding.hashDepositLeaf(deposit);
+    }
+
+    /// @notice True when the collateral invariant holds.
+    /// @dev Should be true at every block; asserted in the test suite after
+    /// every state-changing operation.
+    function collateralInvariantHolds() external view returns (bool) {
+        return WMINA.totalSupply() == escrowedNanomina;
+    }
+}

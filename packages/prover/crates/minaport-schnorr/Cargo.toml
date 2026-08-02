@@ -1,0 +1,19 @@
+[package]
+name = "minaport-schnorr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "no_std Mina Schnorr signature verification over Pallas, for zkVM guests"
+
+[dependencies]
+ark-ec.workspace = true
+ark-ff.workspace = true
+mina-curves.workspace = true
+mina-poseidon.workspace = true
+
+[features]
+default = ["std"]
+std = ["ark-ec/std", "ark-ff/std"]
+# Routes Pasta Fp/Fq Montgomery multiplication through SP1's `sys_bigint`
+# precompile. Enabled only for the guest sub-build; the host is unaffected.
+sp1 = ["mina-curves/sp1"]

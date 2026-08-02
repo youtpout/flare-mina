@@ -1,0 +1,20 @@
+[package]
+name = "minaport-guest"
+version = "0.1.0"
+edition = "2021"
+
+# Deliberately outside the host workspace: this crate compiles for
+# riscv32im-succinct-zkvm-elf and is built by minaport-host's build.rs.
+[workspace]
+
+[dependencies]
+minaport-core = { path = "../minaport-core", default-features = false }
+minaport-schnorr = { path = "../minaport-schnorr", default-features = false }
+sp1-zkvm = { git = "https://github.com/succinctlabs/sp1", tag = "v6.2.2" }
+alloy-sol-types = { version = "1", default-features = false }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+ark-ff = { version = "0.5", default-features = false }
+
+[features]
+default = []
+sp1 = ["minaport-core/sp1", "minaport-schnorr/sp1"]

@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = ["crates/minaport-schnorr", "crates/minaport-core", "crates/minaport-host"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+# Mina crates come from the same fork o1js-to-zkvm uses: that branch carries the
+# SP1 `sys_bigint` feature, so 256-bit modular arithmetic inside the guest goes
+# through SP1's bigint precompile instead of software limb arithmetic. Pinning
+# the SAME branch also keeps every proof-systems crate resolving to one copy —
+# mixing sources gives two distinct `Fp` types and a wall of mismatch errors.
+[workspace.dependencies]
+ark-ec = { version = "0.5.0", default-features = false }
+ark-ff = { version = "0.5.0", default-features = false }
+mina-curves = { git = "https://github.com/youtpout/proof-systems", branch = "migrate/openvm-2.1-rv64", default-features = false }
+mina-poseidon = { git = "https://github.com/youtpout/proof-systems", branch = "migrate/openvm-2.1-rv64", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = true
+
+[workspace.metadata]
+# The guest (`crates/minaport-guest`) is intentionally NOT a workspace member:
+# it compiles for riscv32im-succinct-zkvm-elf and is built by the host's
+# build.rs via sp1-build, with the `sp1` feature enabled so Pasta field
+# arithmetic routes through the zkVM's `sys_bigint` precompile.

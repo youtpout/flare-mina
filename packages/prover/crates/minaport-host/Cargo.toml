@@ -1,0 +1,21 @@
+[package]
+name = "minaport-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MinaPort prover CLI: execute (cycle stats) and prove (Groth16 for Flare)"
+
+[dependencies]
+minaport-core = { path = "../minaport-core" }
+minaport-schnorr = { path = "../minaport-schnorr" }
+sp1-sdk = { git = "https://github.com/succinctlabs/sp1", tag = "v6.2.2" }
+alloy-sol-types = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+ark-ff = "0.5"
+hex = "0.4"
+anyhow = "1"
+
+[build-dependencies]
+sp1-build = { git = "https://github.com/succinctlabs/sp1", tag = "v6.2.2" }
