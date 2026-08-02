@@ -172,7 +172,9 @@ compromised key cannot ignore it.
 **Still not bounded by** anything that makes the loss *recoverable*. A cap
 chooses the size of the hole; it does not fill it.
 
-**Removed by.** Proving Mina state on Flare (§6.3).
+**Removed by.** Proving Mina state on Flare (§6.3) — for which the Pickles
+verifier already exists and is measured, so what remains is wiring rather than
+research.
 
 ### GAP 2 — The withdrawal attestor can release escrow
 
@@ -267,42 +269,71 @@ improvement below.
 
 ### 6.3 Proving Mina state on Flare — closes GAP 1 and GAP 3
 
-This is the real fix, and it is the expensive one. Two routes, and the choice
-between them is a measurement, not a preference.
+This is the real fix. It is normally where a bridge design says "future work",
+and the honest reason it does not here is that **the hard part already exists and
+is measured**: a universal Mina Pickles verifier running inside a zkVM,
+verifying a real Mina *mainnet* blockchain SNARK.
 
-**Where the cost is.** Mina's proof system is Pickles over Kimchi on the
-Pasta cycle. Verifying it means arithmetic in the Pallas and Vesta base fields.
-No production zkVM has a Pallas precompile — SP1's precompiles cover secp256k1,
-ed25519, bn254 and bls12-381 — so in SP1 every Pallas multiplication runs as
-generic RISC-V bigint code. That is exactly what our own measurement shows:
-**~2.0M cycles marginal per Schnorr signature**, for an operation that costs
-809k gas executed directly on Flare. Schnorr is the cheap case; a full Pickles
-verification is orders of magnitude worse.
+**Where the cost is.** Mina's proof system is Pickles over Kimchi on the Pasta
+cycle, so verifying it means arithmetic in the Pallas and Vesta base fields. No
+zkVM ships a Pallas precompile — SP1's cover secp256k1, ed25519, bn254 and
+bls12-381 — so on a generic RISC-V target every Pasta point operation is
+software. That is ~95% of the guest's work.
 
-**Route A — SP1, reusing existing work.** The
-[o1js-to-zkvm](https://github.com/youtpout) universal Pickles verifier already
-settles any o1js proof through a single Solidity deployment. It is the shortest
-path because it exists, and because `packages/prover` already produces real SP1
-proofs today (core proof generated and verified in 1m43s on a laptop). The
-Groth16 wrap is a fixed cost, so batching amortises it — a batch of 200
-authorisations costs nearly what one costs.
+**[o1js-to-zkvm](https://github.com/youtpout/o1js-to-zkvm) — SP1.** Universal
+Pickles verifier, settling any o1js proof through a single Solidity deployment.
+Measured at **4,378,867,074 cycles** for one mainnet blockchain SNARK.
 
-**Route B — OpenVM, giving Pallas first-class treatment.** OpenVM's algebra and
-ECC extensions generate field and short-Weierstrass structs with custom
-intrinsics for *arbitrary compile-time* moduli and curves, via `moduli_declare!`
-and `sw_declare!`. Pallas is a short-Weierstrass curve (`y² = x³ + 5`), so it is
-declarable rather than something requiring a new precompile to be merged
-upstream. That is the structural difference from SP1: in SP1 we would be waiting
-on someone to add Pallas; in OpenVM we declare it.
+**[o1-openvm](https://github.com/youtpout/o1-openvm) — OpenVM.** The same
+verifier core, same input bytes, on OpenVM with both Pasta curves declared as
+first-class curves (`moduli_declare!` + `sw_declare!` in `mina-curves`, wired
+through the modular and ECC chips via `openvm.toml`). The point OpenVM's docs
+obscure by listing K256 and P256: the ECC extension takes an arbitrary
+`(modulus, scalar, a, b)`, and Pallas and Vesta are both `a = 0, b = 5`.
 
-**The experiment that decides it.** Port `minaport-schnorr` — the crate is
-already `no_std` and generic over the arkworks field types, so this is a build
-target, not a rewrite — and measure the same batch on both. The number that
-matters is marginal cycles per signature, because the fixed wrap cost is
-identical either way. If OpenVM's declared-curve arithmetic buys the order of
-magnitude the extension exists to buy, Pickles verification moves from
-"impractical" to "expensive but real", and Route B becomes the plan. If it does
-not, Route A wins on the strength of already existing.
+| configuration | instructions | trace cells | vs unaccelerated |
+|---|---|---|---|
+| no chips | 31,819,681,513 | 1,170,322,141,177 | — |
+| + modular (Fp/Fq) | 24,221,887,063 | 896,055,841,422 | ×1.31 |
+| + Vesta | 5,815,088,237 | 220,926,602,404 | ×5.47 |
+| + Pallas | 2,249,380,517 | 86,644,291,990 | ×14.15 |
+| + VK validation, no heap allocs | 2,230,979,102 | 85,934,163,225 | ×14.26 |
+| **+ OpenVM 2.1 / rv64** | **898,656,552** | **32,057,167,004** | **×35.41** |
+
+Two results from that table are worth carrying into any similar work. The
+modular chip *alone* buys almost nothing (×1.31) — accelerating field
+multiplication underneath software curve arithmetic cannot pay when the cycles
+are in point operations. And adding curve validation on the 28 VK commitments
+came out **−2.45% instructions**, because the same change removed a `Vec`
+allocation per coordinate: security at negative cost.
+
+OpenVM ends up ~4.87× below the SP1 figure, but that comparison should be
+treated as indicative only — an SP1 cycle and an OpenVM instruction are not the
+same unit, and SP1 exposes no trace-cell count, which is the number that actually
+tracks proving cost. The comparison worth trusting is rv32-vs-rv64 *within*
+OpenVM, where both metrics exist and agree (×2.48 and ×2.68).
+
+**What this changes for the bridge.** GAP 1 and GAP 3 are no longer blocked on
+whether Pickles verification in a zkVM is feasible. Three things remain, none of
+them research:
+
+1. **The statement.** The guest reveals
+   `keccak256(abi.encode(bytes32 vkHash, bytes32[] statement))` — 32 bytes, with
+   the consumer supplying the preimage. `IMinaSettlementVerifier` already consumes
+   `SettlementPublicValues`; binding `depositsRoot`, `previousActionState` and
+   `newActionState` into that statement is an encoding decision, and the encoding
+   discipline for exactly this already exists in `packages/shared`.
+2. **The on-chain verifier.** The OpenVM Solidity SDK verifies a Halo2/KZG proof
+   on any EVM chain for **under 330k gas** — *less than the 809k we already pay
+   for one Schnorr verification*. Implementing `IMinaSettlementVerifier` against
+   it retires `MockSettlementVerifier` through the existing timelocked rotation,
+   which is what that timelock was built for.
+3. **Proving cost.** ~900M instructions is the binding constraint, not gas. This
+   is why settlement is batched: the cost is per *batch*, not per deposit.
+
+The guest panics rather than revealing a validity flag, so a proof exists only
+for accepted inputs and a consumer cannot forget to check a boolean — the same
+discipline `packages/prover`'s SP1 guest follows, for the same reason.
 
 Both routes are tracked in `packages/prover`, which is deliberately off the MVP
 path: on Flare, direct verification is cheaper in every dimension that matters —
@@ -336,6 +367,8 @@ Pay the submitter out of the account's FMINA balance, inside the same batch.
 
 ## Sources
 
+- [o1-openvm](https://github.com/youtpout/o1-openvm) — universal Pickles verifier on OpenVM; the measurements in §6.3 are from its working notes
+- [o1js-to-zkvm](https://github.com/youtpout/o1js-to-zkvm) — the same verifier core on SP1
 - [OpenVM Book — custom extensions](https://book.openvm.dev/custom-extensions/overview.html)
-- [OpenVM documentation](https://docs.openvm.dev/book/getting-started/introduction/)
+- [Releasing the OpenVM Solidity SDK](https://blog.openvm.dev/solidity-sdk) — Halo2/KZG proofs verified on any EVM chain under 330k gas
 - [Succinct — optimized bn254 & bls12-381 precompiles in SP1](https://blog.succinct.xyz/succinctshipsprecompiles/)

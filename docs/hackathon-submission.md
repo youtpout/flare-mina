@@ -108,7 +108,8 @@ prior version of this product existed.
 | Library | What it provides | Author |
 |---|---|---|
 | [`pallas_curve_verifier`](https://github.com/youtpout/pallas_curve_verifier) | Reference Pallas + Poseidon + signature verification in Solidity | Ours, earlier work |
-| [`o1js-to-zkvm`](https://github.com/youtpout) | Universal Pickles verifier inside SP1 | Ours, earlier work |
+| [`o1js-to-zkvm`](https://github.com/youtpout/o1js-to-zkvm) | Universal Pickles verifier inside SP1 | Ours, earlier work |
+| [`o1-openvm`](https://github.com/youtpout/o1-openvm) | The same verifier core on OpenVM, with Pallas and Vesta as declared curves | Ours, earlier work |
 | `mina-signer`, `o1js`, `mina-fungible-token` | Mina's official libraries | o1Labs |
 | `forge-std`, OpenZeppelin contracts | Solidity tooling and primitives | — |
 
@@ -300,12 +301,18 @@ actors, attack scenarios, and what removes each gap — in
 
 - **Flare assets on Mina** — FXRP, USD₮0 and WETH as `FungibleToken` zkApps, with
   decimals preserved exactly. Depends on the trust-minimised return path.
-- **Batched authorization via SP1.** `packages/prover` already contains a working
-  SP1 guest verifying Mina signatures at ~2.0M cycles marginal. It is not on the
-  MVP path because direct verification is cheaper on Flare in every dimension,
-  but it becomes the right answer on chains where gas, not proving, binds — and
-  for proving zkApp *state transitions*, which on-chain curve arithmetic cannot
-  replace.
+- **Proven settlement, retiring the escrow attestor.** The hard part exists: a
+  universal Mina Pickles verifier runs in a zkVM today against a real Mina
+  *mainnet* blockchain SNARK, measured at 898,656,552 instructions on OpenVM with
+  Pallas and Vesta declared as first-class curves (×35.41 over unaccelerated),
+  and at 4,378,867,074 cycles on SP1 with the same verifier core. What remains is
+  binding the settlement statement and implementing `IMinaSettlementVerifier`
+  against the OpenVM Solidity SDK — under 330k gas on any EVM chain, less than
+  the 809k this project already pays to verify one Schnorr signature. Rotation
+  into it goes through the timelock already in the contract.
+- **Batched authorization.** Proving is the wrong tool for individual signatures
+  on Flare, where direct verification is cheaper in every dimension. It becomes
+  the right answer on chains where gas, not proving, binds.
 - **FBTC and further FAssets** as swap pairs.
 
 ## Distribution and traction

@@ -323,27 +323,44 @@ analysed in full — bound, mitigation, and what removes it — in
 - **Bridging Flare assets toward Mina** (FXRP, USD₮0, WETH) depends on the
   trustless return path, and is roadmap rather than MVP.
 
-## Roadmap: where SP1 earns its place
+## Roadmap: where proving earns its place
 
 `packages/prover` contains a working SP1 guest that verifies Mina Schnorr
 signatures, measured at **~2.0M cycles** marginal per signature with ~1.2M fixed
 overhead, and a host CLI that produces real proofs (core proof generated and
 verified in 1m43s on a laptop).
 
-It is deliberately **not** on the MVP path, because on Flare direct verification
-is cheaper in every dimension that matters: no relayer, no proving artifacts, no
-multi-minute wait, no trusted setup.
+For *signatures* it is deliberately **not** on the MVP path, because on Flare
+direct verification is cheaper in every dimension that matters: no relayer, no
+proving artifacts, no multi-minute wait, no trusted setup.
 
-Where it does earn its place is a **fully decentralized, trust-minimised
-bridge** — proving Mina zkApp *state transitions* rather than individual
-signatures, which no amount of on-chain curve arithmetic can replace. That work
-also has a head start: the
-[o1js-to-zkvm](https://github.com/youtpout) universal Pickles verifier already
-settles any o1js proof through a single Solidity deployment.
+Where proving is irreplaceable is the **trust-minimised bridge** — attesting to
+Mina zkApp *state transitions*, which no amount of on-chain curve arithmetic can
+do. That is not speculative here. A universal Mina Pickles verifier already runs
+in a zkVM against a real Mina **mainnet** blockchain SNARK, in two ports sharing
+one verifier core:
 
-Also on the roadmap: batching. The Groth16 wrap is a fixed cost, so amortising
-it across many authorizations is what makes proofs competitive again — useful on
-chains where gas, not proving, is the binding constraint.
+| | measured on the same input |
+|---|---|
+| [o1js-to-zkvm](https://github.com/youtpout/o1js-to-zkvm) — SP1 | 4,378,867,074 cycles |
+| [o1-openvm](https://github.com/youtpout/o1-openvm) — OpenVM rv64 | 898,656,552 instructions / 32.1B trace cells |
+
+OpenVM gets there by declaring Pallas and Vesta as first-class curves
+(`moduli_declare!` + `sw_declare!`) rather than waiting for a precompile —
+**×35.41** over the unaccelerated build. The two figures are different units and
+the cross-zkVM ratio is indicative only; see
+[docs/threat-model.md §6.3](docs/threat-model.md) for the full table and the
+caveats.
+
+What remains is wiring, not research: bind the settlement statement, and
+implement `IMinaSettlementVerifier` against the OpenVM Solidity SDK — which
+verifies on any EVM chain for **under 330k gas**, less than the 809k this
+project already pays for a single Schnorr verification. Rotation into it is
+timelocked, which is what the timelock was built for.
+
+Also on the roadmap: batching. The wrap is a fixed cost, so amortising it across
+many deposits is what keeps proving competitive — and it is why settlement is
+batched rather than per-deposit.
 
 ## Licence
 
