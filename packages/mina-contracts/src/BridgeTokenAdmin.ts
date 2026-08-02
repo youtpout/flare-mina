@@ -1,5 +1,6 @@
 import {
   AccountUpdate,
+  VerificationKey,
   Bool,
   Field,
   MerkleWitness,
@@ -33,17 +34,32 @@ import {
  * cannot be used twice:
  *
  * ```text
- * authorizeClaim(recipient, amount, witness)
+ * transaction 1: authorizeClaim(claim, claimWitness, nullifierWitness)
  *     verify the leaf against `lockRoot`      <- proven Flare-side lock
  *     verify and consume the nullifier         <- no double claim
  *     mintAuthorization := H(recipient, amount)
  *
- * token.mint(recipient, amount)
+ * transaction 2: token.mint(recipient, amount)
  *     -> canMint(accountUpdate)
  *          recompute H from the account update itself
  *          assert it equals mintAuthorization
  *          mintAuthorization := EMPTY          <- one shot
  * ```
+ *
+ * # Why two transactions
+ *
+ * They cannot be combined, and this was established by test rather than by
+ * reading: a second account update on the same zkApp does not observe state
+ * written by an earlier one in the same transaction, because preconditions are
+ * evaluated against the state as of the transaction's start. Bundling them makes
+ * `canMint` read an empty `mintAuthorization` and refuse, even with a valid
+ * claim armed a few lines above.
+ *
+ * Security does not depend on atomicity. The one-shot property comes from the
+ * nullifier consumed in `authorizeClaim` and from `canMint` clearing the
+ * authorisation; neither cares about transaction boundaries. An abandoned
+ * authorisation blocks only its own claimant, who can complete it at any later
+ * time. What is lost is convenience, not safety.
  *
  * The commitment is recomputed from the `AccountUpdate` the token actually
  * built, not from arguments the caller supplies, so a mint of a different
@@ -234,6 +250,18 @@ export class BridgeTokenAdmin extends SmartContract {
   }
 
   @method.returns(Bool) async canResume(): Promise<Bool> {
+    return Bool(false);
+  }
+
+  /**
+   * Refuse to let the token's verification key be swapped.
+   *
+   * Required by `mina-fungible-token` 1.1.0. Swapping the verification key
+   * replaces the token's entire logic, which would let an upgrade mint around
+   * every check in this contract. Nobody should hold that in a bridge, so the
+   * answer is no — permanently, and by proof rather than by policy.
+   */
+  @method.returns(Bool) async canChangeVerificationKey(_vk: VerificationKey): Promise<Bool> {
     return Bool(false);
   }
 

@@ -209,6 +209,23 @@ on-chain, not in the circuit, because they are properties of chain state.
 - `o1js-to-zkvm/crates/o1-verifier-host/build.rs` → the guest sub-build pattern
   (`sp1_build::build_program_with_args` with `features: ["sp1"]`).
 
+## o1js gotchas found the hard way
+
+- **`proofsEnabled: false` stubs nested proofs.** A contract-to-contract call
+  never executes the callee's method, so a suite testing that `canMint` blocks
+  unauthorised mints passes without ever running `canMint`. Any test whose
+  subject is a cross-contract check MUST use `proofsEnabled: true` and compile.
+- **State written by one account update is invisible to a later account update
+  on the same zkApp in the same transaction.** Preconditions are evaluated
+  against the state as of the transaction's start. Authorise-then-act flows on
+  one contract need two transactions.
+- **`FungibleToken.AdminContract`** is the standard's override point for a custom
+  admin. Without setting it the token resolves the default `FungibleTokenAdmin`
+  and every `canMint` fails for want of a prover — which a test expecting a
+  rejection reports as a pass, for entirely the wrong reason.
+- **`mina-fungible-token` 1.1.0 requires `canChangeVerificationKey`** on the
+  admin; 1.0.0 did not.
+
 ## Toolchain gotchas
 
 - **o1js decorators need `emitDecoratorMetadata`, which esbuild does not

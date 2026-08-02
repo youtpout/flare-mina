@@ -23,6 +23,9 @@ importers:
       '@minaport/shared':
         specifier: workspace:*
         version: link:../shared
+      mina-fungible-token:
+        specifier: ^1.1.0
+        version: 1.1.0(o1js@2.15.0)
       o1js:
         specifier: ^2.2.0
         version: 2.15.0
@@ -770,6 +773,12 @@ packages:
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
+  mina-fungible-token@1.1.0:
+    resolution: {integrity: sha512-nfpKQuo49KBUkTFQjE+H47sXs2SzzAs484S6IXwSX38JX+VJKSEihuMv08Mi+x8cVjJ2hVsPlsvRcApIUI1lug==}
+    engines: {node: '>=20.0.0'}
+    peerDependencies:
+      o1js: ^2.1.0
+
   mina-signer@4.1.0:
     resolution: {integrity: sha512-jAUdnldjy4RHQ8CeB82JAX86uOEKyDG+y2WVFs97KILwQ2K/gIX51gxbvOqUM32i3D2OT1HWAftP7JfVHDg2Lg==}
 
@@ -1485,6 +1494,10 @@ snapshots:
   magic-string@0.30.21:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  mina-fungible-token@1.1.0(o1js@2.15.0):
+    dependencies:
+      o1js: 2.15.0
 
   mina-signer@4.1.0:
     dependencies:
