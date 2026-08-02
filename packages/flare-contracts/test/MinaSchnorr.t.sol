@@ -116,6 +116,69 @@ contract MinaSchnorrTest is Test {
         harness.verify(PK_X, PK_IS_ODD, PK_Y, SIG_R, Pallas.Q, _message(), false);
     }
 
+    // -------------------------------------------------------------------------
+    // Network domains
+    // -------------------------------------------------------------------------
+    //
+    // Same key, same message, signed under each Mina network domain. Produced
+    // with mina-signer's internal `sign({fields}, sk, network)`, because the
+    // public `Client.signFields` hardcodes 'devnet' and ignores the network the
+    // client was constructed with (mina-signer 4.1.0, mina-signer.js:120).
+    //
+    // That hardcoding is the reason MinaPort does NOT rely on Mina's network
+    // separation for replay protection: every field signature produced by
+    // standard tooling carries the devnet domain, on every network. Binding to
+    // a chain comes from `chainId` inside the signed message instead, which the
+    // tampering tests above cover.
+
+    uint256 internal constant NET_PK_X =
+        14124943907817976952427102951112060621286297402986099085035387890279416817272;
+    uint256 internal constant NET_PK_Y =
+        13532538400063535811126984083224633472238696242642004927428415804270693307394;
+    bool internal constant NET_PK_IS_ODD = false;
+
+    uint256 internal constant DEVNET_R =
+        13304164611914535130938368733157689388656020710240660185818379904398393853654;
+    uint256 internal constant DEVNET_S =
+        16500983812682010824297547808772137180815672996486911131605264699841521639532;
+
+    uint256 internal constant MAINNET_R =
+        24818370291340460468248178230779357579831185937238848140843001366327618166477;
+    uint256 internal constant MAINNET_S =
+        6241273606292709212851365878646268798410702067440984225819596203678351091875;
+
+    function test_acceptsGenuineDevnetSignature() public view {
+        assertTrue(
+            harness.verify(NET_PK_X, NET_PK_IS_ODD, NET_PK_Y, DEVNET_R, DEVNET_S, _message(), false)
+        );
+    }
+
+    function test_acceptsGenuineMainnetSignature() public view {
+        assertTrue(
+            harness.verify(NET_PK_X, NET_PK_IS_ODD, NET_PK_Y, MAINNET_R, MAINNET_S, _message(), true)
+        );
+    }
+
+    /// @dev The two domains must not be interchangeable in either direction.
+    function test_domainsAreNotInterchangeable() public view {
+        assertFalse(
+            harness.verify(NET_PK_X, NET_PK_IS_ODD, NET_PK_Y, DEVNET_R, DEVNET_S, _message(), true),
+            "devnet signature must not verify under the mainnet domain"
+        );
+        assertFalse(
+            harness.verify(NET_PK_X, NET_PK_IS_ODD, NET_PK_Y, MAINNET_R, MAINNET_S, _message(), false),
+            "mainnet signature must not verify under the devnet domain"
+        );
+    }
+
+    function test_gas_verifyMainnet() public view {
+        uint256 before = gasleft();
+        harness.verify(NET_PK_X, NET_PK_IS_ODD, NET_PK_Y, MAINNET_R, MAINNET_S, _message(), true);
+        uint256 used = before - gasleft();
+        console.log("mainnet-domain verification gas:", used);
+        assertGt(used, 0);
+    }
+
     function test_gas_verify() public view {
         uint256 before = gasleft();
         harness.verify(PK_X, PK_IS_ODD, PK_Y, SIG_R, SIG_S, _message(), false);
