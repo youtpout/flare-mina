@@ -6,9 +6,12 @@ import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 import {FMINA} from "./FMINA.sol";
 import {MinaAddressLib} from "./libraries/MinaAddress.sol";
+import {MinaSchnorr} from "./libraries/MinaSchnorr.sol";
 import {MinaPortEncoding} from "./libraries/MinaPortEncoding.sol";
 import {IMinaSettlementVerifier, SettlementPublicValues} from "./interfaces/IMinaSettlementVerifier.sol";
 
@@ -119,6 +122,7 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
 
     error ZeroAddress();
     error ZeroAmount();
+    error Expired(uint64 expiry, uint256 nowSeconds);
     error AmountExceedsUint64();
     error InvalidProof();
     error UnexpectedBridgeId(bytes32 expected, bytes32 actual);
@@ -220,6 +224,133 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
         emit DepositClaimed(leaf, deposit.recipientFlare, deposit.nonce, deposit.amountNanomina);
 
         TOKEN.mint(deposit.recipientFlare, deposit.amountNanomina);
+    }
+
+    // -------------------------------------------------------------------------
+    // Mina -> Flare, signature path
+    // -------------------------------------------------------------------------
+
+    /// @notice Domain tag for a signed deposit intent.
+    bytes32 public constant DEPOSIT_INTENT_DOMAIN = keccak256("FlareXMina.DepositIntent.v1");
+
+    /// @notice Key attesting that a Mina-side escrow exists.
+    /// @dev See {claimWithMinaSignature} for exactly what this key can and
+    /// cannot do. Rotating it runs through the same timelock as the verifier.
+    address public escrowAttestor;
+
+    /// @notice Deposit intents already minted, keyed by their digest.
+    mapping(bytes32 => bool) public consumedIntents;
+
+    event EscrowAttestorUpdated(address indexed oldAttestor, address indexed newAttestor);
+    event DepositMintedFromSignature(
+        bytes32 indexed minaSender, address indexed recipient, uint64 nonce, uint64 amount
+    );
+
+    error IntentAlreadyConsumed(bytes32 intent);
+    error InvalidMinaSignature();
+    error InvalidAttestation();
+    error AttestorNotSet();
+
+    /// @notice Digest a Mina depositor signs to direct their escrow.
+    ///
+    /// @dev Returned as field elements because that is what Mina signs. The
+    /// layout matches `MinaAuthRegistry.encodeAuthorization`, with the deposit
+    /// domain and amount taking the place of a generic action.
+    function depositIntentFields(
+        address recipient,
+        uint64 amountNanomina,
+        uint64 nonce,
+        uint64 expiry
+    ) public view returns (uint256[] memory fields) {
+        bytes32 action =
+            keccak256(abi.encode(DEPOSIT_INTENT_DOMAIN, recipient, amountNanomina));
+
+        fields = new uint256[](6);
+        fields[0] = block.chainid;
+        fields[1] = uint256(uint160(address(this)));
+        fields[2] = uint256(uint128(bytes16(action)));
+        fields[3] = uint256(uint128(uint256(action)));
+        fields[4] = nonce;
+        fields[5] = expiry;
+    }
+
+    /// @notice Mint FMINA against a Mina-side escrow, on two independent
+    /// authorisations that neither party can supply alone.
+    ///
+    /// @dev **What each half buys.**
+    ///
+    /// The depositor's Schnorr signature binds the recipient and the amount.
+    /// It is verified on-chain against the Pallas curve, so it rests on no
+    /// third party. The attestor therefore cannot redirect a deposit, inflate
+    /// it, or mint to itself — it can only agree or refuse.
+    ///
+    /// The attestor's signature asserts that the corresponding MINA is escrowed
+    /// on Mina. **A signature cannot prove that**: it proves intent, not
+    /// custody. Someone has to observe the Mina chain, and until the Mina-side
+    /// state is proven on Flare that someone is trusted. This is the one trust
+    /// assumption on this path and it is deliberately narrow — a dishonest
+    /// attestor can mint unbacked supply, but cannot choose who receives it.
+    ///
+    /// Requiring both is strictly stronger than either. The depositor cannot
+    /// mint without an escrow; the attestor cannot mint without a depositor.
+    ///
+    /// The opposite direction takes no such shortcut. Flare's data layer
+    /// publishes Merkle roots signed by a weighted validator set, so proving a
+    /// Flare event on Mina needs signature verification rather than recursive
+    /// proof verification — affordable, and the roadmap's actual target.
+    function claimWithMinaSignature(
+        MinaSchnorr.PublicKey calldata publicKey,
+        MinaSchnorr.Signature calldata signature,
+        address recipient,
+        uint64 amountNanomina,
+        uint64 nonce,
+        uint64 expiry,
+        bytes calldata attestation
+    ) external whenNotPaused nonReentrant {
+        if (amountNanomina == 0) revert ZeroAmount();
+        if (recipient == address(0)) revert ZeroAddress();
+        if (expiry < block.timestamp) revert Expired(expiry, block.timestamp);
+        if (escrowAttestor == address(0)) revert AttestorNotSet();
+
+        bytes32 minaSender =
+            bytes32(MinaAddressLib.raw(MinaAddressLib.pack(publicKey.x, publicKey.isOdd)));
+
+        bytes32 intent = keccak256(
+            abi.encode(
+                DEPOSIT_INTENT_DOMAIN, block.chainid, minaSender, recipient, amountNanomina, nonce
+            )
+        );
+        if (consumedIntents[intent]) revert IntentAlreadyConsumed(intent);
+
+        // The attestor confirms this exact intent — it signs the digest, so it
+        // cannot agree to one deposit and have another minted.
+        address signer = ECDSA.recover(
+            MessageHashUtils.toEthSignedMessageHash(intent), attestation
+        );
+        if (signer != escrowAttestor) revert InvalidAttestation();
+
+        // The depositor's own authorisation, verified against Pallas on-chain.
+        if (
+            !MinaSchnorr.verify(
+                publicKey,
+                signature,
+                depositIntentFields(recipient, amountNanomina, nonce, expiry),
+                false
+            )
+        ) revert InvalidMinaSignature();
+
+        consumedIntents[intent] = true;
+        escrowedNanomina += amountNanomina;
+
+        emit DepositMintedFromSignature(minaSender, recipient, nonce, amountNanomina);
+
+        TOKEN.mint(recipient, amountNanomina);
+    }
+
+    /// @notice Set or rotate the escrow attestor.
+    function setEscrowAttestor(address attestor) external onlyOwner {
+        emit EscrowAttestorUpdated(escrowAttestor, attestor);
+        escrowAttestor = attestor;
     }
 
     // -------------------------------------------------------------------------

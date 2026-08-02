@@ -8,6 +8,7 @@
  * Usage:
  *   node signAuthorization.mjs <account> <target> <value> <calldata> <nonce> <chainId>
  *   node signAuthorization.mjs --batch <account> <nonce> <chainId> <t1> <v1> <d1> [t2 v2 d2 ...]
+ *   node signAuthorization.mjs --action <account> <actionHash> <nonce> <chainId>
  *
  * Prints a JSON object; Foundry reads it with `vm.parseJson`.
  */
@@ -24,6 +25,7 @@ const SECRET = 'EKFMDY6zupggg3uoLkkRnqaeS1oBN3WGfU6MDqXcvJMBhcmhpCk4';
 
 const argv = process.argv.slice(2);
 const isBatch = argv[0] === '--batch';
+const isRawAction = argv[0] === '--action';
 
 const sk = PrivateKey.fromBase58(SECRET);
 const pub = PrivateKey.toPublicKey(sk);
@@ -63,6 +65,12 @@ if (isBatch) {
   actionHash = keccak256(
     encodeAbiParameters([{ type: 'bytes32' }, { type: 'bytes32[]' }], [BATCH_DOMAIN, items]),
   );
+} else if (isRawAction) {
+  // --action <account> <actionHash> <nonce> <chainId>
+  //
+  // For callers that build their own action commitment — the bridge's deposit
+  // intent, for instance — rather than committing to a call.
+  [, account, actionHash, nonce, chainId] = argv;
 } else {
   const [acct, target, value, calldata, n, cid] = argv;
   account = acct;
