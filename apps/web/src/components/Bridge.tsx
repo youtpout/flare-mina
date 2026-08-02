@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
+import { encodeFunctionData, type Hex } from 'viem';
 import type { Session } from '@/App';
-import { MINA, explorerTx } from '@/lib/config';
+import { CONTRACTS, MINA, explorerTx } from '@/lib/config';
+import { bridgeAbi, submit } from '@/lib/flare';
+import { depositActionHash, signAuthorization } from '@/lib/mina';
 
 /**
  * Deposit status, as the API reports it.
@@ -21,8 +24,12 @@ type Deposit = {
   id: string;
   status: DepositStatus;
   amountNanomina: string;
+  recipient: string;
+  nonce: string;
   minaTxHash: string | null;
   flareTxHash: string | null;
+  /** The attestor's half. Useless on its own — the depositor still has to sign. */
+  attestation: string | null;
   reason: string | null;
 };
 
@@ -40,6 +47,8 @@ export function Bridge({ session }: { session: Session }) {
   const [deposits, setDeposits] = useState<Deposit[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [claiming, setClaiming] = useState<string | null>(null);
+  const [claimError, setClaimError] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -63,6 +72,54 @@ export function Bridge({ session }: { session: Session }) {
       clearInterval(timer);
     };
   }, [session.packed]);
+
+  /**
+   * Claim an attested deposit.
+   *
+   * This is the depositor's half of the 2-of-2. The attestor has already said
+   * the escrow exists; this signature says where the FMINA goes and how much.
+   * Neither is sufficient alone, which is why the attestor cannot pay itself.
+   */
+  async function claim(d: Deposit) {
+    setClaimError(null);
+    setClaiming(d.id);
+    try {
+      if (!d.attestation) throw new Error('not attested yet');
+
+      const amount = BigInt(d.amountNanomina);
+      const recipient = d.recipient as `0x${string}`;
+      const nonce = BigInt(d.nonce);
+      const expiry = BigInt('18446744073709551615');
+
+      const signature = await signAuthorization(session.provider, {
+        chainId: 114n,
+        target: CONTRACTS.bridge,
+        actionHash: depositActionHash(recipient, amount),
+        nonce,
+        expiry,
+      });
+
+      const data = encodeFunctionData({
+        abi: bridgeAbi,
+        functionName: 'claimWithMinaSignature',
+        args: [
+          [session.x, session.isOdd, session.y],
+          [BigInt(signature.field), BigInt(signature.scalar)],
+          recipient,
+          amount,
+          nonce,
+          expiry,
+          d.attestation as Hex,
+        ],
+      });
+
+      await submit(CONTRACTS.bridge, data);
+    } catch (e) {
+      setClaimError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setClaiming(null);
+    }
+  }
 
   const copy = async (text: string) => {
     await navigator.clipboard.writeText(text);
@@ -100,6 +157,12 @@ export function Bridge({ session }: { session: Session }) {
         </div>
 
         <div className="notice">
+          <strong>Claiming needs your signature too.</strong> The attestor confirms the escrow
+          landed, but it cannot say where the FMINA goes — that is in your signature, verified
+          on-chain against the Pallas curve. Neither half mints anything alone.
+        </div>
+
+        <div className="notice" style={{ marginTop: 10 }}>
           The memo is how the attestor learns your destination — it reads it from the chain it is
           already watching, so there is nothing to register beforehand. A Mina memo holds 32 bytes
           and an address is 20, so it fits with room to spare.
@@ -121,6 +184,8 @@ export function Bridge({ session }: { session: Session }) {
           <p className="muted small">Nothing yet. Send a payment above and it will appear here.</p>
         )}
 
+        {claimError && <p className="status err">{claimError}</p>}
+
         {deposits?.map((d) => (
           <div className="row" key={d.id}>
             <span>
@@ -131,6 +196,11 @@ export function Bridge({ session }: { session: Session }) {
               <span className={`tag ${d.status === 'claimed' ? 'ok' : d.status === 'failed' ? 'warn' : ''}`}>
                 {LABEL[d.status]}
               </span>
+              {d.status === 'attested' && (
+                <button className="ghost" disabled={claiming === d.id} onClick={() => claim(d)}>
+                  {claiming === d.id ? 'Signing…' : 'Claim'}
+                </button>
+              )}
               {d.flareTxHash && (
                 <a className="small" href={explorerTx(d.flareTxHash)} target="_blank" rel="noreferrer">
                   tx

@@ -65,6 +65,25 @@ export function callHash(target: Address, value: bigint, data: Hex): Hex {
   );
 }
 
+/** Domain tag for a deposit intent; mirrors `MinaPortBridge.DEPOSIT_INTENT_DOMAIN`. */
+const DEPOSIT_INTENT_DOMAIN = keccak256(toHex('FlareXMina.DepositIntent.v1'));
+
+/**
+ * Commitment to a deposit, as the bridge recomputes it.
+ *
+ * The depositor signs this. It is what stops the attestor redirecting a deposit
+ * or inflating it: recipient and amount are inside the signature, and the
+ * contract checks that signature against Pallas on-chain.
+ */
+export function depositActionHash(recipient: Address, amountNanomina: bigint): Hex {
+  return keccak256(
+    encodeAbiParameters(
+      [{ type: 'bytes32' }, { type: 'address' }, { type: 'uint64' }],
+      [DEPOSIT_INTENT_DOMAIN, recipient, amountNanomina],
+    ),
+  );
+}
+
 /** Domain tag separating a batch from a lone call. */
 const BATCH_DOMAIN = keccak256(toHex('MinaAccount.Batch.v1'));
 

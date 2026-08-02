@@ -44,6 +44,12 @@ export const accountAbi = parseAbi([
   'function executeBatch((uint256,bool,uint256) publicKey,(uint256,uint256) signature,uint64 nonce,uint64 expiry,(address,uint256,bytes)[] calls) returns (bytes[])',
 ]);
 
+export const bridgeAbi = parseAbi([
+  'function claimWithMinaSignature((uint256,bool,uint256) publicKey,(uint256,uint256) signature,address recipient,uint64 amountNanomina,uint64 nonce,uint64 expiry,bytes attestation)',
+  'function consumedIntents(bytes32) view returns (bool)',
+  'function escrowAttestor() view returns (address)',
+]);
+
 export const routerAbi = parseAbi([
   'function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[])',
   'function swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline) returns (uint256[])',
