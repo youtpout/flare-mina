@@ -12,7 +12,7 @@ on Flare without an EVM key.
 Two independent rails, deliberately decoupled so neither blocks the other:
 
 1. **Bridge** — lock native MINA in a Mina zkApp, mint fully collateralized
-   `wMINA` on Flare, swap it against Flare assets, burn it to withdraw.
+   `FMINA` on Flare, swap it against Flare assets, burn it to withdraw.
 2. **Authorization** — a Mina Schnorr signature, verified DIRECTLY in Solidity
    on Flare, authorises actions on Flare contracts. No proof, no relayer.
 
@@ -34,7 +34,7 @@ a 255-bit prime, so it fits in one EVM word and `mulmod` handles it natively.
 ```
 Mina                                  Flare (Coston2, chainId 114)
 ────                                  ───────────────────────────
-zkApp escrow ──deposit batch──────────────► MinaPortBridge ──► wMINA ──► swaps
+zkApp escrow ──deposit batch──────────────► MinaPortBridge ──► FMINA ──► swaps
 Mina wallet signature ─────────────────────► MinaAuthRegistry
                                              (direct Schnorr verify, ~809k gas)
 ```
@@ -98,7 +98,7 @@ packages/
 │   ├── linkAccounts.ts     EIP-712 link payload + verification helpers
 │   └── fixtures/           deterministic vectors shared with Rust and Solidity
 ├── mina-contracts/    o1js zkApp (escrow, deposit actions, withdrawal release)
-├── flare-contracts/   Foundry: WrappedMINA, MinaPortBridge, MinaAuthRegistry
+├── flare-contracts/   Foundry: FMINA, MinaPortBridge, MinaAuthRegistry
 └── prover/            Rust: Schnorr verifier, SP1 guest, host CLI
     ├── minaport-schnorr    no_std Pallas Schnorr verification
     ├── minaport-core       authorization struct, field + ABI encodings
@@ -171,8 +171,8 @@ other paths do carry the network.
 ## Key design decisions
 
 ### Decimals
-wMINA has **9 decimals**, not 18. One nanomina locked on Mina equals one wMINA
-base unit. The collateral invariant `totalSupply(wMINA) == escrowedNanomina` is
+FMINA has **9 decimals**, not 18. One nanomina locked on Mina equals one FMINA
+base unit. The collateral invariant `totalSupply(FMINA) == escrowedNanomina` is
 then an exact integer equality with no conversion or rounding anywhere.
 
 ### Merkle tree

@@ -7,29 +7,29 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
-import {WrappedMINA} from "./WrappedMINA.sol";
+import {FMINA} from "./FMINA.sol";
 import {MinaAddressLib} from "./libraries/MinaAddress.sol";
 import {MinaPortEncoding} from "./libraries/MinaPortEncoding.sol";
 import {IMinaSettlementVerifier, SettlementPublicValues} from "./interfaces/IMinaSettlementVerifier.sol";
 
 /// @title MinaPortBridge
-/// @notice Flare side of the MINA <-> wMINA bridge.
+/// @notice Flare side of the MINA <-> FMINA bridge.
 ///
 /// @dev Two independent flows:
 ///
 /// **Mina -> Flare.** A relayer submits a proof that the Mina bridge zkApp
 /// advanced its action state by a batch of deposits, committing a Merkle root
 /// over those deposits. The bridge records the root; recipients then claim
-/// individually with a Merkle proof, which mints wMINA. Splitting settlement
+/// individually with a Merkle proof, which mints FMINA. Splitting settlement
 /// from claiming keeps the relayer off the critical path for user funds: once a
 /// root is accepted, the relayer can disappear and every recipient can still
 /// claim permissionlessly.
 ///
-/// **Flare -> Mina.** A holder burns wMINA and the bridge emits a canonical
+/// **Flare -> Mina.** A holder burns FMINA and the bridge emits a canonical
 /// `WithdrawToMina` event carrying a monotonic nonce. The Mina side releases the
 /// escrow against a proof of that event.
 ///
-/// Collateral invariant: `totalSupply(wMINA) == escrowedNanomina`, and both only
+/// Collateral invariant: `totalSupply(FMINA) == escrowedNanomina`, and both only
 /// change inside `claimDeposit` (up) and `burnToMina` (down).
 contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
     using MinaPortEncoding for MinaPortEncoding.Deposit;
@@ -38,9 +38,9 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
     // Immutables
     // -------------------------------------------------------------------------
 
-    /// @notice The wMINA token. Deployed by this contract so the mint/burn
+    /// @notice The FMINA token. Deployed by this contract so the mint/burn
     /// authority can never be pointed at a token the bridge does not control.
-    WrappedMINA public immutable WMINA;
+    FMINA public immutable TOKEN;
 
     /// @notice Binds this bridge to one Mina zkApp on one Mina network.
     /// @dev Every accepted batch must carry this exact id, so a proof produced
@@ -79,7 +79,7 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Next withdrawal nonce to assign.
     uint256 public nextWithdrawalNonce;
 
-    /// @notice Nanomina currently escrowed on Mina against circulating wMINA.
+    /// @notice Nanomina currently escrowed on Mina against circulating FMINA.
     uint256 public escrowedNanomina;
 
     // -------------------------------------------------------------------------
@@ -151,7 +151,7 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
         verifier = verifier_;
         BRIDGE_ID = bridgeId_;
         currentMinaActionState = genesisActionState;
-        WMINA = new WrappedMINA(address(this));
+        TOKEN = new FMINA(address(this));
     }
 
     // -------------------------------------------------------------------------
@@ -194,7 +194,7 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
         );
     }
 
-    /// @notice Claim a deposit from an accepted batch, minting wMINA.
+    /// @notice Claim a deposit from an accepted batch, minting FMINA.
     ///
     /// @dev Permissionless by design: the minted tokens always go to
     /// `deposit.recipientFlare`, which is bound inside the leaf and therefore
@@ -219,20 +219,20 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
 
         emit DepositClaimed(leaf, deposit.recipientFlare, deposit.nonce, deposit.amountNanomina);
 
-        WMINA.mint(deposit.recipientFlare, deposit.amountNanomina);
+        TOKEN.mint(deposit.recipientFlare, deposit.amountNanomina);
     }
 
     // -------------------------------------------------------------------------
     // Flare -> Mina
     // -------------------------------------------------------------------------
 
-    /// @notice Burn wMINA and request the corresponding native MINA on Mina.
-    /// @param amount Amount in wMINA base units (== nanomina).
+    /// @notice Burn FMINA and request the corresponding native MINA on Mina.
+    /// @param amount Amount in FMINA base units (== nanomina).
     /// @param minaRecipient Mina account, packed as `x | isOdd << 255`.
     ///
     /// @dev The recipient is validated as a Pallas field element here rather
     /// than on the Mina side: a malformed key corresponds to no Mina account, so
-    /// accepting it would burn the user's wMINA against an unclaimable escrow.
+    /// accepting it would burn the user's FMINA against an unclaimable escrow.
     function burnToMina(uint256 amount, bytes32 minaRecipient)
         external
         whenNotPaused
@@ -252,7 +252,7 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
         escrowedNanomina -= amount;
 
         // Burn before emitting so a reverting burn cannot leave a claimable event.
-        WMINA.burn(msg.sender, amount);
+        TOKEN.burn(msg.sender, amount);
 
         emit WithdrawToMina(nonce, msg.sender, minaRecipient, amount);
     }
@@ -264,7 +264,7 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Propose a new settlement verifier.
     ///
     /// @dev Rotating the verifier is the single most dangerous action available
-    /// on this contract: a malicious verifier can mint unbacked wMINA. It is
+    /// on this contract: a malicious verifier can mint unbacked FMINA. It is
     /// therefore gated by a two-step owner transfer (inherited), a
     /// {VERIFIER_UPDATE_DELAY} timelock, and an event at each step, so that
     /// holders have a window to exit before a rotation takes effect.
@@ -320,6 +320,6 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
     /// @dev Should be true at every block; asserted in the test suite after
     /// every state-changing operation.
     function collateralInvariantHolds() external view returns (bool) {
-        return WMINA.totalSupply() == escrowedNanomina;
+        return TOKEN.totalSupply() == escrowedNanomina;
     }
 }

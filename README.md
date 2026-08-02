@@ -3,7 +3,7 @@
 **Native MINA liquidity on Flare, and Mina wallets with authority on Flare.**
 
 > Mina has assets but little DeFi. Flare has DeFi but no MINA. Flare x Mina
-> bridges native MINA into a fully collateralized wMINA on Flare and lets a Mina
+> bridges native MINA into a fully collateralized FMINA on Flare and lets a Mina
 > wallet authorize Flare transactions directly — so Mina users trade on Flare's
 > liquidity without ever needing an EVM key.
 
@@ -45,12 +45,12 @@ the simple design the right one.
 ```
 Mina                                     Flare (Coston2)
 ────                                     ───────────────
-zkApp escrow ───deposit batch───────────► MinaPortBridge ──► wMINA ──► swaps
+zkApp escrow ───deposit batch───────────► MinaPortBridge ──► FMINA ──► swaps
 Mina wallet signature ──────────────────► MinaAuthRegistry
 ```
 
-**1. Bridge.** Lock native MINA in a Mina zkApp; recipients claim `wMINA` on
-Flare against a Merkle proof. Burning `wMINA` emits a canonical `WithdrawToMina`
+**1. Bridge.** Lock native MINA in a Mina zkApp; recipients claim `FMINA` on
+Flare against a Merkle proof. Burning `FMINA` emits a canonical `WithdrawToMina`
 event that releases the escrow.
 
 **2. Authorization.** A Mina Schnorr signature, verified on-chain, authorises
@@ -124,7 +124,7 @@ transaction — target, value and calldata are all committed to by the signed
 trying. One honest submitter is enough, and there is no privileged relayer.
 
 What the owner still needs is someone to pay gas. Reimbursing the submitter out
-of the account's own wMINA balance — which removes the last reason to hold an
+of the account's own FMINA balance — which removes the last reason to hold an
 EVM account at all — is the next step and deliberately not in this version.
 
 ## Layout
@@ -133,7 +133,7 @@ EVM account at all — is the next step and deliberately not in this version.
 packages/
 ├── shared/            canonical encodings shared by TS, Rust and Solidity
 ├── mina-contracts/    o1js zkApp: escrow, deposit actions, withdrawal release
-├── flare-contracts/   Foundry: Pallas, Poseidon, MinaSchnorr, wMINA, bridge
+├── flare-contracts/   Foundry: Pallas, Poseidon, MinaSchnorr, FMINA, bridge
 └── prover/            Rust: SP1 pipeline — roadmap, not on the MVP path
 ```
 
@@ -151,8 +151,8 @@ silently stranding funds.
 | Deposit leaf | `keccak256(abi.encode(domain, nonce, senderX, senderIsOdd, recipient, amount))` |
 | Authorization | 6 Pallas field elements; `actionHash` split 128/128 |
 
-`wMINA` has **9 decimals**, matching MINA's nanomina base unit exactly, so the
-collateral invariant `totalSupply(wMINA) == escrowedNanomina` is an integer
+`FMINA` has **9 decimals**, matching MINA's nanomina base unit exactly, so the
+collateral invariant `totalSupply(FMINA) == escrowedNanomina` is an integer
 equality with no conversion or rounding.
 
 ## A note on Mina network domains
@@ -221,7 +221,7 @@ nothing to trust.
 | `MinaAuthRegistry` | Working end to end, 12 tests |
 | `MinaAccount` + factory | Working, 11 tests, signatures via FFI at run time |
 | Coston2 fork test | Passing against live chain state |
-| `WrappedMINA`, `MinaPortBridge` | Working, 28 tests |
+| `FMINA`, `MinaPortBridge` | Working, 28 tests |
 | `packages/shared` | 32 tests |
 | `minaport-schnorr` (Rust) | 9 tests against real Mina signatures |
 | `mina-contracts` zkApp | Written, tests pending |

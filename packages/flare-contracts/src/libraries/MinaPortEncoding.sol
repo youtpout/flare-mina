@@ -28,9 +28,9 @@ library MinaPortEncoding {
         bytes32 senderMinaX;
         /// @dev Depositor's Mina public key parity bit.
         bool senderMinaIsOdd;
-        /// @dev Flare address entitled to claim the minted wMINA.
+        /// @dev Flare address entitled to claim the minted FMINA.
         address recipientFlare;
-        /// @dev Amount in nanomina. wMINA uses the same base unit, 1:1.
+        /// @dev Amount in nanomina. FMINA uses the same base unit, 1:1.
         uint64 amountNanomina;
     }
 

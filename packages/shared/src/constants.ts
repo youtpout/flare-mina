@@ -17,14 +17,14 @@ import { keccak256, toHex, type Hex } from 'viem';
 export const MINA_DECIMALS = 9;
 
 /**
- * wMINA uses the SAME number of decimals as MINA (9).
+ * FMINA uses the SAME number of decimals as MINA (9).
  *
  * This gives an exact 1:1 mapping between one nanomina locked on Mina and one
- * wMINA base unit minted on Flare. No conversion, no rounding, no dust — the
- * collateral invariant `totalSupply(wMINA) == lockedNanomina` is an integer
+ * FMINA base unit minted on Flare. No conversion, no rounding, no dust — the
+ * collateral invariant `totalSupply(FMINA) == lockedNanomina` is an integer
  * equality that holds at every point in time.
  */
-export const WMINA_DECIMALS = 9;
+export const FMINA_DECIMALS = 9;
 
 /**
  * Domain separator strings. The 32-byte tags are derived as keccak256(string)

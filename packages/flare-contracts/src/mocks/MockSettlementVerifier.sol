@@ -7,7 +7,7 @@ import {IMinaSettlementVerifier} from "../interfaces/IMinaSettlementVerifier.sol
 /// @notice Development-only verifier.
 ///
 /// @dev **NEVER DEPLOY THIS TO A NETWORK HOLDING REAL VALUE.** It accepts any
-/// proof bytes and therefore lets anyone mint unbacked wMINA. It exists so the
+/// proof bytes and therefore lets anyone mint unbacked FMINA. It exists so the
 /// frontend, the relayer and the bridge tests can exercise the full deposit and
 /// claim flow before the SP1 Groth16 pipeline is wired in.
 ///

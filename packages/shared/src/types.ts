@@ -19,7 +19,7 @@ export type DepositLeaf = {
   nonce: bigint;
   /** Depositor's Mina account. */
   sender: MinaPublicKeyParts;
-  /** Flare address entitled to claim the minted wMINA. */
+  /** Flare address entitled to claim the minted FMINA. */
   recipientFlare: Address;
   /** Amount in nanomina (1 MINA = 1e9). Must be non-zero. */
   amountNanomina: bigint;

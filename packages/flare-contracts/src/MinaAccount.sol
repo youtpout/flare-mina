@@ -22,7 +22,7 @@ import {MinaAddressLib} from "./libraries/MinaAddress.sol";
 ///
 /// **What the owner still needs.** Someone must pay gas. Today that is whoever
 /// sends the transaction. Reimbursing the submitter out of the account's own
-/// wMINA balance — which would remove the last reason to hold an EVM account —
+/// FMINA balance — which would remove the last reason to hold an EVM account —
 /// is the natural next step and is deliberately not in this version.
 contract MinaAccount {
     /// @notice The Mina key that owns this account, packed as `x | isOdd << 255`.

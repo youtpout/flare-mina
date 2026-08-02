@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {MinaPortBridge} from "../src/MinaPortBridge.sol";
-import {WrappedMINA} from "../src/WrappedMINA.sol";
+import {FMINA} from "../src/FMINA.sol";
 import {MockSettlementVerifier} from "../src/mocks/MockSettlementVerifier.sol";
 import {MinaPortEncoding} from "../src/libraries/MinaPortEncoding.sol";
 import {MinaAddressLib} from "../src/libraries/MinaAddress.sol";
@@ -12,7 +12,7 @@ import {IMinaSettlementVerifier, SettlementPublicValues} from
 
 contract MinaPortBridgeTest is Test {
     MinaPortBridge internal bridge;
-    WrappedMINA internal wmina;
+    FMINA internal fmina;
     MockSettlementVerifier internal verifier;
 
     address internal owner = address(0xA11CE);
@@ -29,7 +29,7 @@ contract MinaPortBridgeTest is Test {
     function setUp() public {
         verifier = new MockSettlementVerifier();
         bridge = new MinaPortBridge(owner, verifier, BRIDGE_ID, GENESIS);
-        wmina = bridge.WMINA();
+        fmina = bridge.TOKEN();
     }
 
     // -------------------------------------------------------------------------
@@ -82,24 +82,24 @@ contract MinaPortBridgeTest is Test {
     // -------------------------------------------------------------------------
 
     function test_tokenMetadata() public view {
-        assertEq(wmina.name(), "Wrapped MINA");
-        assertEq(wmina.symbol(), "wMINA");
-        // 9 decimals keeps 1 nanomina == 1 wMINA base unit, so the collateral
+        assertEq(fmina.name(), "Flare MINA");
+        assertEq(fmina.symbol(), "FMINA");
+        // 9 decimals keeps 1 nanomina == 1 FMINA base unit, so the collateral
         // invariant is an exact integer equality.
-        assertEq(wmina.decimals(), 9);
-        assertEq(wmina.BRIDGE(), address(bridge));
+        assertEq(fmina.decimals(), 9);
+        assertEq(fmina.BRIDGE(), address(bridge));
     }
 
     function test_onlyBridgeCanMint() public {
-        vm.expectRevert(WrappedMINA.OnlyBridge.selector);
+        vm.expectRevert(FMINA.OnlyBridge.selector);
         vm.prank(alice);
-        wmina.mint(alice, 1);
+        fmina.mint(alice, 1);
     }
 
     function test_onlyBridgeCanBurn() public {
-        vm.expectRevert(WrappedMINA.OnlyBridge.selector);
+        vm.expectRevert(FMINA.OnlyBridge.selector);
         vm.prank(alice);
-        wmina.burn(alice, 1);
+        fmina.burn(alice, 1);
     }
 
     // -------------------------------------------------------------------------
@@ -213,8 +213,8 @@ contract MinaPortBridgeTest is Test {
         vm.prank(relayer);
         bridge.claimDeposit(d0, root, proof0);
 
-        assertEq(wmina.balanceOf(alice), 1_000_000_000);
-        assertEq(wmina.balanceOf(relayer), 0);
+        assertEq(fmina.balanceOf(alice), 1_000_000_000);
+        assertEq(fmina.balanceOf(relayer), 0);
         assertTrue(bridge.collateralInvariantHolds());
     }
 
@@ -307,7 +307,7 @@ contract MinaPortBridgeTest is Test {
         uint256 nonce = bridge.burnToMina(400_000_000, minaRecipient);
 
         assertEq(nonce, 0);
-        assertEq(wmina.balanceOf(alice), 600_000_000);
+        assertEq(fmina.balanceOf(alice), 600_000_000);
         assertEq(bridge.nextWithdrawalNonce(), 1);
         assertTrue(bridge.collateralInvariantHolds());
     }
@@ -320,7 +320,7 @@ contract MinaPortBridgeTest is Test {
     }
 
     /// @dev A recipient whose `x` is outside the Pallas field matches no Mina
-    /// account, so accepting it would burn wMINA against unclaimable escrow.
+    /// account, so accepting it would burn FMINA against unclaimable escrow.
     function test_burnToMina_rejectsInvalidMinaKey() public {
         _fund(alice, 100);
         bytes32 badRecipient = bytes32(MinaAddressLib.PALLAS_FIELD_ORDER);
