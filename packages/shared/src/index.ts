@@ -7,3 +7,4 @@ export * from './linkAccounts.js';
 export * from './batch.js';
 export * from './decimals.js';
 export * from './tokens.js';
+export * from './pallas.js';
