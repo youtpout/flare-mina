@@ -1,5 +1,6 @@
 import {
   AccountUpdate,
+  DeployArgs,
   Bool,
   Field,
   PublicKey,
@@ -138,13 +139,13 @@ export class MinaPortBridge extends SmartContract {
    * permissions); the two keys are written afterwards so the contract is never
    * live with an unset admin that a third party could claim.
    */
-  async deploy(args: DeployArgs & { admin: PublicKey; withdrawalAttestor: PublicKey }) {
+  override async deploy(args: DeployArgs & { admin: PublicKey; withdrawalAttestor: PublicKey }) {
     await super.deploy(args);
     this.admin.set(args.admin);
     this.withdrawalAttestor.set(args.withdrawalAttestor);
   }
 
-  init() {
+  override init() {
     super.init();
     this.depositActionState.set(Reducer.initialActionState);
     this.nextDepositNonce.set(UInt64.zero);
@@ -192,7 +193,8 @@ export class MinaPortBridge extends SmartContract {
     new FlareAddress({ value: flareRecipient }).assertValid();
 
     const nonce = this.nextDepositNonce.getAndRequireEquals();
-    nonce.assertEquals(expectedNonce, 'unexpected deposit nonce');
+    // UInt64.assertEquals takes no message argument in this o1js version.
+    nonce.assertEquals(expectedNonce);
 
     // Pull the funds. `createSigned` forces the sender to authorise this exact
     // account update, so the bridge can never move funds it was not given.

@@ -40,16 +40,11 @@ beforeAll(async () => {
 
   const deployTx = await Mina.transaction(deployer, async () => {
     AccountUpdate.fundNewAccount(deployer);
-    await bridge.deploy();
+    await bridge.deploy({ admin: deployer, withdrawalAttestor: attestor });
   });
   await deployTx.prove();
   await deployTx.sign([deployerKey, zkAppKey]).send();
 
-  const attestorTx = await Mina.transaction(deployer, async () => {
-    await bridge.setWithdrawalAttestor(attestor);
-  });
-  await attestorTx.prove();
-  await attestorTx.sign([deployerKey, zkAppKey]).send();
 }, 120_000);
 
 async function deposit(
