@@ -107,6 +107,9 @@ beforeEach(async () => {
     await token.deploy({
       symbol: 'bFXRP',
       src: 'https://github.com/youtpout/flare-mina',
+      // The bridge admin refuses verification-key changes anyway; saying so
+      // here keeps the token's own flag consistent with that refusal.
+      allowUpdates: false,
     });
     await token.initialize(adminKey.toPublicKey(), UInt8.from(6), Bool(false));
   });

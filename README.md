@@ -239,6 +239,48 @@ Two contracts, no constructor secrets, no owner, no upgrade path. Neither holds
 funds and neither has an admin, so there is nothing to configure afterwards and
 nothing to trust.
 
+## Deployments
+
+### Coston2 (chain 114) — live
+
+| Contract | Address |
+|----------|---------|
+| `MinaAuthRegistry` | `0x36fFF00a188BA180a3A1db0be848e02D1F55D305` |
+| `MinaAccountFactory` | `0x1d28b787739B1da05E28E2803D92c4F34c00C661` |
+| `MinaPortBridge` | `0x339B3058680045eDE271B0F960E2931a1D720675` |
+| `FMINA` | `0xB29232047CFC72f75151a9F43E26F7e7849e9e2F` |
+| `BridgeWrapperFactory` | `0xC1fE05dA890d01D97A5C9E310B8C42f110788197` |
+| `MockSettlementVerifier` | `0xB56Ad24940F8fDdbf93663f1420677201477E05d` ⚠️ |
+
+⚠️ **`MockSettlementVerifier` accepts any proof.** It exists so the deposit-batch
+path can be exercised end to end before the SP1 pipeline is wired in. The deploy
+script refuses to run on Flare mainnet for this reason, and replacing it is a
+`proposeVerifier` / `executeVerifierUpdate` pair behind a two-day timelock.
+
+Third-party contracts this deployment uses, all resolved from the chain rather
+than from documentation:
+
+| Contract | Address | How it was found |
+|----------|---------|------------------|
+| Flare contract registry | `0xaD67FE66660Fb8dFE9d6b1b4240d8650e30F6019` | Same on every Flare network |
+| FXRP | `0x0b6A3645c240605887a5532109323A3E12273dc7` | `AssetManagerFXRP.fAsset()` |
+| USD₮0 | `0xC1A5B41512496B80903D1f32d6dEa3a73212E71F` | Faucet token, identified by transfer pattern |
+| WNat (WC2FLR) | `0xC67DCE33D7A8efA5FfEB961899C73fe01bCe9273` | Registry name `WNat` |
+| BlazeSwap router | `0x440602f459D7Dd500a74528003e6A20A46d6e2A6` | Only one of three with an FXRP pair |
+| FXRP/USD₮0 pair | `0xDD598473f738df117Ee331bc07172481db60acBE` | `factory.getPair()` |
+
+### Mina Devnet
+
+| Contract | Address |
+|----------|---------|
+| Bridge escrow zkApp | Not yet deployed |
+
+### Flare mainnet (chain 14) / Mina mainnet
+
+Nothing deployed, deliberately. The mock verifier makes a mainnet deployment
+unsafe, and the deploy script enforces that rather than relying on operator
+discipline.
+
 ## Status
 
 | Component | State |

@@ -158,6 +158,19 @@ tokens unrepresentable (18.4 WETH maximum), so WETH goes through a wrapper that
 TypeScript, Rust and Solidity suites, so an encoding drift fails a test rather
 than stranding funds.
 
+## Latency a user actually experiences
+
+| Action | Where | Time / cost |
+|--------|-------|-------------|
+| Sign a deposit intent | Mina wallet | instant |
+| Prove a claim on Mina | o1js, client | **4.2 s** |
+| Move tokens on Flare | Coston2 | **~890k gas, ~$0.009** |
+| Swap on Flare | Coston2 | **~1.08M gas**, one signature |
+
+No step in the product costs a user minutes. That is the point of verifying
+signatures directly rather than wrapping proofs: the only multi-minute operation
+in the repository is the SP1 pipeline, which is deliberately off the MVP path.
+
 ## Technical execution
 
 | Suite | Tests |

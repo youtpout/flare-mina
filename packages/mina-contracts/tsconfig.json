@@ -4,6 +4,7 @@
     "outDir": "dist",
     "rootDir": ".",
     "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
     "useDefineForClassFields": false,
     "target": "ES2022",
     "module": "ES2022",
