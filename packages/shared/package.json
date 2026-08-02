@@ -18,6 +18,8 @@
     "viem": "^2.21.54"
   },
   "devDependencies": {
+    "mina-signer": "^4.1.0",
+    "o1js": "^2.15.0",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"

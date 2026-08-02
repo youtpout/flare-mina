@@ -66,6 +66,8 @@ Everything below is measured with Foundry, not estimated.
 
 | Operation | Gas |
 |-----------|-----|
+| `MinaAccount.execute` — a Mina key moves ERC-20 on Flare | **850,363** |
+| Same, against forked Coston2 state | **865,845** (3% of a block, 0.433 FLR) |
 | Full signature verification, 6-field message | **808,891** |
 | `MinaAuthRegistry.consume`, incl. storage write | **834,588** |
 | Rejected early (wrong chain / target / nonce) | **6,488** |
@@ -106,6 +108,24 @@ Two things did **not** work, and are worth recording:
   with 2-adicity 32. `y` is supplied by the caller instead and pinned by the
   curve equation plus the parity bit — two mulmods rather than a Tonelli-Shanks
   loop, and no trust given away.
+
+## No EVM key required
+
+A Mina key has a Flare address before anything is deployed:
+
+```
+address = CREATE2(minaPublicKey)
+```
+
+`MinaAccount` holds tokens and executes arbitrary calls when presented with a
+Schnorr signature from the one Mina key that owns it. **Anyone** may submit the
+transaction — target, value and calldata are all committed to by the signed
+`actionHash`, so the submitter cannot redirect anything and gains nothing by
+trying. One honest submitter is enough, and there is no privileged relayer.
+
+What the owner still needs is someone to pay gas. Reimbursing the submitter out
+of the account's own wMINA balance — which removes the last reason to hold an
+EVM account at all — is the next step and deliberately not in this version.
 
 ## Layout
 
@@ -169,7 +189,11 @@ path.
 
 ```sh
 pnpm --filter @minaport/shared test          # canonical encodings
-cd packages/flare-contracts && forge test    # curve, hash, signature, bridge
+cd packages/flare-contracts && forge test    # curve, hash, signature, account, bridge
+
+# Against live Coston2 state
+COSTON2_RPC_URL=https://coston2-api.flare.network/ext/C/rpc \
+  forge test --match-contract Coston2Fork -vv
 cd packages/prover && cargo test             # Schnorr vs real Mina signatures
 ```
 
@@ -177,12 +201,26 @@ Signature tests use vectors produced by o1js `Signature.create` and by
 `mina-signer`, so the implementations are pinned to the reference rather than to
 themselves.
 
+## Deploy
+
+```sh
+export COSTON2_RPC_URL=https://coston2-api.flare.network/ext/C/rpc
+export PRIVATE_KEY=0x...        # funded from https://faucet.flare.network
+forge script script/DeployAuth.s.sol --rpc-url $COSTON2_RPC_URL --broadcast
+```
+
+Two contracts, no constructor secrets, no owner, no upgrade path. Neither holds
+funds and neither has an admin, so there is nothing to configure afterwards and
+nothing to trust.
+
 ## Status
 
 | Component | State |
 |-----------|-------|
 | `Pallas`, `PoseidonPallas`, `MinaSchnorr` | Working, 33 tests |
 | `MinaAuthRegistry` | Working end to end, 12 tests |
+| `MinaAccount` + factory | Working, 11 tests, signatures via FFI at run time |
+| Coston2 fork test | Passing against live chain state |
 | `WrappedMINA`, `MinaPortBridge` | Working, 28 tests |
 | `packages/shared` | 32 tests |
 | `minaport-schnorr` (Rust) | 9 tests against real Mina signatures |
