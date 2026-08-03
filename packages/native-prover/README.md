@@ -30,6 +30,36 @@ fork calls for every circuit it records; it is a no-op when unset.
 The asset is committed, so `npm run bench` needs neither Node nor o1js — only a
 Rust toolchain.
 
+## Result
+
+Measured on `deposit` (744 rows, Pickles domain 1024), macOS arm64, 10 cores.
+Warm figures are the steady state over six consecutive proofs.
+
+| prover | prove (warm) |
+|---|---|
+| o1js, wasm | 13.5 – 14.1 s |
+| o1js + `@o1js/native` | 8.1 – 8.8 s |
+| **this crate, no o1js** | **7.7 – 8.3 s** |
+| o1js + `pickle-rust` fork, rust backend | 6.5 – 7.4 s |
+
+**Leaving Node buys nothing.** Pure Rust lands on the same figure as the
+official native backend, so the JS harness is not the bottleneck — consistent
+with the 0.1 s spent building the transaction against ~8 s spent proving. The
+relayer's proving worker therefore stays in Node: no separate Rust service, no
+FFI to maintain.
+
+The number that does move is `compile`, and only via the cache: 10.5 s here
+with `cache_bytes_base64: None`, against 1.8 s for a cached o1js compile. A
+production build would embed a cache payload the way `mina-fungible-token`
+does.
+
+VK parity holds against the **official** o1js too, not just the fork:
+
+```
+o1js (jsoo)   10744482038006661563777008707923128791257963680680722742783152959747527691514
+this crate    10744482038006661563777008707923128791257963680680722742783152959747527691514
+```
+
 ## The verification key is a gate, not a metric
 
 A prover that is fast and produces a different verification key is worthless:
