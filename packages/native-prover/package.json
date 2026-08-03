@@ -1,0 +1,15 @@
+{
+  "name": "@minaport/native-prover",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Proves a bridge deposit in Rust, with no o1js at run time.",
+  "scripts": {
+    "bench": "cargo run --release --bin bench",
+    "export": "node tools/exportProgram.mjs"
+  },
+  "//": "No o1js dependency on purpose: the Rust bench reads a committed asset and needs neither Node nor o1js. Only `npm run export` — which regenerates that asset — needs o1js, and specifically the pickle-rust fork. See README.md.",
+  "devDependencies": {
+    "@minaport/mina-contracts": "workspace:*"
+  }
+}

@@ -1,0 +1,28 @@
+[package]
+name = "minaport-native-prover"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "bench"
+path = "src/bench.rs"
+
+# Same revisions the o1js fork's `mina-runtime` addon is built from. Pinning
+# them by branch rather than by path keeps this buildable on a machine that
+# does not have the sibling checkouts.
+[dependencies]
+ark-ff = "0.5"
+mina-curves = { git = "https://github.com/youtpout/proof-systems", branch = "pickle-rs" }
+mina-runtime = { git = "https://github.com/youtpout/mina-rust", branch = "pickle-rs" }
+pickles = { git = "https://github.com/youtpout/proof-systems", branch = "pickle-rs" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = 3
+
+[patch.crates-io]
+num-bigint = { git = "https://github.com/openmina/num-bigint", branch = "rebase-onstack" }

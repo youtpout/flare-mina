@@ -12,10 +12,10 @@
   "dependencies": {
     "@minaport/shared": "workspace:*",
     "mina-fungible-token": "^1.1.0",
-    "o1js": "^2.2.0"
+    "o1js": "^2.2.0",
+    "@o1js/native": "^2.15.0"
   },
   "devDependencies": {
-    "@o1js/native": "^2.15.0",
     "@swc/core": "^1.15.47",
     "mina-signer": "^4.1.0",
     "tsx": "^4.23.4",

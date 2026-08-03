@@ -91,6 +91,9 @@ importers:
       '@minaport/shared':
         specifier: workspace:*
         version: link:../shared
+      '@o1js/native':
+        specifier: ^2.15.0
+        version: 2.15.0
       mina-fungible-token:
         specifier: ^1.1.0
         version: 1.1.0(o1js@2.15.0)
@@ -98,9 +101,6 @@ importers:
         specifier: ^2.2.0
         version: 2.15.0
     devDependencies:
-      '@o1js/native':
-        specifier: ^2.15.0
-        version: 2.15.0
       '@swc/core':
         specifier: ^1.15.47
         version: 1.15.47
@@ -119,6 +119,12 @@ importers:
       vitest:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)
+
+  packages/native-prover:
+    devDependencies:
+      '@minaport/mina-contracts':
+        specifier: workspace:*
+        version: link:../mina-contracts
 
   packages/shared:
     dependencies:
