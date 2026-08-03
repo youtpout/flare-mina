@@ -276,7 +276,8 @@ than from documentation:
 | Bridge escrow zkApp | [`B62qrJ6YnZPW5y9YSnjduEuCjpUzmo4qqcsqy4T7KwvTEK7uzGFNjmF`](https://minascan.io/devnet/account/B62qrJ6YnZPW5y9YSnjduEuCjpUzmo4qqcsqy4T7KwvTEK7uzGFNjmF) |
 
 Deposits go through the zkApp's `deposit` method, which carries the Flare
-recipient as a 160-bit field element and credits `lockedNanomina` in the same
+recipient as a 160-bit field element and dispatches the deposit action in the
+same
 proved transaction.
 
 `send`, `receive` and `editState` are all `Permissions.proof()`, so value moves
@@ -284,11 +285,14 @@ in **and out** only through a proved method. A key holding the escrow could rug
 it; this cannot.
 
 `receive` is as strict as `send` for a reason worth stating: an ordinary payment
-would credit the balance without running `deposit`, leaving `lockedNanomina`
-behind. Since `releaseWithdrawal` refuses anything above `lockedNanomina`, those
-funds could never leave — a permanent loss, silently. Refusing the payment is the
+would credit the balance without ever dispatching an action, so nothing on
+Flare could claim it — a permanent loss, silently. Refusing the payment is the
 only outcome that leaves the sender's MINA usable. An earlier deployment allowed
 plain payments and stranded 30 devnet MINA exactly this way.
+
+It is also what lets the contract keep no balance accounting of its own: if the
+only way in is `deposit` and the only way out is `releaseWithdrawal`, the account
+balance *is* the escrowed total.
 
 Verification key hash:
 `8787813373587944809243524125748744328530711262033152364127025440525038586927`

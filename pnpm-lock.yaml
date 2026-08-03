@@ -98,6 +98,9 @@ importers:
         specifier: ^2.2.0
         version: 2.15.0
     devDependencies:
+      '@o1js/native':
+        specifier: ^2.15.0
+        version: 2.15.0
       '@swc/core':
         specifier: ^1.15.47
         version: 1.15.47
@@ -710,6 +713,29 @@ packages:
   '@noble/hashes@1.8.0':
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
+
+  '@o1js/native-darwin-arm64@2.15.0':
+    resolution: {integrity: sha512-4S1hf6Z6KLI1ITnbecMS6y3q3D+IqIGjF9vC5xSHQETUGPS0IFbWGUwai/52RIfH65eXBK5MXWYwwAlc6rcz5g==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@o1js/native-darwin-x64@2.15.0':
+    resolution: {integrity: sha512-zsCvwBJK3j9yDcfpdK0QypaQKTRFnQTmCH989JEYr61yqFQ5Uxz03oEVkCU02p2+w2bZzKWIy/7rTTAVaCiYqg==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@o1js/native-linux-arm64@2.15.0':
+    resolution: {integrity: sha512-Fa1tWgvrZSCDpJ2c4rHZKnfhxpZc/XkqGNVW5gDocr6FArSpWyEyKn0tPJJKtDUIzkUCozjxnFO8EWws0HJ6MA==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@o1js/native-linux-x64@2.15.0':
+    resolution: {integrity: sha512-D2Z3NBb7mtehYRzPPlCT+m4/ojJYyo0MJc/9f0MtwIXIlTRL1jVBg6qH8TQdIK5j3LYlFuAhjDqaWfjAxQGwMA==}
+    cpu: [x64]
+    os: [linux]
+
+  '@o1js/native@2.15.0':
+    resolution: {integrity: sha512-te/piape+Nn9bgctqZk1ARnBMilKwq+IkWT4Z4jKh3HNuGj/Z5rngVGMRAPzJzxyjQEh7Dm+/BN6M9D6VY0kdw==}
 
   '@rolldown/pluginutils@1.0.0-beta.27':
     resolution: {integrity: sha512-+d0F4MKMCbeVUJwG96uQ4SgAznZNSq93I3V+9NHA4OpvqG8mRCpGdKmK8l/dl02h2CCDHwW2FqilnTyDcAnqjA==}
@@ -2209,6 +2235,25 @@ snapshots:
       '@noble/hashes': 1.8.0
 
   '@noble/hashes@1.8.0': {}
+
+  '@o1js/native-darwin-arm64@2.15.0':
+    optional: true
+
+  '@o1js/native-darwin-x64@2.15.0':
+    optional: true
+
+  '@o1js/native-linux-arm64@2.15.0':
+    optional: true
+
+  '@o1js/native-linux-x64@2.15.0':
+    optional: true
+
+  '@o1js/native@2.15.0':
+    optionalDependencies:
+      '@o1js/native-darwin-arm64': 2.15.0
+      '@o1js/native-darwin-x64': 2.15.0
+      '@o1js/native-linux-arm64': 2.15.0
+      '@o1js/native-linux-x64': 2.15.0
 
   '@rolldown/pluginutils@1.0.0-beta.27': {}
 

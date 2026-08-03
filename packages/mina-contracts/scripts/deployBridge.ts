@@ -10,9 +10,10 @@ import { MinaPortBridge } from '../src/MinaPortBridge.js';
  * a key holding the escrow could rug it, and this cannot.
  *
  * `receive` is deliberately as strict as `send`. An ordinary payment would
- * credit the balance without running `deposit`, leaving `lockedNanomina`
- * behind and the funds unreleasable forever. Refusing the payment is the only
- * outcome that leaves the sender's MINA usable.
+ * credit the balance without ever dispatching an action, so nothing on Flare
+ * could claim it. Refusing the payment is the only outcome that leaves the
+ * sender's MINA usable — and it is also what makes the account balance the
+ * escrowed total, so the contract needs no accounting of its own.
  *
  * Usage, from the repository root:
  *   set -a && . ./.env && set +a

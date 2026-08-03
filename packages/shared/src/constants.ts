@@ -21,7 +21,7 @@ export const MINA_DECIMALS = 9;
  *
  * This gives an exact 1:1 mapping between one nanomina locked on Mina and one
  * FMINA base unit minted on Flare. No conversion, no rounding, no dust — the
- * collateral invariant `totalSupply(FMINA) == lockedNanomina` is an integer
+ * collateral invariant `totalSupply(FMINA) == escrow balance` is an integer
  * equality that holds at every point in time.
  */
 export const FMINA_DECIMALS = 9;

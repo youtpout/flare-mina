@@ -25,9 +25,9 @@ import { DEPOSIT_DOMAIN, EVM_ADDRESS_BITS, WITHDRAWAL_DOMAIN } from './constants
  *   - Flare -> Mina: release escrowed MINA against a proven `WithdrawToMina`
  *     event (see the trust note on `releaseWithdrawal`).
  *
- * Collateral invariant: `lockedNanomina` is the exact amount of MINA held by
- * this account on behalf of bridged users, and equals the wMINA total supply on
- * Flare once every in-flight batch has settled.
+ * Collateral invariant: this account's balance is the exact amount of MINA held
+ * on behalf of bridged users, and equals the FMINA total supply on Flare once
+ * every in-flight batch has settled.
  */
 
 /** A Flare address, big-endian, packed into a single field element (160 bits). */
@@ -89,16 +89,30 @@ export class WithdrawalRecord extends Struct({
   }
 }
 
+/**
+ * The deposit escrow.
+ *
+ * # Why there is almost no state here
+ *
+ * Three fields used to live on this contract and all three were duplicates:
+ *
+ *   - a hash chain over dispatched deposits — `reducer.dispatch` already
+ *     advances the account's own `actionState`, which is what a settlement
+ *     proof would attest to anyway. Ours was a second, parallel commitment
+ *     that could only ever agree or be a bug;
+ *   - a deposit-nonce counter — the nonce only has to make a deposit *unique*,
+ *     and it travels inside the action where the Flare side reads it. Storing
+ *     it bought sequentiality nobody needs and cost a read-modify-write that
+ *     serialised every depositor against every other;
+ *   - an escrowed-balance total — with `receive: Permissions.proof()` the
+ *     balance cannot move except through these methods, so the account balance
+ *     *is* the escrowed total. Tracking it separately meant maintaining a
+ *     number the protocol already maintains, with the two able to disagree.
+ *
+ * The collateral invariant is unchanged in meaning:
+ * `totalSupply(FMINA) == balance of this account`.
+ */
 export class MinaPortBridge extends SmartContract {
-  /** Hash-chain commitment over every deposit dispatched so far. */
-  @state(Field) depositActionState = State<Field>();
-
-  /** Next deposit nonce. Strictly monotonic; makes every deposit leaf unique. */
-  @state(UInt64) nextDepositNonce = State<UInt64>();
-
-  /** Native MINA currently escrowed on behalf of bridged users, in nanomina. */
-  @state(UInt64) lockedNanomina = State<UInt64>();
-
   /**
    * Highest Flare withdrawal nonce released so far.
    *
@@ -147,19 +161,20 @@ export class MinaPortBridge extends SmartContract {
 
   override init() {
     super.init();
-    this.depositActionState.set(Reducer.initialActionState);
-    this.nextDepositNonce.set(UInt64.zero);
-    this.lockedNanomina.set(UInt64.zero);
     this.lastWithdrawalNonce.set(UInt64.zero);
 
     this.account.permissions.set({
       ...Permissions.default(),
       // Balance may only move through this contract's own methods — in both
-      // directions. `receive` matters as much as `send`: an ordinary payment
-      // would credit the account without running `deposit`, so the funds would
-      // sit in the balance while `lockedNanomina` stayed put, and nothing could
-      // ever release them. Refusing the payment outright is the only outcome
-      // that leaves the depositor's MINA where they can still use it.
+      // directions. `receive` matters as much as `send`, and it is what lets
+      // this contract have no balance accounting of its own: if the only way
+      // in is `deposit` and the only way out is `releaseWithdrawal`, then the
+      // account balance is exactly the escrowed total, maintained by the
+      // protocol rather than by us.
+      //
+      // It also removes a way to lose funds outright. A plain payment would
+      // credit the balance without running `deposit`, so no action would ever
+      // be dispatched and nothing on Flare could claim it.
       send: Permissions.proof(),
       receive: Permissions.proof(),
       editState: Permissions.proof(),
@@ -195,28 +210,27 @@ export class MinaPortBridge extends SmartContract {
   /**
    * Lock native MINA and dispatch a deposit action.
    *
-   * @param expectedNonce the nonce the caller believes it will receive. Asserted
-   *   against contract state so the caller can precompute its deposit leaf (and
-   *   therefore its Flare claim) before submitting, while the contract remains
-   *   the sole authority on nonce assignment. A replayed transaction fails this
-   *   assertion, which is what makes duplicate deposits impossible.
-   * @param flareRecipient the Flare address entitled to the minted wMINA,
+   * @param nonce chosen by the caller. It exists only to make a deposit
+   *   *unique*, not to order deposits: the Flare side keys its consumed-intent
+   *   set on `(sender, recipient, amount, nonce)`, so two otherwise identical
+   *   deposits must differ here or the second cannot be claimed. Sixty-four
+   *   random bits are enough; a counter is not required and is deliberately
+   *   not enforced, since enforcing one would serialise every depositor
+   *   against every other for no benefit.
+   * @param flareRecipient the Flare address entitled to the minted FMINA,
    *   big-endian in the low 160 bits of a field element.
    * @param amount amount to lock, in nanomina. Must be non-zero.
    */
-  @method async deposit(expectedNonce: UInt64, flareRecipient: Field, amount: UInt64) {
+  @method async deposit(nonce: UInt64, flareRecipient: Field, amount: UInt64) {
     amount.assertGreaterThan(UInt64.zero, 'deposit amount must be non-zero');
+    // Without this range check a recipient above 160 bits would be escrowed
+    // against a Flare address that does not exist — funds locked forever.
     new FlareAddress({ value: flareRecipient }).assertValid();
 
-    const nonce = this.nextDepositNonce.getAndRequireEquals();
-    // `UInt64.assertEquals` takes no message in this o1js version, and its
-    // default reads `Field.assertEquals(): 1 != 0` — which tells a user nothing
-    // about what they got wrong. Going through `equals().assertTrue()` keeps
-    // the message.
-    nonce.equals(expectedNonce).assertTrue('unexpected deposit nonce');
-
-    // Pull the funds. `createSigned` forces the sender to authorise this exact
-    // account update, so the bridge can never move funds it was not given.
+    // Pull the funds. `createSigned` is what requires the sender's signature,
+    // so the key is read unconstrained: a prover naming a sender it cannot
+    // sign for produces a transaction that will not be accepted.
+    // `getAndRequireSignature()` here would demand the same signature twice.
     //
     // The credit is applied to this contract's own account update rather than
     // through `senderUpdate.send(...)`. `send` would create a *separate*,
@@ -224,29 +238,24 @@ export class MinaPortBridge extends SmartContract {
     // refuses — the method would be unable to accept the very deposit it
     // exists for. Debiting the sender and crediting `this` keeps the increase
     // on the proof-authorised update.
-    const sender = this.sender.getAndRequireSignature();
+    const sender = this.sender.getUnconstrained();
     const senderUpdate = AccountUpdate.createSigned(sender);
     senderUpdate.balance.subInPlace(amount);
     this.balance.addInPlace(amount);
 
-    const locked = this.lockedNanomina.getAndRequireEquals();
-    this.lockedNanomina.set(locked.add(amount));
-    this.nextDepositNonce.set(nonce.add(UInt64.one));
-
-    const action = new DepositAction({
-      nonce,
-      senderX: sender.x,
-      senderIsOdd: sender.isOdd,
-      flareRecipient,
-      amount,
-    });
-    this.reducer.dispatch(action);
-
-    // Extend the local hash chain. This is the value the SP1 guest proves a
-    // transition of, and the value the Flare bridge tracks as
-    // `currentMinaActionState`.
-    const previous = this.depositActionState.getAndRequireEquals();
-    this.depositActionState.set(Poseidon.hash([previous, action.hash()]));
+    // The dispatch is the whole record. It advances the account's own
+    // `actionState`, which is the commitment a settlement proof attests to —
+    // maintaining a parallel hash chain in zkApp state would add a second
+    // value that can only ever agree with this one or be a bug.
+    this.reducer.dispatch(
+      new DepositAction({
+        nonce,
+        senderX: sender.x,
+        senderIsOdd: sender.isOdd,
+        flareRecipient,
+        amount,
+      }),
+    );
   }
 
   /**
@@ -264,8 +273,12 @@ export class MinaPortBridge extends SmartContract {
     const lastNonce = this.lastWithdrawalNonce.getAndRequireEquals();
     record.nonce.assertGreaterThan(lastNonce, 'withdrawal nonce must be strictly increasing');
 
-    const locked = this.lockedNanomina.getAndRequireEquals();
-    record.amount.assertLessThanOrEqual(locked, 'withdrawal exceeds escrowed collateral');
+    // Collateral check, against the account balance rather than a number we
+    // maintain. With `receive: proof()` the balance moves only through these
+    // methods, so it *is* the escrowed total — and a precondition on a range
+    // rather than an exact value means a concurrent deposit does not
+    // invalidate an in-flight release.
+    this.account.balance.requireBetween(record.amount, UInt64.MAXINT());
 
     // The attestor must co-sign this transaction.
     const attestor = this.withdrawalAttestor.getAndRequireEquals();
@@ -273,17 +286,8 @@ export class MinaPortBridge extends SmartContract {
     attestorUpdate.body.useFullCommitment = Bool(true);
 
     this.lastWithdrawalNonce.set(record.nonce);
-    this.lockedNanomina.set(locked.sub(record.amount));
 
     this.send({ to: record.recipient, amount: record.amount });
-  }
-
-  /**
-   * Read-only helper used by tests and by the prover's fixture generator to
-   * derive the expected action-state transition for a batch of deposits.
-   */
-  static advanceActionState(previous: Field, actions: DepositAction[]): Field {
-    return actions.reduce((state, action) => Poseidon.hash([state, action.hash()]), previous);
   }
 }
 

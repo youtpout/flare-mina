@@ -37,7 +37,7 @@ attestor can do.
 | Actor | Can | Cannot |
 |---|---|---|
 | **Escrow attestor** (Flare side, `escrowAttestor`) | Refuse to sign; sign for an escrow that never happened, minting unbacked FMINA | Choose the recipient, change the amount, mint to itself, move escrowed MINA, or touch an existing balance |
-| **Withdrawal attestor** (Mina side, `withdrawalAttestor`) | Refuse to sign; attest a burn that never happened, releasing escrow | Choose the recipient or amount independently of the record it signs; release out of nonce order; exceed `lockedNanomina` |
+| **Withdrawal attestor** (Mina side, `withdrawalAttestor`) | Refuse to sign; attest a burn that never happened, releasing escrow | Choose the recipient or amount independently of the record it signs; release out of nonce order; exceed the escrowed balance |
 | **zkApp admin** (Mina side, `admin`) | Rotate `withdrawalAttestor` | Move escrow, mint, or edit any accounting state — all of which are reachable only through proof-authorised methods |
 | **Bridge owner** (Flare side, `Ownable2Step`) | Pause; rotate the settlement verifier after a 2-day timelock; rotate `escrowAttestor` | Mint, burn, move user funds, or bypass the timelock |
 | **Transaction submitter** | Pay gas; decline to submit | Anything at all. Every field is committed to by a signature the submitter cannot alter |
@@ -125,7 +125,7 @@ two things. `SignaturePurpose` makes the separation structural.
 | Burn FMINA to a key that corresponds to no Mina account | `MinaAddressLib.fromBytes32` validates the recipient as a Pallas field element on the Flare side, before the burn |
 | Burn more than Mina can represent | `amount > type(uint64).max` rejected — the Mina side accounts in `uint64` nanomina |
 | Emit a claimable event without burning | Burn happens before the emit |
-| Release more than is escrowed | `lockedNanomina` check on the Mina side | 
+| Release more than is escrowed | Balance precondition on the Mina side — checked against the account's real balance, which `receive: proof()` makes equal to the escrowed total |
 | Replay a release | `lastWithdrawalNonce` is strictly increasing |
 
 One consequence is worth being explicit about, because it is a liveness cost
@@ -179,7 +179,7 @@ and is measured, but as an unaudited prototype — feasibility, not a control.
 
 The mirror image, on the Mina side. Bounded the same way: it signs a
 `WithdrawalRecord` whose hash covers nonce, recipient and amount, and cannot
-exceed `lockedNanomina` or go backwards in nonce.
+exceed the escrowed balance or go backwards in nonce.
 
 **Removed by.** Verifying the Flare Relay signing policy inside a Pickles
 circuit — FDC attestation of the burn, ECDSA set, weight threshold. This is the
@@ -262,7 +262,7 @@ both directions of the timelock.
 
 `collateralInvariantHolds()` is checked in tests but nothing watches it in
 production. A watcher that compares `totalSupply(FMINA)` against the escrow
-zkApp's `lockedNanomina` every block, and pauses on divergence, turns GAP 1 and
+escrow account's balance every block, and pauses on divergence, turns GAP 1 and
 GAP 2 from silent into loud. Cheap, and independent of every cryptographic
 improvement below.
 

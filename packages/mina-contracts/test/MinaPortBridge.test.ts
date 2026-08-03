@@ -49,13 +49,13 @@ beforeAll(async () => {
 
 async function deposit(
   from: PrivateKey,
-  expectedNonce: bigint,
+  nonce: bigint,
   recipient: string,
   amountNanomina: bigint,
 ) {
   const tx = await Mina.transaction(from.toPublicKey(), async () => {
     await bridge.deposit(
-      UInt64.from(expectedNonce),
+      UInt64.from(nonce),
       flareRecipientField(recipient),
       UInt64.from(amountNanomina),
     );
@@ -64,44 +64,45 @@ async function deposit(
   return tx.sign([from]).send();
 }
 
+/** Deposit actions dispatched so far, newest batch last. */
+async function dispatchedActions() {
+  const actions = await bridge.reducer.fetchActions();
+  return actions.flat();
+}
+
 describe('deposit', () => {
-  it('locks MINA, assigns the nonce and advances the action state', async () => {
-    const stateBefore = bridge.depositActionState.get();
-    const lockedBefore = bridge.lockedNanomina.get();
+  it('escrows the MINA and dispatches the action', async () => {
     const balanceBefore = Mina.getBalance(zkAppAddress);
 
     await deposit(userKey, 0n, RECIPIENT_A, 3n * MINA);
 
-    expect(bridge.nextDepositNonce.get().toBigInt()).toBe(1n);
-    expect(bridge.lockedNanomina.get().toBigInt()).toBe(lockedBefore.toBigInt() + 3n * MINA);
+    // The account balance IS the escrowed total: with `receive: proof()` it
+    // cannot move except through these methods, which is why the contract
+    // keeps no separate figure.
     expect(Mina.getBalance(zkAppAddress).toBigInt()).toBe(balanceBefore.toBigInt() + 3n * MINA);
 
-    // The new action state must equal the off-chain recomputation.
-    const expected = MinaPortBridge.advanceActionState(stateBefore, [
-      new DepositAction({
-        nonce: UInt64.zero,
-        senderX: user.x,
-        senderIsOdd: user.isOdd,
-        flareRecipient: flareRecipientField(RECIPIENT_A),
-        amount: UInt64.from(3n * MINA),
-      }),
-    ]);
-    expect(bridge.depositActionState.get().toString()).toBe(expected.toString());
+    const actions = await dispatchedActions();
+    expect(actions).toHaveLength(1);
+    const [only] = actions as [DepositAction];
+    expect(only.nonce.toBigInt()).toBe(0n);
+    expect(only.amount.toBigInt()).toBe(3n * MINA);
+    expect(only.senderX.toString()).toBe(user.x.toString());
+    expect(flareRecipientHex(only.flareRecipient)).toBe(RECIPIENT_A);
   }, 120_000);
 
   /**
    * The escrow must refuse an ordinary payment.
    *
-   * This is not a nicety. A plain payment credits the balance without running
-   * `deposit`, so `lockedNanomina` stays where it was — and since `send` is
-   * `proof()` and `releaseWithdrawal` refuses anything above `lockedNanomina`,
-   * those funds can never leave. `receive: proof()` turns a permanent loss into
-   * a rejected transaction, which is the only outcome that leaves the sender's
-   * MINA usable. Learned from 30 MINA stranded on devnet.
+   * A plain payment credits the balance without running `deposit`, so no action
+   * is ever dispatched and nothing on Flare can claim it — while the balance,
+   * which is now the escrow accounting, silently overstates what was actually
+   * bridged. `receive: proof()` turns that into a rejected transaction, the
+   * only outcome that leaves the sender's MINA usable. Learned from 30 MINA
+   * stranded on devnet.
    */
   it('refuses a plain payment, so funds cannot bypass the accounting', async () => {
-    const lockedBefore = bridge.lockedNanomina.get().toBigInt();
     const balanceBefore = Mina.getBalance(zkAppAddress).toBigInt();
+    const actionsBefore = (await dispatchedActions()).length;
 
     const tx = await Mina.transaction(user, async () => {
       const from = AccountUpdate.createSigned(user);
@@ -110,8 +111,8 @@ describe('deposit', () => {
     await tx.prove();
     await expect(tx.sign([userKey]).send()).rejects.toThrow();
 
-    expect(bridge.lockedNanomina.get().toBigInt()).toBe(lockedBefore);
     expect(Mina.getBalance(zkAppAddress).toBigInt()).toBe(balanceBefore);
+    expect(await dispatchedActions()).toHaveLength(actionsBefore);
   }, 120_000);
 
   it('binds the exact Flare recipient into the action', async () => {
@@ -130,10 +131,26 @@ describe('deposit', () => {
     await expect(deposit(userKey, 1n, RECIPIENT_A, 0n)).rejects.toThrow(/non-zero/);
   }, 120_000);
 
-  it('rejects a duplicate/replayed nonce', async () => {
-    // Nonce 0 was consumed by the first test; re-submitting it must fail.
-    await expect(deposit(userKey, 0n, RECIPIENT_A, MINA)).rejects.toThrow(/unexpected deposit nonce/);
-  }, 120_000);
+  /**
+   * The nonce is the caller's to choose, and the contract does not police it.
+   *
+   * Worth pinning as a test rather than leaving to a comment: reusing a nonce
+   * is accepted here, and the consequence lands on Flare, where
+   * `consumedIntents` keys on `(sender, recipient, amount, nonce)` and would
+   * see the second deposit as already claimed. Enforcing sequentiality on-chain
+   * would serialise every depositor against every other, which is a real cost
+   * for a constraint only the depositor can violate and only they pay for.
+   */
+  it('does not police the nonce — uniqueness is the caller obligation', async () => {
+    const before = (await dispatchedActions()).length;
+
+    await deposit(userKey, 7n, RECIPIENT_A, MINA);
+    await deposit(userKey, 7n, RECIPIENT_A, MINA);
+
+    const actions = await dispatchedActions();
+    expect(actions).toHaveLength(before + 2);
+    expect(actions.slice(-2).map((a) => a.nonce.toBigInt())).toEqual([7n, 7n]);
+  }, 180_000);
 
   it('rejects a recipient that does not fit in 160 bits', async () => {
     const tooBig = Field((1n << 160n) + 1n);
@@ -149,30 +166,23 @@ describe('deposit', () => {
     expect(flareRecipientHex(flareRecipientField(RECIPIENT_A))).toBe(RECIPIENT_A);
   });
 
-  it('keeps the action state consistent across several deposits', async () => {
-    const stateBefore = bridge.depositActionState.get();
-    const startNonce = bridge.nextDepositNonce.get().toBigInt();
+  it('records each deposit as its own action, in order', async () => {
+    const before = (await dispatchedActions()).length;
+    const balanceBefore = Mina.getBalance(zkAppAddress).toBigInt();
 
-    await deposit(userKey, startNonce, RECIPIENT_A, MINA);
-    await deposit(userKey, startNonce + 1n, RECIPIENT_B, 2n * MINA);
+    await deposit(userKey, 100n, RECIPIENT_A, MINA);
+    await deposit(userKey, 101n, RECIPIENT_B, 2n * MINA);
 
-    const expected = MinaPortBridge.advanceActionState(stateBefore, [
-      new DepositAction({
-        nonce: UInt64.from(startNonce),
-        senderX: user.x,
-        senderIsOdd: user.isOdd,
-        flareRecipient: flareRecipientField(RECIPIENT_A),
-        amount: UInt64.from(MINA),
-      }),
-      new DepositAction({
-        nonce: UInt64.from(startNonce + 1n),
-        senderX: user.x,
-        senderIsOdd: user.isOdd,
-        flareRecipient: flareRecipientField(RECIPIENT_B),
-        amount: UInt64.from(2n * MINA),
-      }),
-    ]);
-    expect(bridge.depositActionState.get().toString()).toBe(expected.toString());
+    const actions = await dispatchedActions();
+    expect(actions).toHaveLength(before + 2);
+
+    const [first, second] = actions.slice(-2) as [DepositAction, DepositAction];
+    expect(flareRecipientHex(first.flareRecipient)).toBe(RECIPIENT_A);
+    expect(first.amount.toBigInt()).toBe(MINA);
+    expect(flareRecipientHex(second.flareRecipient)).toBe(RECIPIENT_B);
+    expect(second.amount.toBigInt()).toBe(2n * MINA);
+
+    expect(Mina.getBalance(zkAppAddress).toBigInt()).toBe(balanceBefore + 3n * MINA);
   }, 180_000);
 });
 
@@ -196,7 +206,7 @@ describe('withdrawal release', () => {
 
   it('releases MINA and advances the withdrawal nonce', async () => {
     const balanceBefore = Mina.getBalance(user);
-    const lockedBefore = bridge.lockedNanomina.get().toBigInt();
+    const escrowBefore = Mina.getBalance(zkAppAddress).toBigInt();
 
     await release(
       new WithdrawalRecord({ nonce: UInt64.from(1n), recipient: user, amount: UInt64.from(MINA) }),
@@ -204,7 +214,9 @@ describe('withdrawal release', () => {
     );
 
     expect(bridge.lastWithdrawalNonce.get().toBigInt()).toBe(1n);
-    expect(bridge.lockedNanomina.get().toBigInt()).toBe(lockedBefore - MINA);
+    // The escrow shrinks by exactly the released amount — no separate figure
+    // to keep in step with it.
+    expect(Mina.getBalance(zkAppAddress).toBigInt()).toBe(escrowBefore - MINA);
     expect(Mina.getBalance(user).toBigInt()).toBe(balanceBefore.toBigInt() + MINA);
   }, 120_000);
 
@@ -217,7 +229,18 @@ describe('withdrawal release', () => {
     ).rejects.toThrow(/strictly increasing/);
   }, 120_000);
 
-  it('rejects a withdrawal exceeding escrowed collateral', async () => {
+  /**
+   * The collateral bound is now a precondition on the account balance rather
+   * than an in-circuit assertion against a stored total, so the refusal comes
+   * from the protocol and reads `Account_balance_precondition_unsatisfied`
+   * instead of a message we wrote.
+   *
+   * That is a worse error string and a better check: it tests the real balance
+   * rather than a number the contract maintains and could get out of step with,
+   * and being a range rather than an equality it survives a deposit landing in
+   * the same block.
+   */
+  it('rejects a withdrawal exceeding the escrowed balance', async () => {
     await expect(
       release(
         new WithdrawalRecord({
@@ -227,7 +250,7 @@ describe('withdrawal release', () => {
         }),
         [attestorKey],
       ),
-    ).rejects.toThrow(/collateral/);
+    ).rejects.toThrow(/Account_balance_precondition_unsatisfied/);
   }, 120_000);
 });
 
