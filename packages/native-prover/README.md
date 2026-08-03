@@ -32,26 +32,40 @@ Rust toolchain.
 
 ## Result
 
-Measured on `deposit` (744 rows, Pickles domain 1024), macOS arm64, 10 cores.
-Warm figures are the steady state over six consecutive proofs.
+Measured on `deposit` (744 rows), Apple M4, **idle machine**, SRS payloads
+seeded. Warm figures are the steady state over six consecutive proofs.
 
-| prover | prove (warm) |
-|---|---|
-| o1js, wasm | 13.5 – 14.1 s |
-| o1js + `@o1js/native` | 8.1 – 8.8 s |
-| **this crate, no o1js** | **7.7 – 8.3 s** |
-| o1js + `pickle-rust` fork, rust backend | 6.5 – 7.4 s |
+| prover | compile | prove (warm) |
+|---|---|---|
+| o1js, wasm | 0.7 s | 3.8 s |
+| o1js + `@o1js/native` | 1.0 s | 2.1 s |
+| **this crate, no o1js** | **0.66 s** | **1.8 s** |
 
-**Leaving Node buys nothing.** Pure Rust lands on the same figure as the
-official native backend, so the JS harness is not the bottleneck — consistent
-with the 0.1 s spent building the transaction against ~8 s spent proving. The
-relayer's proving worker therefore stays in Node: no separate Rust service, no
-FFI to maintain.
+**Leaving Node saves 0.3 s.** Not nothing, but nowhere near enough to justify a
+separate Rust service and an FFI boundary — consistent with the 0.1 s spent
+building the transaction against ~2 s spent proving. The relayer's proving
+worker stays in Node, on `@o1js/native`.
 
-The number that does move is `compile`, and only via the cache: 10.5 s here
-with `cache_bytes_base64: None`, against 1.8 s for a cached o1js compile. A
-production build would embed a cache payload the way `mina-fungible-token`
-does.
+For scale, `mina-fungible-token`'s heavier `transfer` proves in 1.48 s on the
+same machine, so this contract sits where a contract of its size should.
+
+### Measure on an idle machine, or do not bother
+
+An earlier pass of these same benchmarks reported 3.8–8.8 s for the same work.
+Every figure was inflated ~4× by contention — a browser holding ~4 of 10 cores,
+then Spotlight indexing the build trees. Nothing was throttled and no
+temperature was abnormal; the cores were simply taken.
+
+Contention also *compresses ratios*: wasm-versus-native measured 1.55× under
+load and 1.81× idle, so even relative conclusions drift. Check `uptime` before
+believing a number here.
+
+### The SRS cache is worth 3.6× on compile and nothing on proving
+
+Without `MINAPORT_SRS_PAYLOADS`, compile rebuilds the SRS and Lagrange bases:
+9.4 s against 2.6 s seeded, under identical load. Proving is unchanged to the
+tenth of a second either way — the bases are consumed at compile time, so a
+missing cache costs startup and not throughput.
 
 VK parity holds against the **official** o1js too, not just the fork:
 

@@ -13,6 +13,7 @@ path = "src/bench.rs"
 # does not have the sibling checkouts.
 [dependencies]
 ark-ff = "0.5"
+base64 = "0.22"
 mina-curves = { git = "https://github.com/youtpout/proof-systems", branch = "pickle-rs" }
 mina-runtime = { git = "https://github.com/youtpout/mina-rust", branch = "pickle-rs" }
 pickles = { git = "https://github.com/youtpout/proof-systems", branch = "pickle-rs" }

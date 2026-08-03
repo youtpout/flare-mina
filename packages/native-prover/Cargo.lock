@@ -2003,6 +2003,7 @@ name = "minaport-native-prover"
 version = "0.1.0"
 dependencies = [
  "ark-ff",
+ "base64 0.22.1",
  "mina-curves",
  "mina-runtime",
  "pickles",

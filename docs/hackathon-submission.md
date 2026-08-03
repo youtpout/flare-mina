@@ -163,7 +163,7 @@ than stranding funds.
 | Action | Where | Time / cost |
 |--------|-------|-------------|
 | Sign a deposit intent | Mina wallet | instant |
-| Prove a claim on Mina | o1js, client | **4.2 s** |
+| Prove a deposit on Mina | o1js + `@o1js/native` | **2.1 s** |
 | Move tokens on Flare | Coston2 | **~890k gas, ~$0.009** |
 | Swap on Flare | Coston2 | **~1.08M gas**, one signature |
 

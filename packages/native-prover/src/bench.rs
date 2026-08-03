@@ -28,7 +28,10 @@ use std::{str::FromStr, time::Instant};
 
 use ark_ff::PrimeField;
 use mina_curves::pasta::Fp;
-use mina_runtime::{Backend, CompileCircuitRequest, CompileProgramRequest, ProveCircuitRequest};
+use base64::prelude::*;
+use mina_runtime::{
+    Backend, CompileCircuitRequest, CompileProgramRequest, ProveCircuitRequest, SeedSrsCacheRequest,
+};
 use pickles::recorded::RecordedCircuit;
 use serde::Deserialize;
 
@@ -70,6 +73,54 @@ const PROGRAM_JSON: &str = include_str!("../assets/bridge-program.json");
 /// averaged into it, which would flatter or penalise depending on the count.
 const RUNS: usize = 6;
 
+/// Seeds whatever SRS and Lagrange payloads `MINAPORT_SRS_PAYLOADS` points at.
+///
+/// Payload names follow `srs-<curve>.bin` and `lagrange-<curve>-<log2>.bin`.
+/// They are per curve and per domain — never per program — so a set exported
+/// from any project seeds any other. Returns how many the backend accepted;
+/// zero simply means they get rebuilt, as before.
+fn seed_srs_payloads() -> usize {
+    let Ok(dir) = std::env::var("MINAPORT_SRS_PAYLOADS") else {
+        return 0;
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        eprintln!("warning: cannot read {dir}");
+        return 0;
+    };
+
+    entries
+        .flatten()
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(stem) = name.strip_suffix(".bin") else {
+                return false;
+            };
+            let Ok(payload) = std::fs::read(entry.path()) else {
+                return false;
+            };
+
+            let (curve, domain_log2) = if let Some(curve) = stem.strip_prefix("srs-") {
+                (curve.to_owned(), None)
+            } else if let Some(rest) = stem.strip_prefix("lagrange-") {
+                match rest.rsplit_once('-') {
+                    Some((curve, log2)) => (curve.to_owned(), log2.parse::<u32>().ok()),
+                    None => return false,
+                }
+            } else {
+                return false;
+            };
+
+            Backend::seed_srs_cache(SeedSrsCacheRequest {
+                curve,
+                payload_base64: BASE64_STANDARD.encode(&payload),
+                domain_log2,
+                raw: true,
+            })
+            .unwrap_or(false)
+        })
+        .count()
+}
+
 fn main() -> Result<(), String> {
     let program: PackagedProgram =
         serde_json::from_str(PROGRAM_JSON).map_err(|e| format!("cannot decode the program: {e}"))?;
@@ -86,6 +137,20 @@ fn main() -> Result<(), String> {
     println!();
 
     let backend = Backend::default();
+
+    // ---- optional SRS seeding ---------------------------------------------
+    //
+    // The SRS and Lagrange bases are per curve and per domain, not per program,
+    // so payloads exported from any project can seed any other. Point
+    // MINAPORT_SRS_PAYLOADS at a directory of `srs-<curve>.bin` and
+    // `lagrange-<curve>-<domain_log2>.bin` to skip building them.
+    //
+    // Without it they are rebuilt on the first compile, which is most of why a
+    // cold compile here costs seconds rather than milliseconds.
+    let seeded = seed_srs_payloads();
+    if seeded > 0 {
+        println!("srs payloads    : {seeded} seeded");
+    }
 
     // ---- compile -----------------------------------------------------------
     let started = Instant::now();
