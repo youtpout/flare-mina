@@ -30,8 +30,6 @@ export const FLARE_CONTRACT_REGISTRY: Address =
 export const FLARE_CONTRACT_NAMES = {
   /** Wrapped native token (WFLR / WC2FLR). */
   wrappedNative: 'WNat',
-  /** Price feeds, used for quoting and portfolio valuation. */
-  ftso: 'FtsoV2',
   /** Signed Merkle roots — the basis of the Flare -> Mina return path. */
   relay: 'Relay',
   /** Data connector, for attesting external-chain events to Flare. */

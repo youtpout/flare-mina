@@ -85,7 +85,6 @@ the heavier machinery.
 |---|---|---|
 | Coston2 | Every contract is deployed and exercised here | **Done** |
 | FXRP | Swapped on-chain from a Mina-owned account, against live BlazeSwap liquidity | **Done** |
-| FTSO | Price feed for portfolio valuation and quoting | Resolved from the registry; UI pending |
 | FDC | `EVMTransaction` attestation of the burn, for the trust-minimised return path | Roadmap — see below |
 
 ### FMINA and FAssets
