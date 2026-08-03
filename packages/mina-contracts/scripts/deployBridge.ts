@@ -4,11 +4,15 @@ import { MinaPortBridge } from '../src/MinaPortBridge.js';
 /**
  * Deploy the escrow zkApp to Mina devnet.
  *
- * The account this creates is where deposits land. Users send it plain
- * payments — no zkApp interaction, no client-side proof, any wallet — but the
- * permissions set in `init()` mean nothing leaves except through a proved
- * method. That asymmetry is the whole reason to use a zkApp here rather than a
- * plain account: a key holding the escrow could rug it, and this cannot.
+ * The account this creates is where deposits land. Funds move in and out only
+ * through proved methods — `receive` and `send` are both `Permissions.proof()`
+ * — which is the whole reason to use a zkApp here rather than a plain account:
+ * a key holding the escrow could rug it, and this cannot.
+ *
+ * `receive` is deliberately as strict as `send`. An ordinary payment would
+ * credit the balance without running `deposit`, leaving `lockedNanomina`
+ * behind and the funds unreleasable forever. Refusing the payment is the only
+ * outcome that leaves the sender's MINA usable.
  *
  * Usage, from the repository root:
  *   set -a && . ./.env && set +a

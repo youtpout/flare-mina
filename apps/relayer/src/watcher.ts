@@ -28,7 +28,11 @@ const CHAIN_ID = BigInt(process.env.FLARE_CHAIN_ID ?? 114);
 
 const POLICY: AttestorPolicy = {
   bridgeAddress: process.env.MINA_BRIDGE_ACCOUNT ?? '',
-  confirmations: Number(process.env.MINA_CONFIRMATIONS ?? 15),
+  // Depth guards against a reorg reverting an escrow we have already attested
+  // to. Two is a demo setting: Mina devnet produces a block every few minutes,
+  // so a deeper threshold puts an hour between a deposit and its attestation.
+  // Raise it for any deployment holding value.
+  confirmations: Number(process.env.MINA_CONFIRMATIONS ?? 2),
   minAmountNanomina: BigInt(process.env.MIN_DEPOSIT_NANOMINA ?? 100_000_000n),
   maxAmountNanomina: BigInt(process.env.MAX_DEPOSIT_NANOMINA ?? 1_000_000_000_000n),
 };

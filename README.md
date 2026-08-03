@@ -273,16 +273,25 @@ than from documentation:
 
 | Contract | Address |
 |----------|---------|
-| Bridge escrow zkApp | [`B62qmDcL9mpTMyAbNe74tzfeSkoDbYDYWLnTqgnzVzG4LkU9wyNiybb`](https://minascan.io/devnet/account/B62qmDcL9mpTMyAbNe74tzfeSkoDbYDYWLnTqgnzVzG4LkU9wyNiybb) |
+| Bridge escrow zkApp | [`B62qrJ6YnZPW5y9YSnjduEuCjpUzmo4qqcsqy4T7KwvTEK7uzGFNjmF`](https://minascan.io/devnet/account/B62qrJ6YnZPW5y9YSnjduEuCjpUzmo4qqcsqy4T7KwvTEK7uzGFNjmF) |
 
-Deposits are **plain payments** to that account, with the Flare recipient in the
-memo. No zkApp interaction, no client-side proof, any Mina wallet. The account's
-permissions still make it non-custodial: `send` and `editState` are
-`Permissions.proof()`, so nothing leaves except through a proved method. A key
-holding the escrow could rug it; this cannot.
+Deposits go through the zkApp's `deposit` method, which carries the Flare
+recipient as a 160-bit field element and credits `lockedNanomina` in the same
+proved transaction.
+
+`send`, `receive` and `editState` are all `Permissions.proof()`, so value moves
+in **and out** only through a proved method. A key holding the escrow could rug
+it; this cannot.
+
+`receive` is as strict as `send` for a reason worth stating: an ordinary payment
+would credit the balance without running `deposit`, leaving `lockedNanomina`
+behind. Since `releaseWithdrawal` refuses anything above `lockedNanomina`, those
+funds could never leave — a permanent loss, silently. Refusing the payment is the
+only outcome that leaves the sender's MINA usable. An earlier deployment allowed
+plain payments and stranded 30 devnet MINA exactly this way.
 
 Verification key hash:
-`27056667322523602367666352625792772835568472104740802448484368750789790809246`
+`8787813373587944809243524125748744328530711262033152364127025440525038586927`
 
 ### Flare mainnet (chain 14) / Mina mainnet
 

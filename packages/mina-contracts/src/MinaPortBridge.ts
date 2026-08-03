@@ -154,8 +154,14 @@ export class MinaPortBridge extends SmartContract {
 
     this.account.permissions.set({
       ...Permissions.default(),
-      // Balance may only move through this contract's own methods.
+      // Balance may only move through this contract's own methods — in both
+      // directions. `receive` matters as much as `send`: an ordinary payment
+      // would credit the account without running `deposit`, so the funds would
+      // sit in the balance while `lockedNanomina` stayed put, and nothing could
+      // ever release them. Refusing the payment outright is the only outcome
+      // that leaves the depositor's MINA where they can still use it.
       send: Permissions.proof(),
+      receive: Permissions.proof(),
       editState: Permissions.proof(),
       // The verification key must not be swappable without an explicit upgrade.
       setVerificationKey: Permissions.VerificationKey.impossibleDuringCurrentVersion(),
@@ -211,9 +217,17 @@ export class MinaPortBridge extends SmartContract {
 
     // Pull the funds. `createSigned` forces the sender to authorise this exact
     // account update, so the bridge can never move funds it was not given.
+    //
+    // The credit is applied to this contract's own account update rather than
+    // through `senderUpdate.send(...)`. `send` would create a *separate*,
+    // unauthorised update on the zkApp account, which `receive: proof()` then
+    // refuses — the method would be unable to accept the very deposit it
+    // exists for. Debiting the sender and crediting `this` keeps the increase
+    // on the proof-authorised update.
     const sender = this.sender.getAndRequireSignature();
     const senderUpdate = AccountUpdate.createSigned(sender);
-    senderUpdate.send({ to: this.address, amount });
+    senderUpdate.balance.subInPlace(amount);
+    this.balance.addInPlace(amount);
 
     const locked = this.lockedNanomina.getAndRequireEquals();
     this.lockedNanomina.set(locked.add(amount));

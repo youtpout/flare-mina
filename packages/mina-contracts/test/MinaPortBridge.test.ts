@@ -89,6 +89,31 @@ describe('deposit', () => {
     expect(bridge.depositActionState.get().toString()).toBe(expected.toString());
   }, 120_000);
 
+  /**
+   * The escrow must refuse an ordinary payment.
+   *
+   * This is not a nicety. A plain payment credits the balance without running
+   * `deposit`, so `lockedNanomina` stays where it was — and since `send` is
+   * `proof()` and `releaseWithdrawal` refuses anything above `lockedNanomina`,
+   * those funds can never leave. `receive: proof()` turns a permanent loss into
+   * a rejected transaction, which is the only outcome that leaves the sender's
+   * MINA usable. Learned from 30 MINA stranded on devnet.
+   */
+  it('refuses a plain payment, so funds cannot bypass the accounting', async () => {
+    const lockedBefore = bridge.lockedNanomina.get().toBigInt();
+    const balanceBefore = Mina.getBalance(zkAppAddress).toBigInt();
+
+    const tx = await Mina.transaction(user, async () => {
+      const from = AccountUpdate.createSigned(user);
+      from.send({ to: zkAppAddress, amount: UInt64.from(MINA) });
+    });
+    await tx.prove();
+    await expect(tx.sign([userKey]).send()).rejects.toThrow();
+
+    expect(bridge.lockedNanomina.get().toBigInt()).toBe(lockedBefore);
+    expect(Mina.getBalance(zkAppAddress).toBigInt()).toBe(balanceBefore);
+  }, 120_000);
+
   it('binds the exact Flare recipient into the action', async () => {
     const action = new DepositAction({
       nonce: UInt64.zero,
