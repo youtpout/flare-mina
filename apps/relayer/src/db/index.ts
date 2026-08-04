@@ -144,3 +144,64 @@ export async function setWatermark(height: number): Promise<void> {
     [height],
   );
 }
+
+export type WithdrawalRow = {
+  id: string;
+  nonce: string;
+  recipient: string;
+  amount_nanomina: string;
+  flare_tx_hash: string;
+  mina_tx_hash: string | null;
+  status: 'pending' | 'released' | 'failed';
+  reason: string | null;
+};
+
+/**
+ * Record a burn seen on Flare.
+ *
+ * Idempotent on the nonce, which the bridge contract makes unique, so
+ * overlapping scan windows are free.
+ */
+export async function recordWithdrawal(input: {
+  nonce: bigint;
+  recipient: string;
+  amountNanomina: bigint;
+  flareTxHash: string;
+}): Promise<void> {
+  await pool.query(
+    `INSERT INTO withdrawals (nonce, recipient, amount_nanomina, flare_tx_hash)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (nonce) DO NOTHING`,
+    [
+      input.nonce.toString(),
+      input.recipient,
+      input.amountNanomina.toString(),
+      input.flareTxHash,
+    ],
+  );
+}
+
+/** Burns awaiting release, oldest nonce first — the order the zkApp demands. */
+export async function releasableWithdrawals(): Promise<WithdrawalRow[]> {
+  const { rows } = await pool.query<WithdrawalRow>(
+    `SELECT * FROM withdrawals WHERE status = 'pending' ORDER BY nonce ASC LIMIT 20`,
+  );
+  return rows;
+}
+
+export async function markWithdrawalReleased(id: string, minaTxHash: string): Promise<void> {
+  await pool.query(
+    `UPDATE withdrawals SET status = 'released', mina_tx_hash = $2, updated_at = now()
+      WHERE id = $1`,
+    [id, minaTxHash],
+  );
+}
+
+/** Withdrawals for one Mina account, for the UI. */
+export async function withdrawalsFor(recipient: string): Promise<WithdrawalRow[]> {
+  const { rows } = await pool.query<WithdrawalRow>(
+    `SELECT * FROM withdrawals WHERE recipient = $1 ORDER BY nonce DESC LIMIT 50`,
+    [recipient],
+  );
+  return rows;
+}

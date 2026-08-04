@@ -54,6 +54,7 @@ export const accountAbi = parseAbi([
 
 export const bridgeAbi = parseAbi([
   'function claimWithMinaSignature((uint256,bool,uint256) publicKey,(uint256,uint256) signature,address recipient,uint64 amountNanomina,uint64 nonce,uint64 expiry,bytes attestation)',
+  'function burnToMina(uint256 amount, bytes32 minaRecipient) returns (uint256)',
   'function consumedIntents(bytes32) view returns (bool)',
   'function escrowAttestor() view returns (address)',
 ]);

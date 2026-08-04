@@ -15,6 +15,7 @@ import {
   nextNonceFor,
   pool,
   recordBuilt,
+  withdrawalsFor,
 } from './db/index.js';
 import { buildDeposit } from './prover/index.js';
 import {
@@ -24,6 +25,7 @@ import {
   submitterConfigured,
 } from './submitter.js';
 import { startWatcher } from './watcher.js';
+import { startWithdrawals } from './withdrawals.js';
 
 /**
  * Attestor API.
@@ -267,10 +269,30 @@ app.get('/deposits/:minaSender', async (req, res) => {
   }
 });
 
+/** Withdrawals headed for one Mina account, base58. */
+app.get('/withdrawals/:recipient', async (req, res) => {
+  try {
+    const rows = await withdrawalsFor(req.params.recipient);
+    res.json({
+      withdrawals: rows.map((r) => ({
+        nonce: r.nonce,
+        amountNanomina: r.amount_nanomina,
+        status: r.status,
+        flareTxHash: r.flare_tx_hash,
+        minaTxHash: r.mina_tx_hash,
+        reason: r.reason,
+      })),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 async function main() {
   await migrate();
 
   const watcher = startWatcher();
+  const withdrawals = startWithdrawals();
 
   const server = app.listen(PORT, () => {
     console.log(`attestor API listening on :${PORT}`);
@@ -279,6 +301,7 @@ async function main() {
   const shutdown = async (signal: string) => {
     console.log(`${signal} received, shutting down`);
     watcher.stop();
+    withdrawals.stop();
     server.close();
     await pool.end();
     process.exit(0);

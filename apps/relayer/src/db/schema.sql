@@ -56,3 +56,33 @@ ALTER TABLE deposits ALTER COLUMN mina_block_height DROP NOT NULL;
 ALTER TABLE deposits DROP CONSTRAINT IF EXISTS deposits_status_check;
 ALTER TABLE deposits ADD CONSTRAINT deposits_status_check
   CHECK (status IN ('built','submitted','attested','claimed','failed'));
+
+-- The Flare -> Mina return path.
+--
+-- A burn on Flare is the authorisation and it has already happened by the time
+-- a row appears here: the user's FMINA is gone, and the event carries the
+-- recipient and the amount. This table only tracks which burns have been
+-- honoured on the Mina side.
+CREATE TABLE IF NOT EXISTS withdrawals (
+  id                BIGSERIAL PRIMARY KEY,
+
+  -- Assigned by the bridge contract and strictly increasing. The zkApp
+  -- requires releases in this order, so it is both the identity and the queue.
+  nonce             NUMERIC(78) NOT NULL UNIQUE,
+
+  -- Mina account, base58, decoded from the packed form in the event.
+  recipient         TEXT        NOT NULL,
+  amount_nanomina   NUMERIC(20) NOT NULL CHECK (amount_nanomina > 0),
+
+  flare_tx_hash     TEXT        NOT NULL,
+  mina_tx_hash      TEXT,
+
+  status            TEXT        NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending','released','failed')),
+  reason            TEXT,
+
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS withdrawals_status_idx ON withdrawals (status);

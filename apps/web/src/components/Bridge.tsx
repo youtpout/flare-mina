@@ -2,8 +2,14 @@ import { useEffect, useState } from 'react';
 import { encodeFunctionData, type Hex } from 'viem';
 import type { Session } from '@/App';
 import { CONTRACTS, MINA, explorerTx } from '@/lib/config';
-import { bridgeAbi, submit } from '@/lib/flare';
-import { PURPOSE, depositActionHash, depositCommitment, signAuthorization } from '@/lib/mina';
+import { bridgeAbi, erc20Abi, nextNonce, submit } from '@/lib/flare';
+import {
+  PURPOSE,
+  batchHash,
+  depositActionHash,
+  depositCommitment,
+  signAuthorization,
+} from '@/lib/mina';
 
 /**
  * Deposit status, as the API reports it.
@@ -51,6 +57,12 @@ export function Bridge({ session }: { session: Session }) {
   const [amount, setAmount] = useState('');
   const [depositing, setDepositing] = useState<string | null>(null);
   const [depositError, setDepositError] = useState<string | null>(null);
+  const [burnAmount, setBurnAmount] = useState('');
+  const [burning, setBurning] = useState<string | null>(null);
+  const [burnError, setBurnError] = useState<string | null>(null);
+  const [withdrawals, setWithdrawals] = useState<
+    { nonce: string; amountNanomina: string; status: string }[] | null
+  >(null);
 
   useEffect(() => {
     let live = true;
@@ -74,6 +86,26 @@ export function Bridge({ session }: { session: Session }) {
       clearInterval(timer);
     };
   }, [session.packed]);
+
+  useEffect(() => {
+    let live = true;
+    const poll = async () => {
+      try {
+        const res = await fetch(`${API}/withdrawals/${session.minaAddress}`);
+        if (!res.ok) return;
+        const body = (await res.json()) as { withdrawals: typeof withdrawals };
+        if (live) setWithdrawals(body.withdrawals);
+      } catch {
+        // The deposit poll already surfaces an unreachable API.
+      }
+    };
+    void poll();
+    const timer = setInterval(poll, 8000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [session.minaAddress]);
 
   /**
    * Claim an attested deposit.
@@ -219,6 +251,84 @@ export function Bridge({ session }: { session: Session }) {
     }
   }
 
+  /**
+   * Burn FMINA and let the escrow release the MINA.
+   *
+   * One signed batch: approve the bridge, then burn. Atomic, so an approval
+   * cannot survive a failed burn — and submitted by the relayer, because the
+   * Mina key authorises but cannot pay for gas.
+   *
+   * Nothing else is signed afterwards. The burn *is* the authorisation: the
+   * FMINA is gone, and the event carries the recipient and the amount.
+   */
+  async function burn() {
+    const value = nanomina(burnAmount);
+    if (value === null) return;
+
+    setBurnError(null);
+    setBurning('Waiting for your Mina wallet…');
+    try {
+      const nonce = await nextNonce(session.x, session.isOdd);
+      const expiry = BigInt('18446744073709551615');
+
+      const calls = [
+        {
+          target: CONTRACTS.fmina,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: erc20Abi,
+            functionName: 'approve',
+            args: [CONTRACTS.bridge, value],
+          }),
+        },
+        {
+          target: CONTRACTS.bridge,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: bridgeAbi,
+            functionName: 'burnToMina',
+            args: [value, session.packed],
+          }),
+        },
+      ];
+
+      const signature = await signAuthorization(session.provider, {
+        purpose: PURPOSE.accountBatch,
+        chainId: 114n,
+        target: session.account,
+        actionHash: batchHash(calls),
+        nonce,
+        expiry,
+      });
+
+      setBurning('Submitting…');
+      const res = await fetch(`${API}/accounts/execute`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          account: session.account,
+          publicKey: { x: session.x.toString(), isOdd: session.isOdd, y: session.y.toString() },
+          signature: { field: signature.field, scalar: signature.scalar },
+          nonce: nonce.toString(),
+          expiry: expiry.toString(),
+          calls: calls.map((c) => ({
+            target: c.target,
+            value: c.value.toString(),
+            data: c.data,
+          })),
+        }),
+      });
+      const body = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(body.error ?? `relayer returned ${res.status}`);
+
+      setBurnAmount('');
+    } catch (e) {
+      setBurnError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBurning(null);
+    }
+  }
+
   const copy = async (text: string) => {
     await navigator.clipboard.writeText(text);
     setCopied(true);
@@ -310,8 +420,47 @@ export function Bridge({ session }: { session: Session }) {
       <div className="panel">
         <h2>Flare → Mina</h2>
         <p className="muted small" style={{ marginTop: 0 }}>
-          Burning FMINA emits a canonical withdrawal event that the Mina side releases against.
+          Burn FMINA and the escrow releases the same amount of MINA to your wallet. The burn is
+          the authorisation — there is nothing else to sign.
         </p>
+
+        <div className="field">
+          <label>Amount, in FMINA</label>
+          <input
+            value={burnAmount}
+            inputMode="decimal"
+            placeholder="1.0"
+            onChange={(e) => setBurnAmount(e.target.value)}
+          />
+        </div>
+
+        <div className="field">
+          <label>Goes to your Mina account</label>
+          <input readOnly value={session.minaAddress} className="mono" />
+        </div>
+
+        <button
+          className="primary"
+          style={{ marginTop: 14 }}
+          disabled={burning !== null || nanomina(burnAmount) === null}
+          onClick={burn}
+        >
+          {burning ?? 'Withdraw'}
+        </button>
+        {burnError !== null && <p className="status err">{burnError}</p>}
+
+        {withdrawals !== null && withdrawals.length > 0 && (
+          <div style={{ marginTop: 14 }}>
+            {withdrawals.map((w) => (
+              <div className="row" key={w.nonce}>
+                <span className="mono small">{Number(w.amountNanomina) / 1e9} MINA</span>
+                <span className={`tag ${w.status === 'released' ? 'ok' : 'warn'}`}>
+                  {w.status === 'released' ? 'released' : 'releasing…'}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="notice">
           <strong>Coming soon.</strong> Flare publishes Merkle roots signed by a weighted validator
           set, so proving a Flare event on Mina is signature verification — measured at 31,810

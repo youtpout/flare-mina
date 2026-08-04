@@ -35,6 +35,7 @@ import {
   AccountUpdate,
   Cache,
   Mina,
+  PrivateKey,
   PublicKey,
   UInt64,
   fetchAccount,
@@ -73,12 +74,31 @@ import {
 const CACHE_DIR = process.env.O1JS_CACHE_DIR;
 
 type BuildRequest = {
+  kind: 'deposit';
   id: number;
   sender: string;
   recipient: `0x${string}`;
   amountNanomina: string;
   nonce: string;
 };
+
+/**
+ * Release escrowed MINA against a burn that already happened on Flare.
+ *
+ * Unlike a deposit, this transaction is proved *and signed* here: it needs the
+ * withdrawal attestor's co-signature, and the user has nothing to sign — their
+ * FMINA is already gone. That is also what makes it the trusted half of the
+ * return path, GAP 2 in docs/threat-model.md.
+ */
+type ReleaseRequest = {
+  kind: 'release';
+  id: number;
+  nonce: string;
+  recipient: string;
+  amountNanomina: string;
+};
+
+type Request = BuildRequest | ReleaseRequest;
 
 type Ready = { type: 'ready'; compileMs: number };
 type Built = { type: 'built'; id: number; transaction: string; provingMs: number };
@@ -97,7 +117,7 @@ await initializeBindings();
 // which this worker's loader does not rewrite — the contracts package must be
 // built (`pnpm --filter @minaport/mina-contracts build`) before the relayer
 // starts.
-const { MinaPortBridge, flareRecipientField } = await import(
+const { MinaPortBridge, WithdrawalRecord, flareRecipientField } = await import(
   '@minaport/mina-contracts/dist/src/MinaPortBridge.js'
 );
 
@@ -124,7 +144,55 @@ port.postMessage({ type: 'ready', compileMs: Date.now() - compileStart } satisfi
 
 const bridge = new MinaPortBridge(PublicKey.fromBase58(bridgeAddress));
 
-port.on('message', async (request: BuildRequest) => {
+async function handleRelease(request: ReleaseRequest) {
+  const attestorKey = process.env.MINA_WITHDRAWAL_ATTESTOR_PRIVATE_KEY;
+  const feePayerKey = process.env.MINA_DEVNET_PRIVATE_KEY;
+  if (!attestorKey || !feePayerKey) {
+    throw new Error('MINA_WITHDRAWAL_ATTESTOR_PRIVATE_KEY and MINA_DEVNET_PRIVATE_KEY are required');
+  }
+
+  const attestor = PrivateKey.fromBase58(attestorKey);
+  const feePayer = PrivateKey.fromBase58(feePayerKey);
+  const sender = feePayer.toPublicKey();
+
+  await fetchAccount({ publicKey: sender });
+  await fetchAccount({ publicKey: bridge.address });
+  await fetchAccount({ publicKey: attestor.toPublicKey() });
+
+  const record = new WithdrawalRecord({
+    nonce: UInt64.from(BigInt(request.nonce)),
+    recipient: PublicKey.fromBase58(request.recipient),
+    amount: UInt64.from(BigInt(request.amountNanomina)),
+  });
+
+  const tx = await Mina.transaction(
+    { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000) },
+    async () => {
+      await bridge.releaseWithdrawal(record);
+    },
+  );
+  await tx.prove();
+
+  // Both signatures: the fee payer's, and the attestor's on the account update
+  // `releaseWithdrawal` creates for it.
+  const pending = await tx.sign([feePayer, attestor]).send();
+  return pending.hash;
+}
+
+port.on('message', async (request: Request) => {
+  if (request.kind === 'release') {
+    try {
+      port.postMessage({ type: 'released', id: request.id, hash: await handleRelease(request) });
+    } catch (error) {
+      port.postMessage({
+        type: 'failed',
+        id: request.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
+
   try {
     const sender = PublicKey.fromBase58(request.sender);
 

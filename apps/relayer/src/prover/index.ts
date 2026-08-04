@@ -69,6 +69,8 @@ function start(): Promise<void> {
           transaction: String(message.transaction),
           provingMs: Number(message.provingMs),
         });
+      } else if (message.type === 'released') {
+        entry.resolve({ transaction: String(message.hash), provingMs: 0 });
       } else {
         entry.reject(new Error(String(message.error)));
       }
@@ -101,6 +103,7 @@ export async function buildDeposit(request: DepositRequest): Promise<BuiltDeposi
     return new Promise<BuiltDeposit>((resolve, reject) => {
       pending.set(id, { resolve, reject });
       worker?.postMessage({
+        kind: 'deposit',
         id,
         sender: request.sender,
         recipient: request.recipient,
@@ -120,4 +123,40 @@ export async function buildDeposit(request: DepositRequest): Promise<BuiltDeposi
 /** How many requests are waiting or in flight. For the API to report a wait. */
 export function queueDepth(): number {
   return pending.size;
+}
+
+/**
+ * Release escrowed MINA for a burn that already happened on Flare.
+ *
+ * Queued behind deposits on the same worker: proving saturates its cores, and
+ * releases are serialised anyway because `releaseWithdrawal` reads and writes
+ * `lastWithdrawalNonce`. Returns the Mina transaction hash.
+ */
+export async function releaseWithdrawal(request: {
+  nonce: bigint;
+  recipient: string;
+  amountNanomina: bigint;
+}): Promise<string> {
+  await start();
+
+  const run = async (): Promise<string> => {
+    const id = nextId++;
+    return new Promise<string>((resolve, reject) => {
+      pending.set(id, {
+        resolve: (built) => resolve(built.transaction),
+        reject,
+      });
+      worker?.postMessage({
+        kind: 'release',
+        id,
+        nonce: request.nonce.toString(),
+        recipient: request.recipient,
+        amountNanomina: request.amountNanomina.toString(),
+      });
+    });
+  };
+
+  const result = queue.then(run, run);
+  queue = result.catch(() => undefined);
+  return result;
 }
