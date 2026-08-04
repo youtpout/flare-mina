@@ -116,7 +116,16 @@ export function Bridge({ session }: { session: Session }) {
         ],
       });
 
-      await submit(CONTRACTS.bridge, data);
+      const flareTxHash = await submit(CONTRACTS.bridge, data);
+
+      // Best-effort: the mint has happened either way, and `consumedIntents`
+      // on the bridge is what stops a second one. This is only so the row
+      // stops offering a Claim button.
+      await fetch(`${API}/deposits/${d.id}/claimed`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ flareTxHash }),
+      }).catch(() => undefined);
     } catch (e) {
       setClaimError(e instanceof Error ? e.message : String(e));
     } finally {

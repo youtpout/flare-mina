@@ -7,7 +7,15 @@ installResilientFetch();
 import cors from 'cors';
 import express from 'express';
 import { encodeMinaRecipient, parseMinaAddress } from '@minaport/shared';
-import { depositsFor, markSubmitted, migrate, nextNonceFor, pool, recordBuilt } from './db/index.js';
+import {
+  depositsFor,
+  markClaimed,
+  markSubmitted,
+  migrate,
+  nextNonceFor,
+  pool,
+  recordBuilt,
+} from './db/index.js';
 import { buildDeposit } from './prover/index.js';
 import { startWatcher } from './watcher.js';
 
@@ -106,6 +114,27 @@ app.post('/deposits/:id/submitted', async (req, res) => {
 
   try {
     await markSubmitted(req.params.id, minaTxHash);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/**
+ * The claim landed on Flare.
+ *
+ * Cosmetic on purpose: the mint already happened, and `consumedIntents` on the
+ * bridge is what actually prevents a second one. This only stops the UI from
+ * offering a Claim button for something already claimed.
+ */
+app.post('/deposits/:id/claimed', async (req, res) => {
+  const { flareTxHash } = req.body ?? {};
+  if (typeof flareTxHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(flareTxHash)) {
+    return res.status(400).json({ error: 'flareTxHash must be a 32-byte hex string' });
+  }
+
+  try {
+    await markClaimed(req.params.id, flareTxHash);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });

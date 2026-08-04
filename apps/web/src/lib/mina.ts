@@ -1,4 +1,5 @@
 import { keccak256, encodeAbiParameters, toHex, type Address, type Hex } from 'viem';
+import { toFieldSignature } from '@minaport/shared';
 
 /**
  * Mina wallet access and authorization signing.
@@ -11,10 +12,18 @@ import { keccak256, encodeAbiParameters, toHex, type Address, type Hex } from 'v
 export type MinaProvider = {
   requestAccounts(): Promise<string[]>;
   getAccounts?(): Promise<string[]>;
+  /**
+   * Sign a list of field elements.
+   *
+   * `signature` is a base58check string in every wallet checked, and in
+   * `mina-signer`'s own public API — the `{ field, scalar }` object form only
+   * comes out of its internal `sign`. Typed as both because the boundary
+   * should accept either; `toFieldSignature` normalises.
+   */
   signFields(args: { message: (string | bigint)[] }): Promise<{
     data: unknown;
     publicKey: string;
-    signature: { field: string; scalar: string };
+    signature: string | { field: string; scalar: string };
   }>;
   /**
    * Sign and broadcast a zkApp transaction the dApp built.
@@ -182,9 +191,6 @@ export async function signAuthorization(
   params: Parameters<typeof authorizationFields>[0],
 ): Promise<MinaSignature> {
   const result = await provider.signFields({ message: authorizationFields(params) });
-  return {
-    publicKey: result.publicKey,
-    field: result.signature.field,
-    scalar: result.signature.scalar,
-  };
+  const { field, scalar } = toFieldSignature(result.signature);
+  return { publicKey: result.publicKey, field: field.toString(), scalar: scalar.toString() };
 }
