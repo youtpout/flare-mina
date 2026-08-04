@@ -29,6 +29,20 @@ export type MinaProvider = {
     transaction: string;
     feePayer?: { fee?: number; memo?: string };
   }): Promise<{ hash: string }>;
+
+  /**
+   * Account and network changes.
+   *
+   * Optional because not every injected provider implements it, and a wallet
+   * that does not is still perfectly usable — the app just cannot follow a
+   * switch it is never told about.
+   *
+   * `accountsChanged` carries the new list, empty when the wallet locks or the
+   * site's permission is revoked.
+   */
+  on?(event: 'accountsChanged', handler: (accounts: string[]) => void): void;
+  on?(event: 'chainChanged', handler: (chain: unknown) => void): void;
+  removeListener?(event: string, handler: (...args: never[]) => void): void;
 };
 
 /**

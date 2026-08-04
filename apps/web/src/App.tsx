@@ -45,6 +45,36 @@ export function App() {
     return () => clearTimeout(timer);
   }, []);
 
+  /**
+   * Build a session from a Mina address.
+   *
+   * Everything the app shows hangs off this key: the Flare account is
+   * `CREATE2(packed)`, the deposit list is keyed by it, and the swap panel
+   * spends its balances. So switching accounts means rebuilding all of it, not
+   * patching the address in place.
+   */
+  const sessionFor = useCallback(
+    async (provider: MinaProvider, minaAddress: string): Promise<Session> => {
+      // Decompress to the curve point, then pack it the way the contracts do.
+      const parts = parseMinaAddress(minaAddress);
+      const point = decompressPublicKey(parts);
+      const packed = encodeMinaRecipient(parts);
+      const { address, deployed } = await deriveAccount(packed);
+
+      return {
+        provider,
+        minaAddress,
+        x: point.x,
+        y: point.y,
+        isOdd: parts.isOdd,
+        packed,
+        account: address,
+        deployed,
+      };
+    },
+    [],
+  );
+
   const connect = useCallback(async () => {
     setError(null);
     setConnecting(true);
@@ -55,28 +85,49 @@ export function App() {
       const [minaAddress] = await provider.requestAccounts();
       if (!minaAddress) throw new Error('Wallet returned no account');
 
-      // Decompress to the curve point, then pack it the way the contracts do.
-      const parts = parseMinaAddress(minaAddress);
-      const point = decompressPublicKey(parts);
-      const packed = encodeMinaRecipient(parts);
-      const { address, deployed } = await deriveAccount(packed);
-
-      setSession({
-        provider,
-        minaAddress,
-        x: point.x,
-        y: point.y,
-        isOdd: parts.isOdd,
-        packed,
-        account: address,
-        deployed,
-      });
+      setSession(await sessionFor(provider, minaAddress));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setConnecting(false);
     }
-  }, []);
+  }, [sessionFor]);
+
+  /**
+   * Follow the wallet when the user switches accounts.
+   *
+   * Without this the app keeps showing the previous key's Flare account,
+   * deposits and balances while the wallet signs as someone else — and a
+   * signature produced by the new key would be checked against the old one's
+   * derived address, so the transaction fails for a reason the screen does not
+   * explain. Silently wrong is the worst of the three possible behaviours.
+   *
+   * An empty list means the wallet locked or revoked this site: drop the
+   * session rather than leave a stale one on screen.
+   */
+  useEffect(() => {
+    const provider = session?.provider ?? getMinaProvider();
+    if (provider?.on === undefined) return;
+
+    const onAccountsChanged = (accounts: string[]) => {
+      const next = accounts[0];
+      if (next === undefined) {
+        setSession(null);
+        return;
+      }
+      // Re-deriving is cheap and the wallet is the authority, so do it on every
+      // event rather than trying to detect whether the key really changed.
+      void sessionFor(provider, next)
+        .then((built) => {
+          setSession(built);
+          setError(null);
+        })
+        .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    };
+
+    provider.on('accountsChanged', onAccountsChanged);
+    return () => provider.removeListener?.('accountsChanged', onAccountsChanged);
+  }, [session?.provider, sessionFor]);
 
   return (
     <>
