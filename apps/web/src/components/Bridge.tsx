@@ -31,7 +31,11 @@ type Deposit = {
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8787';
 
 const LABEL: Record<DepositStatus, string> = {
-  built: 'Proof built — waiting for your signature',
+  // The row is written before the proof exists, so the relayer can pick a
+  // deposit back up if it restarts mid-flight. This label therefore covers two
+  // phases — the relayer still proving, and the proof waiting to be signed —
+  // and must not claim the first one is over.
+  built: 'Preparing — your wallet will ask you to sign',
   submitted: 'Broadcast — waiting for inclusion on Mina',
   attested: 'Attested — ready to claim',
   claimed: 'Claimed',

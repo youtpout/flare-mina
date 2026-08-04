@@ -9,8 +9,8 @@
 // transaction building are exactly the calls that stall.
 {
   const original = globalThis.fetch;
-  const timeoutMs = Number(process.env.HTTP_TIMEOUT_MS ?? 8_000);
-  const attempts = Number(process.env.HTTP_ATTEMPTS ?? 4);
+  const timeoutMs = Number(process.env.HTTP_TIMEOUT_MS ?? 2_500);
+  const attempts = Number(process.env.HTTP_ATTEMPTS ?? 5);
 
   globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     let last: unknown;
@@ -104,7 +104,7 @@ const { MinaPortBridge, flareRecipientField } = await import(
 const bridgeAddress = process.env.MINA_BRIDGE_ACCOUNT;
 if (!bridgeAddress) throw new Error('MINA_BRIDGE_ACCOUNT is not set');
 
-const graphql = process.env.MINA_GRAPHQL ?? 'https://api.minascan.io/node/devnet/v1/graphql';
+const graphql = process.env.MINA_GRAPHQL ?? 'https://mina-devnet-graphql.aurowallet.com/graphql';
 // Both endpoints, explicitly. Given only a node URL, o1js leaves the archive
 // endpoint at its default and something in transaction building reaches for
 // it — which cost a flat 60s per deposit, the exact timeout of the public

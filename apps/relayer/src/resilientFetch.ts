@@ -22,6 +22,12 @@
  * up after `TIMEOUT_MS` and try again. The worst case becomes one timeout plus
  * a fast retry instead of a minute of silence.
  *
+ * The timeout is 2.5s because healthy responses measure 60-200ms. The first
+ * real deposit spent 24.6s of its 27s in three separate stalls, each burning
+ * an 8s timeout before retrying; at 2.5s the same deposit would have waited a
+ * third as long. Set it lower and a merely slow response gets abandoned; the
+ * retry count absorbs the difference.
+ *
  * # Why it patches the global
  *
  * o1js does its own fetching — `fetchAccount`, and whatever transaction
@@ -30,8 +36,8 @@
  * the ones that were stalling.
  */
 
-const TIMEOUT_MS = Number(process.env.HTTP_TIMEOUT_MS ?? 8_000);
-const ATTEMPTS = Number(process.env.HTTP_ATTEMPTS ?? 4);
+const TIMEOUT_MS = Number(process.env.HTTP_TIMEOUT_MS ?? 2_500);
+const ATTEMPTS = Number(process.env.HTTP_ATTEMPTS ?? 5);
 
 export function installResilientFetch(): void {
   const original = globalThis.fetch;

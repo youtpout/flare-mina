@@ -32,7 +32,7 @@ import { markAttested, markFailed, submittedDeposits, type DepositRow } from './
  * reachable when this was written, so this is the honest substitute.
  */
 
-const GRAPHQL = process.env.MINA_GRAPHQL ?? 'https://api.minascan.io/node/devnet/v1/graphql';
+const GRAPHQL = process.env.MINA_GRAPHQL ?? 'https://mina-devnet-graphql.aurowallet.com/graphql';
 const POLL_MS = Number(process.env.WATCH_INTERVAL_MS ?? 20_000);
 const CHAIN_ID = BigInt(process.env.FLARE_CHAIN_ID ?? 114);
 const BRIDGE = process.env.MINA_BRIDGE_ACCOUNT ?? '';
