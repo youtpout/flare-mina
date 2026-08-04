@@ -102,30 +102,50 @@ export function Bridge({ session }: { session: Session }) {
         expiry,
       });
 
-      const data = encodeFunctionData({
-        abi: bridgeAbi,
-        functionName: 'claimWithMinaSignature',
-        args: [
-          [session.x, session.isOdd, session.y],
-          [BigInt(signature.field), BigInt(signature.scalar)],
-          recipient,
-          amount,
-          nonce,
-          expiry,
-          d.attestation as Hex,
-        ],
-      });
-
-      const flareTxHash = await submit(CONTRACTS.bridge, data);
-
-      // Best-effort: the mint has happened either way, and `consumedIntents`
-      // on the bridge is what stops a second one. This is only so the row
-      // stops offering a Claim button.
-      await fetch(`${API}/deposits/${d.id}/claimed`, {
+      // Hand the signature to the relayer, which pays the gas. It cannot
+      // redirect or resize the mint — the bridge recomputes recipient, amount,
+      // nonce and expiry from this signature before minting — so submitting is
+      // a favour, not an authorisation. This is what lets a Mina user claim
+      // without holding an EVM key.
+      const res = await fetch(`${API}/deposits/${d.id}/claim`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ flareTxHash }),
-      }).catch(() => undefined);
+        body: JSON.stringify({
+          publicKey: { x: session.x.toString(), isOdd: session.isOdd, y: session.y.toString() },
+          signature: { field: signature.field, scalar: signature.scalar },
+          recipient,
+          amountNanomina: amount.toString(),
+          nonce: nonce.toString(),
+          expiry: expiry.toString(),
+          attestation: d.attestation,
+        }),
+      });
+      const body = (await res.json()) as { flareTxHash?: string; error?: string };
+
+      if (res.status === 501) {
+        // No relayer to pay for it, so fall back to the user's own wallet.
+        const data = encodeFunctionData({
+          abi: bridgeAbi,
+          functionName: 'claimWithMinaSignature',
+          args: [
+            [session.x, session.isOdd, session.y],
+            [BigInt(signature.field), BigInt(signature.scalar)],
+            recipient,
+            amount,
+            nonce,
+            expiry,
+            d.attestation as Hex,
+          ],
+        });
+        const flareTxHash = await submit(CONTRACTS.bridge, data);
+        await fetch(`${API}/deposits/${d.id}/claimed`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ flareTxHash }),
+        }).catch(() => undefined);
+      } else if (!res.ok) {
+        throw new Error(body.error ?? `relayer returned ${res.status}`);
+      }
     } catch (e) {
       setClaimError(e instanceof Error ? e.message : String(e));
     } finally {

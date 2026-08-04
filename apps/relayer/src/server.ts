@@ -17,6 +17,7 @@ import {
   recordBuilt,
 } from './db/index.js';
 import { buildDeposit } from './prover/index.js';
+import { submitClaim, submitterConfigured } from './submitter.js';
 import { startWatcher } from './watcher.js';
 
 /**
@@ -115,6 +116,41 @@ app.post('/deposits/:id/submitted', async (req, res) => {
   try {
     await markSubmitted(req.params.id, minaTxHash);
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/**
+ * Submit a claim to Flare, paying the gas.
+ *
+ * The caller supplies their own Schnorr signature; the bridge recomputes the
+ * recipient, amount, nonce and expiry from it before minting. This service
+ * therefore cannot redirect a mint, resize it, or replay it — see
+ * `submitter.ts`. Paying the gas is a favour, not an authorisation, which is
+ * what lets a Mina user claim without holding an EVM key at all.
+ */
+app.post('/deposits/:id/claim', async (req, res) => {
+  if (!submitterConfigured()) {
+    return res.status(501).json({ error: 'no submitter configured; submit from your own wallet' });
+  }
+
+  const { publicKey, signature, recipient, amountNanomina, nonce, expiry, attestation } =
+    req.body ?? {};
+
+  try {
+    const hash = await submitClaim({
+      publicKey: { x: BigInt(publicKey.x), isOdd: Boolean(publicKey.isOdd), y: BigInt(publicKey.y) },
+      signature: { field: BigInt(signature.field), scalar: BigInt(signature.scalar) },
+      recipient,
+      amountNanomina: BigInt(amountNanomina),
+      nonce: BigInt(nonce),
+      expiry: BigInt(expiry),
+      attestation,
+    });
+
+    await markClaimed(req.params.id, hash);
+    res.json({ flareTxHash: hash });
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
