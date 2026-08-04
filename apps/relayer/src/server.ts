@@ -1,3 +1,9 @@
+import { installResilientFetch } from './resilientFetch.js';
+
+// Bounds the public Mina endpoint's intermittent 60s stalls. Must run before
+// anything fetches — o1js included.
+installResilientFetch();
+
 import cors from 'cors';
 import express from 'express';
 import { encodeMinaRecipient, parseMinaAddress } from '@minaport/shared';

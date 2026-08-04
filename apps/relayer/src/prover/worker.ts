@@ -1,3 +1,33 @@
+// Bounds the public Mina endpoint's intermittent 60s stalls, which land on
+// roughly one request in three and answer 200 a minute later. Inlined rather
+// than imported from `../resilientFetch.ts`: this file is loaded as a worker
+// entry, where the loader does not rewrite `.js` specifiers to `.ts`. Fifteen
+// duplicated lines beat fighting the resolver. See that file for the
+// measurements and for what was ruled out.
+//
+// Must run before anything fetches — o1js included, since `fetchAccount` and
+// transaction building are exactly the calls that stall.
+{
+  const original = globalThis.fetch;
+  const timeoutMs = Number(process.env.HTTP_TIMEOUT_MS ?? 8_000);
+  const attempts = Number(process.env.HTTP_ATTEMPTS ?? 4);
+
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    let last: unknown;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        const timeout = AbortSignal.timeout(timeoutMs);
+        const signal = init?.signal != null ? AbortSignal.any([init.signal, timeout]) : timeout;
+        return await original(input, { ...init, signal });
+      } catch (error) {
+        last = error;
+        if (init?.signal?.aborted) throw error;
+      }
+    }
+    throw last;
+  };
+}
+
 import { parentPort } from 'node:worker_threads';
 import {
   setBackend,
@@ -62,13 +92,28 @@ const port = parentPort;
 setBackend('native');
 await initializeBindings();
 
-const { MinaPortBridge, flareRecipientField } = await import('@minaport/mina-contracts');
+// Imported from the built output rather than the package root. The root
+// entry is TypeScript source whose relative imports use `.js` extensions,
+// which this worker's loader does not rewrite — the contracts package must be
+// built (`pnpm --filter @minaport/mina-contracts build`) before the relayer
+// starts.
+const { MinaPortBridge, flareRecipientField } = await import(
+  '@minaport/mina-contracts/dist/src/MinaPortBridge.js'
+);
 
 const bridgeAddress = process.env.MINA_BRIDGE_ACCOUNT;
 if (!bridgeAddress) throw new Error('MINA_BRIDGE_ACCOUNT is not set');
 
 const graphql = process.env.MINA_GRAPHQL ?? 'https://api.minascan.io/node/devnet/v1/graphql';
-Mina.setActiveInstance(Mina.Network(graphql));
+// Both endpoints, explicitly. Given only a node URL, o1js leaves the archive
+// endpoint at its default and something in transaction building reaches for
+// it — which cost a flat 60s per deposit, the exact timeout of the public
+// archive that has been returning 504 all day. Pointing archive at the node
+// makes that call fail in milliseconds instead of hanging.
+//
+// Nothing here needs archive data: the relayer builds its own deposits, so it
+// has no actions to read back.
+Mina.setActiveInstance(Mina.Network({ mina: graphql, archive: graphql }));
 
 // Compile once, at start-up. A cold compile rebuilds the SRS and Lagrange
 // bases and costs seconds; a warm one reads them back. Mount O1JS_CACHE_DIR on
@@ -86,8 +131,12 @@ port.on('message', async (request: BuildRequest) => {
     // The sender's on-chain account is needed to build a valid transaction
     // (fee-payer nonce, balance). Fetching it here rather than trusting the
     // caller means a wrong address fails now, not at broadcast time.
+    let t = Date.now();
     await fetchAccount({ publicKey: sender });
+    console.log(`  fetch sender: ${Date.now() - t}ms`);
+    t = Date.now();
     await fetchAccount({ publicKey: bridge.address });
+    console.log(`  fetch bridge: ${Date.now() - t}ms`);
 
     const started = Date.now();
     const tx = await Mina.transaction({ sender, fee: Number(process.env.MINA_FEE ?? 100_000_000) }, async () => {
@@ -97,7 +146,10 @@ port.on('message', async (request: BuildRequest) => {
         UInt64.from(BigInt(request.amountNanomina)),
       );
     });
+    console.log(`  build: ${Date.now() - started}ms`);
+    t = Date.now();
     await tx.prove();
+    console.log(`  prove: ${Date.now() - t}ms`);
 
     port.postMessage({
       type: 'built',

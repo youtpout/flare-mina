@@ -4,21 +4,21 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts",
-    "migrate": "tsx src/migrate.ts",
+    "dev": "node --env-file=.env --import tsx --watch src/server.ts",
+    "start": "node --env-file=.env --import tsx src/server.ts",
+    "migrate": "node --env-file=.env --import tsx src/migrate.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@minaport/mina-contracts": "workspace:*",
     "@minaport/shared": "workspace:*",
+    "@o1js/native": "^2.15.0",
     "cors": "^2.8.5",
     "express": "^4.21.2",
-    "pg": "^8.13.1",
-    "viem": "^2.21.54",
-    "@minaport/mina-contracts": "workspace:*",
     "o1js": "^2.15.0",
-    "@o1js/native": "^2.15.0"
+    "pg": "^8.13.1",
+    "viem": "^2.21.54"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
