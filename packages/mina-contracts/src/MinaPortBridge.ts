@@ -15,6 +15,7 @@ import {
   state,
 } from 'o1js';
 import { DEPOSIT_DOMAIN, EVM_ADDRESS_BITS, WITHDRAWAL_DOMAIN } from './constants.js';
+import { SigningPolicyProof } from './SigningPolicyFold.js';
 
 /**
  * MinaPort bridge zkApp — the Mina side of the MINA <-> wMINA bridge.
@@ -176,6 +177,33 @@ export class MinaPortBridge extends SmartContract {
   @state(PublicKey) withdrawalAttestor = State<PublicKey>();
 
   /**
+   * The Flare Merkle root this bridge has accepted, as a Poseidon commitment
+   * over its 32 bytes.
+   *
+   * Published once per Flare voting round by `publishFlareRoot`, which verifies
+   * that enough of Flare's validators signed it. Every withdrawal in that round
+   * then proves inclusion against this one value — so the expensive half, the
+   * ECDSA verification, is paid once and amortised across all of them rather
+   * than repeated per withdrawal.
+   *
+   * Stored as a Poseidon hash because a 32-byte root does not fit in one field
+   * element, and because comparing one field is cheaper than comparing 32
+   * bytes in a circuit.
+   */
+  @state(Field) flareRoot = State<Field>();
+
+  /**
+   * Signing weight required before a root is accepted.
+   *
+   * Set at deployment rather than hard-coded, because the number that means
+   * "the validators agreed" is a property of the network, not of this
+   * contract: Coston2 has 8 voters and mainnet allows 100. A demo can require
+   * very little and production the real threshold, without the circuits
+   * changing.
+   */
+  @state(UInt64) requiredWeight = State<UInt64>();
+
+  /**
    * Administrative key, fixed at deployment.
    *
    * The only privilege it holds is rotating `withdrawalAttestor`. It cannot
@@ -198,15 +226,24 @@ export class MinaPortBridge extends SmartContract {
    * permissions); the two keys are written afterwards so the contract is never
    * live with an unset admin that a third party could claim.
    */
-  override async deploy(args: DeployArgs & { admin: PublicKey; withdrawalAttestor: PublicKey }) {
+  override async deploy(
+    args: DeployArgs & {
+      admin: PublicKey;
+      withdrawalAttestor: PublicKey;
+      /** Signing weight a Flare root must carry. Zero accepts any. */
+      requiredWeight?: UInt64;
+    },
+  ) {
     await super.deploy(args);
     this.admin.set(args.admin);
     this.withdrawalAttestor.set(args.withdrawalAttestor);
+    this.requiredWeight.set(args.requiredWeight ?? UInt64.zero);
   }
 
   override init() {
     super.init();
     this.lastWithdrawalNonce.set(UInt64.zero);
+    this.flareRoot.set(Field(0));
 
     this.account.permissions.set({
       ...Permissions.default(),
@@ -302,6 +339,47 @@ export class MinaPortBridge extends SmartContract {
       }),
     );
     this.emitEvent('deposit', new DepositEvent({ nonce, sender, flareRecipient, amount }));
+  }
+
+  /**
+   * Accept a Flare Merkle root that enough validators signed.
+   *
+   * # Why this is separate from releasing
+   *
+   * Verifying Flare's signing policy is the expensive half — one secp256k1
+   * verification is 31,812 rows, and a threshold needs several. Doing it inside
+   * `releaseWithdrawal` would charge every withdrawal for work that is
+   * identical across all withdrawals in the same voting round.
+   *
+   * So it happens once, here. A root is checked and stored; every withdrawal
+   * that round then proves inclusion against it, which is only a Merkle path.
+   * The cost is amortised over the round rather than repeated per user.
+   *
+   * # What it does not check
+   *
+   * That the signers belong to Flare's signing policy — see the note at the top
+   * of `SigningPolicyFold`. Until that lands, this is a structural placeholder:
+   * the shape is right and the trust is not yet there, which is why
+   * `withdrawalAttestor` is still what `releaseWithdrawal` requires.
+   *
+   * Permissionless on purpose. The proof is the authorisation, so anyone may
+   * pay to publish a root, and a relayer that stops publishing can be routed
+   * around by any party holding the same proof.
+   */
+  @method async publishFlareRoot(proof: SigningPolicyProof) {
+    proof.verify();
+
+    const required = this.requiredWeight.getAndRequireEquals();
+    proof.publicOutput.weight.value.assertGreaterThanOrEqual(
+      required.value,
+      'signing weight below the required threshold',
+    );
+
+    // The root is 32 bytes; state holds field elements. Poseidon over the bytes
+    // is the commitment an inclusion proof will be compared against, and one
+    // field comparison is far cheaper in circuit than thirty-two.
+    this.flareRoot.getAndRequireEquals();
+    this.flareRoot.set(Poseidon.hash(proof.publicOutput.message.bytes.map((b) => b.value)));
   }
 
   /**
