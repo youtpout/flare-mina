@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { AccountUpdate, Field, Mina, PrivateKey, PublicKey, UInt64 } from 'o1js';
 import {
   DepositAction,
+  DepositEvent,
   MinaPortBridge,
   WithdrawalRecord,
   flareRecipientField,
@@ -113,6 +114,30 @@ describe('deposit', () => {
 
     expect(Mina.getBalance(zkAppAddress).toBigInt()).toBe(balanceBefore);
     expect(await dispatchedActions()).toHaveLength(actionsBefore);
+  }, 120_000);
+
+  /**
+   * The event is a journal, not the machine — but an unread journal is worse
+   * than none, so it gets a test rather than a comment.
+   *
+   * It carries the same facts as the action, in a form that needs no hash-chain
+   * decoding: a watcher that has not implemented the action encoding can still
+   * see who deposited what, for whom.
+   */
+  it('emits a readable deposit event alongside the action', async () => {
+    await deposit(userKey, 42n, RECIPIENT_B, 4n * MINA);
+
+    // Located by its nonce rather than by position: `fetchEvents` makes no
+    // ordering promise this test should depend on.
+    const emitted = (await bridge.fetchEvents())
+      .filter((e) => e.type === 'deposit')
+      .map((e) => e.event.data as unknown as DepositEvent)
+      .find((d) => d.nonce.toBigInt() === 42n);
+
+    expect(emitted, 'no deposit event carrying nonce 42').toBeDefined();
+    expect(emitted!.amount.toBigInt()).toBe(4n * MINA);
+    expect(emitted!.sender.toBase58()).toBe(user.toBase58());
+    expect(flareRecipientHex(emitted!.flareRecipient)).toBe(RECIPIENT_B);
   }, 120_000);
 
   it('binds the exact Flare recipient into the action', async () => {

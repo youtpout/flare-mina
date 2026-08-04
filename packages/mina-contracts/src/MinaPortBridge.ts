@@ -90,6 +90,46 @@ export class WithdrawalRecord extends Struct({
 }
 
 /**
+ * A deposit, as a readable log line.
+ *
+ * Events and actions are not alternatives here, they answer different
+ * questions. The action is the machine: it feeds `actionState`, which is the
+ * commitment a settlement proof attests to. The event is the journal: nothing
+ * on chain reads it, and it exists so a watcher that has not implemented the
+ * action encoding can still see what happened.
+ *
+ * What it does NOT do is remove the archive-node dependency — events are
+ * fetched the same way actions are. It buys readability, not availability.
+ *
+ * # What it costs
+ *
+ * ~53 rows per emit: `deposit` 744 -> 797, `releaseWithdrawal` 1006 -> 1058.
+ * The second one crosses 1024, so the Pickles domain doubles to 2048.
+ *
+ * Proving measured 2.1 s without and 2.3 s with — but on a machine whose load
+ * moved between the runs, and a follow-up that should have been *faster* came
+ * out slower. The effect is at or below the noise floor here, so treat "about
+ * 10%, maybe less" as the honest answer and re-measure on an idle machine
+ * before optimising against it.
+ *
+ * It does not touch `actionState`, so it cannot affect settlement or the
+ * concurrency property that keeps `deposit` free of state preconditions.
+ */
+export class DepositEvent extends Struct({
+  nonce: UInt64,
+  sender: PublicKey,
+  flareRecipient: Field,
+  amount: UInt64,
+}) {}
+
+/** A release, same purpose. */
+export class WithdrawalEvent extends Struct({
+  nonce: UInt64,
+  recipient: PublicKey,
+  amount: UInt64,
+}) {}
+
+/**
  * The deposit escrow.
  *
  * # Why there is almost no state here
@@ -145,6 +185,11 @@ export class MinaPortBridge extends SmartContract {
   @state(PublicKey) admin = State<PublicKey>();
 
   reducer = Reducer({ actionType: DepositAction });
+
+  override events = {
+    deposit: DepositEvent,
+    withdrawal: WithdrawalEvent,
+  };
 
   /**
    * Deploy with an explicit admin and attestor.
@@ -256,6 +301,7 @@ export class MinaPortBridge extends SmartContract {
         amount,
       }),
     );
+    this.emitEvent('deposit', new DepositEvent({ nonce, sender, flareRecipient, amount }));
   }
 
   /**
@@ -288,6 +334,14 @@ export class MinaPortBridge extends SmartContract {
     this.lastWithdrawalNonce.set(record.nonce);
 
     this.send({ to: record.recipient, amount: record.amount });
+    this.emitEvent(
+      'withdrawal',
+      new WithdrawalEvent({
+        nonce: record.nonce,
+        recipient: record.recipient,
+        amount: record.amount,
+      }),
+    );
   }
 }
 
