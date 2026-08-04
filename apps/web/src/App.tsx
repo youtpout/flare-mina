@@ -94,6 +94,34 @@ export function App() {
   }, [sessionFor]);
 
   /**
+   * Restore the session on load when the wallet has already authorised us.
+   *
+   * `getAccounts` returns what is already granted without prompting, unlike
+   * `requestAccounts`. Without this, every refresh looks like a disconnect --
+   * which it is not, the permission is still there -- and any code that
+   * reloads the page throws the user back to the connect screen.
+   */
+  useEffect(() => {
+    if (session !== null) return;
+    const provider = getMinaProvider();
+    if (provider?.getAccounts === undefined) return;
+
+    let live = true;
+    void provider
+      .getAccounts()
+      .then(async (accounts) => {
+        const first = accounts[0];
+        if (!live || first === undefined) return;
+        setSession(await sessionFor(provider, first));
+      })
+      .catch(() => undefined); // Not yet authorised is the normal case, not an error.
+
+    return () => {
+      live = false;
+    };
+  }, [hasWallet, session, sessionFor]);
+
+  /**
    * Follow the wallet when the user switches accounts.
    *
    * Without this the app keeps showing the previous key's Flare account,
@@ -128,6 +156,12 @@ export function App() {
     provider.on('accountsChanged', onAccountsChanged);
     return () => provider.removeListener?.('accountsChanged', onAccountsChanged);
   }, [session?.provider, sessionFor]);
+
+  /** Re-derive the session from the chain, e.g. after the account is deployed. */
+  const refresh = useCallback(async () => {
+    if (session === null) return;
+    setSession(await sessionFor(session.provider, session.minaAddress));
+  }, [session, sessionFor]);
 
   return (
     <>
@@ -174,7 +208,7 @@ export function App() {
             ))}
           </div>
 
-          {tab === 'portfolio' && <Portfolio session={session} />}
+          {tab === 'portfolio' && <Portfolio session={session} onRefresh={refresh} />}
           {tab === 'swap' && <Swap session={session} />}
           {tab === 'bridge' && <Bridge session={session} />}
         </>

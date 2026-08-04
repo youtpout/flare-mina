@@ -8,7 +8,13 @@ const short = (s: string, head = 10, tail = 8) =>
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8787';
 
-export function Portfolio({ session }: { session: Session }) {
+export function Portfolio({
+  session,
+  onRefresh,
+}: {
+  session: Session;
+  onRefresh: () => Promise<void>;
+}) {
   const [balances, setBalances] = useState<Balance[] | null>(null);
   const [native, setNative] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -29,9 +35,9 @@ export function Portfolio({ session }: { session: Session }) {
       const res = await fetch(`${API}/accounts/${session.packed}/deploy`, { method: 'POST' });
       const body = (await res.json()) as { flareTxHash?: string; error?: string };
       if (!res.ok) throw new Error(body.error ?? `relayer returned ${res.status}`);
-      // Reload so the derived state comes back from the chain rather than
-      // being guessed at here.
-      window.location.reload();
+      // Re-read from the chain rather than assuming success flipped the flag,
+      // and without reloading -- a reload would drop the session.
+      await onRefresh();
     } catch (e) {
       setDeployError(e instanceof Error ? e.message : String(e));
     } finally {
