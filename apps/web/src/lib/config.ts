@@ -20,6 +20,14 @@ export const COSTON2 = {
 export const CONTRACTS = {
   authRegistry: '0xcf12aCe3f7D13EE714D57ee22EfA14cbb662fc56',
   accountFactory: '0x2a2AcdD54B93675828028fb8108fACc0A387fe23',
+  /** Locks Flare assets so they can be minted as fungible tokens on Mina. */
+  assetVault: '0x933c86c764BFD1f8756c74f1e3fdeCfCB61c2b03',
+  /**
+   * C2FLR, rounded from 18 decimals to 9 so Mina's `UInt64` can hold a real
+   * supply of it. The native token is not an ERC-20 and `WNat` is 18 decimals,
+   * which caps at ~18.4 whole tokens on Mina.
+   */
+  wrappedC2flr: '0x6C790956D728ed82A75d2ec8D5c37F2e2F36b978',
   bridge: '0xdb78DA6dd5eC73b7089799eE85Fc2E43126CBae2',
   fmina: '0x68189e3a6F0Ef2D1accFd62b6De9abF791B3722e',
   wrapperFactory: '0x98f0CA385dBe0724b4D9211fA4e515eB4d6848b7',
