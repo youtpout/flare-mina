@@ -17,6 +17,14 @@ export const publicClient = createPublicClient({
     name: COSTON2.name,
     nativeCurrency: { name: COSTON2.nativeSymbol, symbol: COSTON2.nativeSymbol, decimals: 18 },
     rpcUrls: { default: { http: [COSTON2.rpc] } },
+    // Coston2 has the canonical Multicall3, at the same address as every other
+    // chain that ships it. viem will not use it unless the chain declares it,
+    // and `publicClient.multicall` fails outright rather than falling back to
+    // one call per read -- which is how the balances panel came to say
+    // 'does not support contract "multicall3"' on a chain that does.
+    contracts: {
+      multicall3: { address: '0xcA11bde05977b3631167028862bE2a173976CA11' },
+    },
   },
   transport: http(COSTON2.rpc),
 });
