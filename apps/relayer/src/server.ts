@@ -17,7 +17,7 @@ import {
   recordBuilt,
 } from './db/index.js';
 import { buildDeposit } from './prover/index.js';
-import { submitClaim, submitterConfigured } from './submitter.js';
+import { deployAccount, submitClaim, submitterConfigured } from './submitter.js';
 import { startWatcher } from './watcher.js';
 
 /**
@@ -116,6 +116,30 @@ app.post('/deposits/:id/submitted', async (req, res) => {
   try {
     await markSubmitted(req.params.id, minaTxHash);
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/**
+ * Deploy the caller's `MinaAccount`, paying the gas.
+ *
+ * Permissionless by design — the address is `CREATE2(minaKey)`, so who sends
+ * the transaction has no bearing on who controls the account. This route
+ * therefore takes no signature and grants nothing; it spends gas on the user's
+ * behalf and nothing else.
+ */
+app.post('/accounts/:minaKey/deploy', async (req, res) => {
+  const minaKey = req.params.minaKey;
+  if (!/^0x[0-9a-fA-F]{64}$/.test(minaKey)) {
+    return res.status(400).json({ error: 'minaKey must be a 32-byte hex string' });
+  }
+  if (!submitterConfigured()) {
+    return res.status(501).json({ error: 'no submitter configured; deploy from your own wallet' });
+  }
+
+  try {
+    res.json({ flareTxHash: await deployAccount(minaKey as `0x${string}`) });
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }

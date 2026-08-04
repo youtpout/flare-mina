@@ -40,6 +40,11 @@ const bridgeAbi = parseAbi([
   'function claimWithMinaSignature((uint256,bool,uint256) publicKey,(uint256,uint256) signature,address recipient,uint64 amountNanomina,uint64 nonce,uint64 expiry,bytes attestation)',
 ]);
 
+const factoryAbi = parseAbi([
+  'function deploy(bytes32 minaKey) returns (address)',
+  'function isDeployed(bytes32 minaKey) view returns (bool)',
+]);
+
 export type ClaimRequest = {
   publicKey: { x: bigint; isOdd: boolean; y: bigint };
   signature: { field: bigint; scalar: bigint };
@@ -49,6 +54,49 @@ export type ClaimRequest = {
   expiry: bigint;
   attestation: Hex;
 };
+
+/**
+ * Deploy the `MinaAccount` for a Mina key.
+ *
+ * Takes no signature and needs none. The address is `CREATE2(minaKey)`, so
+ * deploying is permissionless and idempotent-by-address: a stranger doing it
+ * changes nothing about who controls the account, and the contract still only
+ * moves funds on a Schnorr signature from that one key. All this call spends is
+ * gas.
+ *
+ * Nothing requires it up front — an address holds ERC-20 balances with no code
+ * at all, which is why the bridge could mint here before any of this existed.
+ * Deployment is only needed to *spend*, so it is offered rather than forced.
+ */
+export async function deployAccount(minaKey: Hex): Promise<Hex> {
+  const key = process.env.FLARE_SUBMITTER_PRIVATE_KEY;
+  const factory = process.env.FLARE_ACCOUNT_FACTORY as `0x${string}` | undefined;
+  if (!key || factory === undefined) throw new Error('no submitter configured');
+
+  const account = privateKeyToAccount(key as Hex);
+  const wallet = createWalletClient({ account, chain: COSTON2, transport: http(RPC) });
+  const publicClient = createPublicClient({ chain: COSTON2, transport: http(RPC) });
+
+  // Cheaper to ask than to send a transaction that reverts on redeployment.
+  const already = await publicClient.readContract({
+    address: factory,
+    abi: factoryAbi,
+    functionName: 'isDeployed',
+    args: [minaKey],
+  });
+  if (already) throw new Error('account is already deployed');
+
+  const hash = await wallet.writeContract({
+    address: factory,
+    abi: factoryAbi,
+    functionName: 'deploy',
+    args: [minaKey],
+  });
+
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== 'success') throw new Error(`deployment reverted (${hash})`);
+  return hash;
+}
 
 export function submitterConfigured(): boolean {
   return (
