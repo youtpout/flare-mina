@@ -14,7 +14,8 @@ import {
  * These run with `proofsEnabled: false`, so they exercise the constraints
  * rather than produce proofs — the timings live in the benchmark. What they
  * pin is the part a wrong implementation would get quietly wrong: that `count`
- * means *distinct signers*, and that a fold cannot drift off its message.
+ * means *distinct signers*, and that two proofs about different roots cannot
+ * be combined.
  */
 
 const POLICY = Field(0xf1a2e);
@@ -46,65 +47,72 @@ function signerFor(voter: Voter, over: Bytes32 = message): SignerInput {
   });
 }
 
-describe('folding validator signatures', () => {
-  it('accumulates count and weight across a chain', async () => {
-    const { proof: first } = await SigningPolicyFold.base(message, POLICY, signerFor(voters[0]!));
-    expect(first.publicOutput.count.toString()).toBe('1');
-    expect(first.publicOutput.weight.toString()).toBe('100');
+async function single(voter: Voter, over: Bytes32 = message) {
+  const { proof } = await SigningPolicyFold.single(message, POLICY, signerFor(voter, over));
+  return proof;
+}
 
-    const { proof: second } = await SigningPolicyFold.step(first, signerFor(voters[1]!));
-    const { proof: third } = await SigningPolicyFold.step(second, signerFor(voters[2]!));
+describe('merging validator signatures', () => {
+  it('sums count and weight across a merge', async () => {
+    const a = await single(voters[0]!);
+    expect(a.publicOutput.count.toString()).toBe('1');
+    expect(a.publicOutput.weight.toString()).toBe('100');
 
-    expect(third.publicOutput.count.toString()).toBe('3');
+    const b = await single(voters[1]!);
+    const { proof: ab } = await SigningPolicyFold.merge(a, b);
+    const c = await single(voters[2]!);
+    const { proof: abc } = await SigningPolicyFold.merge(ab, c);
+
+    expect(abc.publicOutput.count.toString()).toBe('3');
     // 100 + 200 + 300. Weight, not headcount, is what Flare's threshold is
     // expressed in, so a consumer checking only the count is making a weaker
     // claim than Flare does.
-    expect(third.publicOutput.weight.toString()).toBe('600');
+    expect(abc.publicOutput.weight.toString()).toBe('600');
+    expect(abc.publicOutput.minIndex.toString()).toBe('0');
+    expect(abc.publicOutput.maxIndex.toString()).toBe('2');
   }, 300_000);
 
   /**
    * The property the whole design rests on.
    *
-   * Without strictly increasing indices, one signature folded five times reads
-   * as five signers — and a threshold of five would be met by a single
-   * validator.
+   * Without disjoint index ranges, merging a proof with itself doubles both
+   * count and weight — and a threshold of five would be met by one validator
+   * signing once.
    */
-  it('refuses the same signer twice', async () => {
-    const { proof } = await SigningPolicyFold.base(message, POLICY, signerFor(voters[3]!));
-    await expect(SigningPolicyFold.step(proof, signerFor(voters[3]!))).rejects.toThrow(
-      /strictly ordered/,
-    );
+  it('refuses to merge a proof with itself', async () => {
+    const a = await single(voters[3]!);
+    await expect(SigningPolicyFold.merge(a, a)).rejects.toThrow(/strictly ascending/);
   }, 300_000);
 
-  /** Out-of-order is refused for the same reason, and by the same check. */
-  it('refuses a signer that goes backwards', async () => {
-    const { proof } = await SigningPolicyFold.base(message, POLICY, signerFor(voters[5]!));
-    await expect(SigningPolicyFold.step(proof, signerFor(voters[2]!))).rejects.toThrow(
-      /strictly ordered/,
-    );
+  /** Overlapping ranges are refused for the same reason, and by the same check. */
+  it('refuses ranges that overlap or go backwards', async () => {
+    const high = await single(voters[5]!);
+    const low = await single(voters[2]!);
+    await expect(SigningPolicyFold.merge(high, low)).rejects.toThrow(/strictly ascending/);
   }, 300_000);
 
   it('refuses a signature over a different message', async () => {
     const other = Bytes32.random();
     await expect(
-      SigningPolicyFold.base(message, POLICY, signerFor(voters[0]!, other)),
+      SigningPolicyFold.single(message, POLICY, signerFor(voters[0]!, other)),
     ).rejects.toThrow();
   }, 300_000);
 
   /**
-   * A step signs the message the chain started with, not one it supplies, so
-   * two roots cannot be merged into one claim. Checked by folding a signature
-   * that is valid over a different root and watching it fail against the
-   * carried one.
+   * Each leaf carries the root it verified, and a merge checks both sides
+   * agree. Otherwise a valid signature over one root could be counted towards
+   * the threshold for another.
    */
-  it('pins every step to the message the fold began with', async () => {
-    const { proof } = await SigningPolicyFold.base(message, POLICY, signerFor(voters[0]!));
+  it('refuses to merge proofs about different roots', async () => {
+    const here = await single(voters[0]!);
+
     const elsewhere = Bytes32.random();
+    const { proof: there } = await SigningPolicyFold.single(
+      elsewhere,
+      POLICY,
+      signerFor(voters[1]!, elsewhere),
+    );
 
-    await expect(
-      SigningPolicyFold.step(proof, signerFor(voters[1]!, elsewhere)),
-    ).rejects.toThrow();
-
-    expect(proof.publicOutput.message.toHex()).toBe(message.toHex());
+    await expect(SigningPolicyFold.merge(here, there)).rejects.toThrow(/signed root/);
   }, 300_000);
 });

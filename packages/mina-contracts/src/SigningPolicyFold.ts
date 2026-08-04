@@ -11,44 +11,68 @@ import {
 } from 'o1js';
 
 /**
- * Folds Flare validator signatures until enough of them agree.
+ * Proves that enough of Flare's validators signed a root, by merging.
  *
  * # What this replaces
  *
- * Today the Flare -> Mina return path trusts one attestor key to say a burn
+ * The Flare -> Mina return path trusts one attestor key to say a burn
  * happened — GAP 2 in docs/threat-model.md. This is the machinery that removes
  * it: Flare's Relay publishes Merkle roots signed by its validator set, so
  * proving a Flare event on Mina is signature verification rather than
- * recursive proof verification. That is what makes this direction tractable at
- * all, and it is the reason the asymmetry in the design exists.
+ * recursive proof verification. That is the whole reason this direction is
+ * tractable, and why the design is asymmetric.
  *
- * # Why recursion is not optional
+ * # Why merge rather than fold
  *
- * One secp256k1 verification costs **31,812 rows**, measured. Mina's proof
- * domain caps at 65,536, so two signatures do not fit in one proof and the
- * second one already forces recursion. Depth is the only thing that changes
- * between networks:
+ * A linear chain — verify one, then another on top — makes every signature wait
+ * for the one before it. Fifty signatures is fifty sequential proofs.
  *
- * | network  | voters | signatures past threshold | steps | proving |
- * |----------|--------|---------------------------|-------|---------|
- * | Coston2  | 8      | ~5                        | ~5    | ~18 s   |
- * | mainnet  | ≤100   | ~50                       | ~50   | ~3 min  |
+ * Merging makes the leaves independent: every `single` proof stands alone and
+ * they can all be produced at once, then combined pairwise. Depth goes from
+ * *n* to *log n*, and the wall-clock from the sum of the proofs to roughly the
+ * slowest one plus a handful of merges.
  *
- * Nothing here is written for either number. The fold is generic in depth and
- * the consumer decides when it has seen enough, which is the only way a
- * hackathon-sized threshold does not become a mainnet-sized bug.
+ * It also removes the conditional loop the chain needed for short inputs. Each
+ * proof does exactly one thing, and composition is where the structure lives.
  *
- * # Why the signer index is in the accumulator
+ * # Why recursion is not optional either way
+ *
+ * One secp256k1 verification is **31,812 rows**, measured, against a 65,536-row
+ * domain. Two do not fit, so the *second* signature already forces recursion.
+ * Only the depth changes between networks:
+ *
+ * | network  | voters | signatures past threshold | merge depth |
+ * |----------|--------|---------------------------|-------------|
+ * | Coston2  | 8      | ~5                        | 3           |
+ * | mainnet  | ≤100   | ~50                       | 6           |
+ *
+ * Nothing here is written for either number, and the consumer decides when it
+ * has seen enough — a contract can require 2 for a demo and the real weight
+ * threshold in production without this changing.
+ *
+ * # Why the index range is in the state
  *
  * Counting signatures is worthless without distinctness: the same signature
- * folded five times would otherwise read as five signers. Each step therefore
- * asserts its signer sits at a strictly greater index in the signing policy
- * than the previous one, which makes duplicates impossible and, as a side
- * effect, fixes the fold order.
+ * merged five times would otherwise read as five signers. Each state therefore
+ * carries the range of policy indices it covers, and a merge asserts the left
+ * range ends strictly before the right one begins. Disjointness follows, and
+ * with it the meaning of `count`.
  *
- * Weight is accumulated alongside the count because Flare's security is
- * weight-based, not headcount-based. A consumer that only checks the count is
- * making a weaker statement than the one Flare makes, and should know it.
+ * Weight is accumulated alongside because Flare's threshold is expressed in
+ * weight, not headcount. A consumer checking only `count` is making a weaker
+ * claim than Flare does.
+ *
+ * # NOT YET SOUND: the signer is not bound to the policy
+ *
+ * `policy` is carried but nothing constrains `(index, publicKey, weight)` to
+ * belong to it, so a prover can name any key and claim any weight. What this
+ * proves today is *"n valid ECDSA signatures over this message, at distinct
+ * ascending indices"* — real, and the expensive part, but not yet *"Flare's
+ * signing policy approved this root"*.
+ *
+ * Closing it means proving membership against `Relay.toSigningPolicyHash`,
+ * which is keccak — and keccak costs 14,636 rows against Poseidon's 13. That
+ * is the next piece, and it must land before this replaces the attestor.
  */
 
 export class Secp256k1 extends createForeignCurve(Crypto.CurveParams.Secp256k1) {}
@@ -56,36 +80,27 @@ export class EcdsaSignature extends createEcdsa(Secp256k1) {}
 export class Bytes32 extends Bytes(32) {}
 
 /**
- * What a fold has established so far.
+ * What a subtree of signatures establishes.
  *
- * `message` and `policy` are carried through unchanged so that every step is
- * pinned to the same root and the same validator set — folding two proofs about
- * different roots must be impossible, not merely unlikely.
+ * `message` and `policy` are carried unchanged and checked equal on every
+ * merge, so two proofs about different roots cannot be combined — that has to
+ * be impossible, not merely unlikely.
  */
-export class FoldState extends Struct({
+export class SignatureSet extends Struct({
   /** The Merkle root the validators signed. */
   message: Bytes32,
   /** Commitment to the signing policy the signers must belong to. */
   policy: Field,
-  /** How many distinct signatures have been verified. */
+  /** Distinct signatures verified beneath this proof. */
   count: UInt32,
-  /** Their weights, summed. This is what Flare's threshold is expressed in. */
+  /** Their weights, summed. What Flare's threshold is expressed in. */
   weight: UInt32,
-  /**
-   * Index of the last signer in the policy. Strictly increasing, which is what
-   * makes `count` mean "distinct signers" rather than "verifications run".
-   */
-  lastIndex: UInt32,
+  /** Lowest policy index covered. */
+  minIndex: UInt32,
+  /** Highest policy index covered. Merges require strictly ascending ranges. */
+  maxIndex: UInt32,
 }) {}
 
-/**
- * One signer's contribution.
- *
- * `index` and `weight` come from the signing policy. Binding them to `policy`
- * is the consumer's job — see the note on `SigningPolicyFold` — because how a
- * policy is committed to depends on how it was fetched, and this program should
- * not care.
- */
 export class SignerInput extends Struct({
   publicKey: Secp256k1,
   signature: EcdsaSignature,
@@ -94,18 +109,17 @@ export class SignerInput extends Struct({
 }) {}
 
 export const SigningPolicyFold = ZkProgram({
-  name: 'flare-signing-policy-fold',
-  publicOutput: FoldState,
+  name: 'flare-signing-policy',
+  publicOutput: SignatureSet,
 
   methods: {
     /**
-     * The first signature.
+     * One signature, standing alone.
      *
-     * Starts the chain rather than taking an empty accumulator, so a fold
-     * always contains at least one verification and `count` can never be zero
-     * for a valid proof.
+     * Independent of every other, which is the point: all of them can be
+     * proven at the same time.
      */
-    base: {
+    single: {
       privateInputs: [Bytes32, Field, SignerInput],
       async method(message: Bytes32, policy: Field, signer: SignerInput) {
         signer.signature
@@ -113,45 +127,60 @@ export const SigningPolicyFold = ZkProgram({
           .assertTrue('invalid validator signature');
 
         return {
-          publicOutput: new FoldState({
+          publicOutput: new SignatureSet({
             message,
             policy,
             count: UInt32.one,
             weight: signer.weight,
-            lastIndex: signer.index,
+            minIndex: signer.index,
+            maxIndex: signer.index,
           }),
         };
       },
     },
 
     /**
-     * One more signature on top of an existing fold.
+     * Combine two subtrees into one.
      *
-     * The previous proof is verified recursively, so a chain of these is a
-     * single statement: *n distinct members of this policy signed this root,
-     * with this much weight between them.*
+     * No signature verification here — both sides already did theirs. This only
+     * checks they are about the same thing and that their index ranges do not
+     * overlap, which is what keeps `count` honest.
      */
-    step: {
-      privateInputs: [SelfProof, SignerInput],
-      async method(previous: SelfProof<undefined, FoldState>, signer: SignerInput) {
-        previous.verify();
-        const state = previous.publicOutput;
+    merge: {
+      privateInputs: [SelfProof, SelfProof],
+      async method(
+        left: SelfProof<undefined, SignatureSet>,
+        right: SelfProof<undefined, SignatureSet>,
+      ) {
+        left.verify();
+        right.verify();
 
-        signer.signature
-          .verifySignedHash(state.message, signer.publicKey)
-          .assertTrue('invalid validator signature');
+        const a = left.publicOutput;
+        const b = right.publicOutput;
 
-        // Strictly greater, not merely different: it rules out duplicates with
-        // one comparison instead of a membership set, and pins the order.
-        signer.index.assertGreaterThan(state.lastIndex, 'signers must be strictly ordered');
+        // Same root and same validator set, or the sum means nothing.
+        // Byte by byte: `Bytes` has no equality helper, and comparing the
+        // struct wholesale would compare witnesses rather than values.
+        for (let i = 0; i < 32; i++) {
+          a.message.bytes[i]!.value.assertEquals(
+            b.message.bytes[i]!.value,
+            'merged proofs disagree on the signed root',
+          );
+        }
+        a.policy.assertEquals(b.policy, 'merged proofs disagree on the signing policy');
+
+        // Strictly ascending and therefore disjoint: without this, merging a
+        // proof with itself would double a count and a weight.
+        b.minIndex.assertGreaterThan(a.maxIndex, 'merged ranges must be strictly ascending');
 
         return {
-          publicOutput: new FoldState({
-            message: state.message,
-            policy: state.policy,
-            count: state.count.add(1),
-            weight: state.weight.add(signer.weight),
-            lastIndex: signer.index,
+          publicOutput: new SignatureSet({
+            message: a.message,
+            policy: a.policy,
+            count: a.count.add(b.count),
+            weight: a.weight.add(b.weight),
+            minIndex: a.minIndex,
+            maxIndex: b.maxIndex,
           }),
         };
       },
