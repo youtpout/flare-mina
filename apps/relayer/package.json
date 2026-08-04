@@ -15,7 +15,10 @@
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "pg": "^8.13.1",
-    "viem": "^2.21.54"
+    "viem": "^2.21.54",
+    "@minaport/mina-contracts": "workspace:*",
+    "o1js": "^2.15.0",
+    "@o1js/native": "^2.15.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

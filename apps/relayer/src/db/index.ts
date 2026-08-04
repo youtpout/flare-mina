@@ -28,11 +28,11 @@ export async function migrate(): Promise<void> {
   await pool.query(sql);
 }
 
-export type DepositStatus = 'awaiting-confirmations' | 'attested' | 'claimed' | 'failed';
+export type DepositStatus = 'built' | 'submitted' | 'attested' | 'claimed' | 'failed';
 
 export type DepositRow = {
   id: string;
-  mina_tx_hash: string;
+  mina_tx_hash: string | null;
   mina_sender: string;
   recipient: string;
   amount_nanomina: string;
@@ -44,62 +44,68 @@ export type DepositRow = {
 };
 
 /**
- * Record a newly observed payment.
+ * Record a deposit the prover has just built, before the wallet has seen it.
  *
- * `ON CONFLICT DO NOTHING` on the transaction hash is the idempotency guard:
- * the watcher may see the same payment twice across a restart or an overlapping
- * poll window, and attesting it twice would be a double mint.
+ * Recording here rather than after broadcast is what makes the service
+ * restartable: the row exists before the transaction can possibly land, so a
+ * relayer that dies between building and inclusion still knows what to look
+ * for when it comes back. The alternative — learning about deposits by
+ * watching the chain — needs an archive node we do not have.
  */
-export async function recordDeposit(input: {
-  minaTxHash: string;
+export async function recordBuilt(input: {
   minaSender: string;
   recipient: string;
   amountNanomina: bigint;
   nonce: bigint;
-  blockHeight: number;
-}): Promise<DepositRow | null> {
+}): Promise<DepositRow> {
   const { rows } = await pool.query<DepositRow>(
-    `INSERT INTO deposits
-       (mina_tx_hash, mina_sender, recipient, amount_nanomina, nonce,
-        mina_block_height, status)
-     VALUES ($1, $2, $3, $4, $5, $6, 'awaiting-confirmations')
-     ON CONFLICT (mina_tx_hash) DO NOTHING
+    `INSERT INTO deposits (mina_sender, recipient, amount_nanomina, nonce, status)
+     VALUES ($1, $2, $3, $4, 'built')
      RETURNING *`,
-    [
-      input.minaTxHash,
-      input.minaSender,
-      input.recipient,
-      input.amountNanomina.toString(),
-      input.nonce.toString(),
-      input.blockHeight,
-    ],
+    [input.minaSender, input.recipient, input.amountNanomina.toString(), input.nonce.toString()],
   );
-  return rows[0] ?? null;
+  return rows[0]!;
 }
 
-export async function markAttested(minaTxHash: string, attestation: string): Promise<void> {
+/** The wallet has broadcast; from here the poller looks for inclusion. */
+export async function markSubmitted(id: string, minaTxHash: string): Promise<void> {
+  await pool.query(
+    `UPDATE deposits SET status = 'submitted', mina_tx_hash = $2, updated_at = now()
+      WHERE id = $1 AND status = 'built'`,
+    [id, minaTxHash],
+  );
+}
+
+export async function markAttested(id: string, attestation: string): Promise<void> {
   await pool.query(
     `UPDATE deposits
         SET status = 'attested', attestation = $2, reason = NULL, updated_at = now()
-      WHERE mina_tx_hash = $1 AND status = 'awaiting-confirmations'`,
-    [minaTxHash, attestation],
+      WHERE id = $1 AND status = 'submitted'`,
+    [id, attestation],
   );
 }
 
-export async function markFailed(minaTxHash: string, reason: string): Promise<void> {
+export async function markFailed(id: string, reason: string): Promise<void> {
   await pool.query(
-    `UPDATE deposits SET status = 'failed', reason = $2, updated_at = now()
-      WHERE mina_tx_hash = $1`,
-    [minaTxHash, reason],
+    `UPDATE deposits SET status = 'failed', reason = $2, updated_at = now() WHERE id = $1`,
+    [id, reason],
   );
 }
 
-export async function markClaimed(minaTxHash: string, flareTxHash: string): Promise<void> {
+export async function markClaimed(id: string, flareTxHash: string): Promise<void> {
   await pool.query(
     `UPDATE deposits SET status = 'claimed', flare_tx_hash = $2, updated_at = now()
-      WHERE mina_tx_hash = $1`,
-    [minaTxHash, flareTxHash],
+      WHERE id = $1`,
+    [id, flareTxHash],
   );
+}
+
+/** Deposits broadcast but not yet attested — what the poller works through. */
+export async function submittedDeposits(): Promise<DepositRow[]> {
+  const { rows } = await pool.query<DepositRow>(
+    `SELECT * FROM deposits WHERE status = 'submitted' ORDER BY id ASC LIMIT 50`,
+  );
+  return rows;
 }
 
 export async function depositsFor(minaSender: string): Promise<DepositRow[]> {
@@ -110,7 +116,13 @@ export async function depositsFor(minaSender: string): Promise<DepositRow[]> {
   return rows;
 }
 
-/** Next nonce for a sender, derived from what has already been recorded. */
+/**
+ * Next nonce for a sender.
+ *
+ * Only has to be unique, not sequential — but deriving it from what we have
+ * recorded is the cheapest way to be sure, and it keeps the numbers readable
+ * in the UI.
+ */
 export async function nextNonceFor(minaSender: string): Promise<bigint> {
   const { rows } = await pool.query<{ next: string }>(
     `SELECT COALESCE(MAX(nonce) + 1, 0)::text AS next FROM deposits WHERE mina_sender = $1`,

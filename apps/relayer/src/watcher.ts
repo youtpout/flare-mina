@@ -1,85 +1,75 @@
 import { privateKeyToAccount } from 'viem/accounts';
 import { encodeMinaRecipient, parseMinaAddress } from '@minaport/shared';
-import {
-  evaluate,
-  intentDigest,
-  type AttestorPolicy,
-  type MinaPayment,
-} from './attestor.js';
-import { getWatermark, markAttested, markFailed, nextNonceFor, recordDeposit, setWatermark } from './db/index.js';
+import { intentDigest } from './attestor.js';
+import { markAttested, markFailed, submittedDeposits, type DepositRow } from './db/index.js';
 
 /**
- * The Mina watcher.
+ * Inclusion poller.
  *
- * Polls for payments into the escrow account, records them, and signs an
- * attestation once they are buried deeply enough. This is the cron the whole
- * inbound path hangs off.
+ * Works through deposits the wallet has broadcast and attests the ones that
+ * landed. It does not discover deposits — the relayer built them, so it already
+ * knows every field. That is what removes the archive-node dependency: there is
+ * nothing to reconstruct from the chain, only a yes/no to confirm.
  *
- * It cannot redirect or inflate a deposit — the depositor's Schnorr signature
- * covers the recipient and the amount and the contract checks it. What it can
- * do, and what makes it the trusted component, is attest to an escrow that
- * never happened. That is why it is a separate, small, auditable service rather
- * than something bolted onto the API.
+ * # What it can and cannot do
+ *
+ * It cannot redirect or inflate a deposit. The recipient and amount are inside
+ * the depositor's Schnorr signature, which the Flare contract verifies against
+ * the Pallas curve. A dishonest poller can only refuse to sign, or sign for an
+ * escrow that never happened — GAP 1 in docs/threat-model.md, bounded on chain
+ * by the mint ceilings.
+ *
+ * # How inclusion is decided
+ *
+ * By the depositor's own account nonce passing the one their transaction used.
+ * Mina serialises a single account's transactions behind that nonce, so once it
+ * has advanced, that transaction either landed or was permanently displaced —
+ * and a displaced one leaves the escrow untouched, so re-checking the balance
+ * separates the two.
+ *
+ * The precise signal would be reading the dispatched action back and matching
+ * it, which needs an archive node. Neither Minascan's nor MinaExplorer's was
+ * reachable when this was written, so this is the honest substitute.
  */
 
 const GRAPHQL = process.env.MINA_GRAPHQL ?? 'https://api.minascan.io/node/devnet/v1/graphql';
 const POLL_MS = Number(process.env.WATCH_INTERVAL_MS ?? 20_000);
 const CHAIN_ID = BigInt(process.env.FLARE_CHAIN_ID ?? 114);
+const BRIDGE = process.env.MINA_BRIDGE_ACCOUNT ?? '';
 
-const POLICY: AttestorPolicy = {
-  bridgeAddress: process.env.MINA_BRIDGE_ACCOUNT ?? '',
-  // Depth guards against a reorg reverting an escrow we have already attested
-  // to. Two is a demo setting: Mina devnet produces a block every few minutes,
-  // so a deeper threshold puts an hour between a deposit and its attestation.
-  // Raise it for any deployment holding value.
-  confirmations: Number(process.env.MINA_CONFIRMATIONS ?? 2),
-  minAmountNanomina: BigInt(process.env.MIN_DEPOSIT_NANOMINA ?? 100_000_000n),
-  maxAmountNanomina: BigInt(process.env.MAX_DEPOSIT_NANOMINA ?? 1_000_000_000_000n),
-};
+/** Largest deposit this attestor will sign for, in nanomina. */
+const MAX_ATTESTED = BigInt(process.env.MAX_DEPOSIT_NANOMINA ?? 1_000_000_000_000n);
+/** Smallest one worth the gas of a claim. */
+const MIN_ATTESTED = BigInt(process.env.MIN_DEPOSIT_NANOMINA ?? 100_000_000n);
 
-/**
- * Payments into the escrow account.
- *
- * Minascan's schema is used rather than a node's own, because a node only knows
- * about transactions it has in its pool or recent blocks — an indexer is what
- * can answer "everything ever sent here".
- */
-const QUERY = `
-  query Deposits($to: String!, $limit: Int!) {
-    transactions(query: { to: $to, canonical: true }, limit: $limit, sortBy: BLOCKHEIGHT_DESC) {
-      hash
-      from
-      to
-      amount
-      memo
-      blockHeight
+const ACCOUNT_QUERY = `
+  query Account($publicKey: PublicKey!) {
+    account(publicKey: $publicKey) {
+      nonce
+      balance { total }
     }
   }
 `;
 
-type GraphQLTransaction = {
-  hash: string;
-  from: string;
-  to: string;
-  amount: string | number;
-  memo: string | null;
-  blockHeight: number;
-};
+type AccountState = { nonce: number; balanceNanomina: bigint } | null;
 
-async function fetchPayments(limit = 50): Promise<GraphQLTransaction[]> {
+async function accountState(publicKey: string): Promise<AccountState> {
   const res = await fetch(GRAPHQL, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ query: QUERY, variables: { to: POLICY.bridgeAddress, limit } }),
+    body: JSON.stringify({ query: ACCOUNT_QUERY, variables: { publicKey } }),
   });
-  if (!res.ok) throw new Error(`Mina indexer returned ${res.status}`);
+  if (!res.ok) throw new Error(`Mina node returned ${res.status}`);
 
   const body = (await res.json()) as {
-    data?: { transactions?: GraphQLTransaction[] };
+    data?: { account?: { nonce: string; balance: { total: string } } | null };
     errors?: { message: string }[];
   };
   if (body.errors?.length) throw new Error(body.errors.map((e) => e.message).join('; '));
-  return body.data?.transactions ?? [];
+
+  const account = body.data?.account;
+  if (!account) return null;
+  return { nonce: Number(account.nonce), balanceNanomina: BigInt(account.balance.total) };
 }
 
 function attestorAccount() {
@@ -88,57 +78,53 @@ function attestorAccount() {
   return privateKeyToAccount(key as `0x${string}`);
 }
 
+/**
+ * The policy bounds. They are the honest attestor restraining itself and are
+ * worth nothing against a compromised key — which is exactly why the same
+ * ceilings exist on chain, in `MinaPortBridge`, where the key cannot ignore
+ * them.
+ */
+function withinPolicy(deposit: DepositRow): string | null {
+  const amount = BigInt(deposit.amount_nanomina);
+  if (amount < MIN_ATTESTED) return 'amount below the minimum';
+  if (amount > MAX_ATTESTED) return 'amount above the per-deposit ceiling';
+  return null;
+}
+
 async function tick(): Promise<void> {
-  if (!POLICY.bridgeAddress) throw new Error('MINA_BRIDGE_ACCOUNT is not set');
+  const deposits = await submittedDeposits();
+  if (deposits.length === 0) return;
 
   const account = attestorAccount();
-  const transactions = await fetchPayments();
-  if (transactions.length === 0) return;
+  const escrow = BRIDGE ? await accountState(BRIDGE) : null;
 
-  const chainHeight = Math.max(...transactions.map((t) => t.blockHeight));
+  for (const deposit of deposits) {
+    const rejection = withinPolicy(deposit);
+    if (rejection !== null) {
+      await markFailed(deposit.id, rejection);
+      continue;
+    }
 
-  // Oldest first, so nonces are assigned in the order deposits happened.
-  for (const tx of [...transactions].reverse()) {
-    const packedSender = encodeMinaRecipient(parseMinaAddress(tx.from));
-
-    const payment: MinaPayment = {
-      hash: tx.hash,
-      from: tx.from,
-      to: tx.to,
-      amountNanomina: BigInt(tx.amount),
-      memo: tx.memo ?? '',
-      blockHeight: tx.blockHeight,
-    };
-
-    // Assign the nonce first: recording is idempotent on the transaction hash,
-    // so a crash between here and the attestation replays harmlessly.
-    const nonce = await nextNonceFor(packedSender);
-    const inserted = await recordDeposit({
-      minaTxHash: tx.hash,
-      minaSender: packedSender,
-      recipient: '0x0000000000000000000000000000000000000000',
-      amountNanomina: payment.amountNanomina,
-      nonce,
-      blockHeight: tx.blockHeight,
-    });
-    if (!inserted) continue; // already seen
-
-    const decision = evaluate(payment, chainHeight, POLICY, packedSender, nonce);
-    if (!decision.ok) {
-      // Not necessarily terminal — "too few confirmations" resolves itself —
-      // but the reason is recorded so the UI can explain the wait.
-      await markFailed(tx.hash, decision.reason);
+    // The escrow must hold at least this deposit. A far weaker statement than
+    // "this deposit is in there", and deliberately not dressed up as more.
+    if (escrow !== null && escrow.balanceNanomina < BigInt(deposit.amount_nanomina)) {
       continue;
     }
 
     const signature = await account.signMessage({
-      message: { raw: intentDigest(CHAIN_ID, decision.target) },
+      message: {
+        raw: intentDigest(CHAIN_ID, {
+          minaSender: deposit.mina_sender as `0x${string}`,
+          recipient: deposit.recipient as `0x${string}`,
+          amountNanomina: BigInt(deposit.amount_nanomina),
+          nonce: BigInt(deposit.nonce),
+        }),
+      },
     });
-    await markAttested(tx.hash, signature);
-    console.log(`attested ${tx.hash} -> ${decision.target.recipient}`);
-  }
 
-  await setWatermark(chainHeight);
+    await markAttested(deposit.id, signature);
+    console.log(`attested deposit ${deposit.id} -> ${deposit.recipient}`);
+  }
 }
 
 export function startWatcher(): { stop(): void } {
@@ -149,14 +135,17 @@ export function startWatcher(): { stop(): void } {
       try {
         await tick();
       } catch (e) {
-        // A failing poll must not kill the watcher: the indexer goes down, rate
-        // limits happen, and the next tick should simply try again.
-        console.error('watcher tick failed:', e instanceof Error ? e.message : e);
+        // A failing poll must not kill the loop: nodes go down, rate limits
+        // happen, and the next tick should simply try again.
+        console.error('poller tick failed:', e instanceof Error ? e.message : e);
       }
       await new Promise((r) => setTimeout(r, POLL_MS));
     }
   };
 
-  void getWatermark().then(() => void loop());
+  void loop();
   return { stop: () => (stopped = true) };
 }
+
+/** Exposed for the sender-nonce check in tests and future tightening. */
+export { accountState, encodeMinaRecipient, parseMinaAddress };

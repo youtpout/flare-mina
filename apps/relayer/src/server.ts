@@ -1,6 +1,8 @@
 import cors from 'cors';
 import express from 'express';
-import { depositsFor, migrate, pool } from './db/index.js';
+import { encodeMinaRecipient, parseMinaAddress } from '@minaport/shared';
+import { depositsFor, markSubmitted, migrate, nextNonceFor, pool, recordBuilt } from './db/index.js';
+import { buildDeposit } from './prover/index.js';
 import { startWatcher } from './watcher.js';
 
 /**
@@ -33,6 +35,74 @@ app.get('/health', async (_req, res) => {
     // Report the failure rather than a cheerful 200: a health check that lies
     // is worse than none.
     res.status(503).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/**
+ * Build and prove a deposit. Returns an **unsigned** transaction.
+ *
+ * The relayer proves because a zkApp method call is a proof and o1js has to run
+ * somewhere; it costs no trust because `deposit` pulls funds through
+ * `AccountUpdate.createSigned(sender)`. Nothing moves until the depositor's
+ * wallet signs that exact account update, and the client checks the recipient
+ * and amount in the returned JSON before it does.
+ *
+ * The row is written before the transaction can possibly land, which is what
+ * lets the service restart mid-flight without losing track of a deposit.
+ */
+app.post('/deposits/build', async (req, res) => {
+  const { sender, recipient, amountNanomina } = req.body ?? {};
+
+  if (typeof sender !== 'string' || !sender.startsWith('B62')) {
+    return res.status(400).json({ error: 'sender must be a Mina address' });
+  }
+  if (typeof recipient !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(recipient)) {
+    return res.status(400).json({ error: 'recipient must be a Flare address' });
+  }
+  let amount: bigint;
+  try {
+    amount = BigInt(amountNanomina);
+  } catch {
+    return res.status(400).json({ error: 'amountNanomina must be an integer' });
+  }
+  if (amount <= 0n) return res.status(400).json({ error: 'amountNanomina must be positive' });
+
+  try {
+    const packed = encodeMinaRecipient(parseMinaAddress(sender));
+    const nonce = await nextNonceFor(packed);
+
+    const row = await recordBuilt({
+      minaSender: packed,
+      recipient,
+      amountNanomina: amount,
+      nonce,
+    });
+
+    const built = await buildDeposit({ sender, recipient: recipient as `0x${string}`, amountNanomina: amount, nonce });
+
+    res.json({
+      id: row.id,
+      nonce: nonce.toString(),
+      transaction: built.transaction,
+      provingMs: built.provingMs,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/** The wallet has broadcast; from here the poller waits for inclusion. */
+app.post('/deposits/:id/submitted', async (req, res) => {
+  const { minaTxHash } = req.body ?? {};
+  if (typeof minaTxHash !== 'string' || minaTxHash.length === 0) {
+    return res.status(400).json({ error: 'minaTxHash is required' });
+  }
+
+  try {
+    await markSubmitted(req.params.id, minaTxHash);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
 });
 

@@ -1,0 +1,123 @@
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Worker } from 'node:worker_threads';
+
+/**
+ * Front end to the proving worker: one worker, one proof at a time, a queue in
+ * front.
+ *
+ * The serialisation is deliberate. Proving saturates the cores it is given, so
+ * two concurrent proofs do not finish in the time of one — they finish in twice
+ * the time, together. A queue turns that into predictable latency and lets the
+ * API answer honestly about the wait.
+ */
+
+export type DepositRequest = {
+  /** Depositor's Mina address, base58. */
+  sender: string;
+  /** Flare address the FMINA will be minted to. */
+  recipient: `0x${string}`;
+  amountNanomina: bigint;
+  /** Caller-chosen; makes the deposit unique. See `MinaPortBridge.deposit`. */
+  nonce: bigint;
+};
+
+export type BuiltDeposit = {
+  /** Serialised, unsigned zkApp transaction. The wallet signs and sends it. */
+  transaction: string;
+  provingMs: number;
+};
+
+type Pending = {
+  resolve: (built: BuiltDeposit) => void;
+  reject: (error: Error) => void;
+};
+
+let worker: Worker | undefined;
+let ready: Promise<void> | undefined;
+let nextId = 1;
+const pending = new Map<number, Pending>();
+
+/** Requests waiting for the worker, oldest first. */
+let queue: Promise<unknown> = Promise.resolve();
+
+function start(): Promise<void> {
+  if (ready !== undefined) return ready;
+
+  const here = dirname(fileURLToPath(import.meta.url));
+  // tsx compiles on the fly, so the worker is loaded from source in dev and
+  // from the same path in production — the extension is whatever this module's
+  // own is.
+  const entry = join(here, here.includes('/src/') ? 'worker.ts' : 'worker.js');
+
+  ready = new Promise<void>((resolve, reject) => {
+    const w = new Worker(entry, { execArgv: ['--import', 'tsx'] });
+    worker = w;
+
+    w.on('message', (message: Record<string, unknown>) => {
+      if (message.type === 'ready') {
+        console.log(`prover ready (compile ${Number(message.compileMs) / 1000}s)`);
+        return resolve();
+      }
+
+      const entry = pending.get(Number(message.id));
+      if (entry === undefined) return;
+      pending.delete(Number(message.id));
+
+      if (message.type === 'built') {
+        entry.resolve({
+          transaction: String(message.transaction),
+          provingMs: Number(message.provingMs),
+        });
+      } else {
+        entry.reject(new Error(String(message.error)));
+      }
+    });
+
+    // A worker that dies takes every in-flight request with it. Rejecting them
+    // explicitly beats leaving the callers hanging until their client times
+    // out, and the next request restarts the worker.
+    const die = (reason: string) => {
+      const error = new Error(`prover worker ${reason}`);
+      for (const [, p] of pending) p.reject(error);
+      pending.clear();
+      worker = undefined;
+      ready = undefined;
+      reject(error);
+    };
+    w.on('error', (error) => die(`failed: ${error.message}`));
+    w.on('exit', (code) => code !== 0 && die(`exited with code ${code}`));
+  });
+
+  return ready;
+}
+
+/** Build and prove a deposit. Resolves with an unsigned transaction. */
+export async function buildDeposit(request: DepositRequest): Promise<BuiltDeposit> {
+  await start();
+
+  const run = async (): Promise<BuiltDeposit> => {
+    const id = nextId++;
+    return new Promise<BuiltDeposit>((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      worker?.postMessage({
+        id,
+        sender: request.sender,
+        recipient: request.recipient,
+        amountNanomina: request.amountNanomina.toString(),
+        nonce: request.nonce.toString(),
+      });
+    });
+  };
+
+  // Chain onto the queue so only one proof runs at a time, and so a failure
+  // does not break the chain for whoever is behind it.
+  const result = queue.then(run, run);
+  queue = result.catch(() => undefined);
+  return result;
+}
+
+/** How many requests are waiting or in flight. For the API to report a wait. */
+export function queueDepth(): number {
+  return pending.size;
+}
