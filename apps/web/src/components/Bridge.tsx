@@ -230,20 +230,6 @@ export function Bridge({ session }: { session: Session }) {
           {depositing ?? 'Deposit'}
         </button>
         {depositError !== null && <p className="status err">{depositError}</p>}
-
-        <div className="notice" style={{ marginTop: 12 }}>
-          <strong>The relayer proves, it does not custody.</strong> A zkApp call is a proof, so o1js
-          runs on the server rather than in your browser. The transaction comes back{' '}
-          <em>unsigned</em> — the escrow pulls your MINA through an account update only your key can
-          authorise, so nothing moves until you sign. This page re-reads the amount out of the
-          transaction before handing it to your wallet.
-        </div>
-
-        <div className="notice" style={{ marginTop: 10 }}>
-          <strong>Claiming needs your signature too.</strong> The attestor confirms the escrow
-          landed, but it cannot say where the FMINA goes — that is in your signature, verified
-          on-chain against the Pallas curve. Neither half mints anything alone.
-        </div>
       </div>
 
       <div className="panel">
@@ -294,11 +280,9 @@ export function Bridge({ session }: { session: Session }) {
           Burning FMINA emits a canonical withdrawal event that the Mina side releases against.
         </p>
         <div className="notice">
-          <strong>Not live yet.</strong> This direction is the one being built without a trusted
-          party: Flare publishes Merkle roots signed by a weighted validator set, so proving a Flare
-          event on Mina is signature verification — measured at 31,810 constraints per signature —
-          rather than verifying a recursive proof. That is why the return path gets the real
-          machinery and the inbound path does not.
+          <strong>Coming soon.</strong> Flare publishes Merkle roots signed by a weighted validator
+          set, so proving a Flare event on Mina is signature verification — measured at 31,810
+          constraints — which makes this direction verifiable end to end.
         </div>
       </div>
     </>
