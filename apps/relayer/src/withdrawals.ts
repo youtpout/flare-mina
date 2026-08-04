@@ -1,4 +1,4 @@
-import { createPublicClient, http, parseAbi } from 'viem';
+import { createPublicClient, http, parseAbi, parseEventLogs } from 'viem';
 import { decodeMinaRecipient, formatMinaAddress } from '@minaport/shared';
 import { markWithdrawalReleased, recordWithdrawal, releasableWithdrawals } from './db/index.js';
 import { releaseWithdrawal } from './prover/index.js';
@@ -37,7 +37,20 @@ const BRIDGE = process.env.FLARE_BRIDGE_ADDRESS as `0x${string}` | undefined;
 const POLL_MS = Number(process.env.WITHDRAWAL_INTERVAL_MS ?? 20_000);
 
 /** How far back to look on a cold start, in blocks. */
-const LOOKBACK = BigInt(process.env.WITHDRAWAL_LOOKBACK_BLOCKS ?? 50_000);
+const LOOKBACK = BigInt(process.env.WITHDRAWAL_LOOKBACK_BLOCKS ?? 3_000);
+
+/**
+ * Blocks per `getLogs` call.
+ *
+ * Thirty, because that is the cap the Coston2 public RPC enforces. It reports
+ * it as "Missing or invalid parameters", and only says what it means if you
+ * read `error.details`: *requested too many blocks, maximum is set to 30*.
+ *
+ * Steady state is unaffected — at ~2s blocks and a 20s poll the cursor trails
+ * about ten blocks — so this only lengthens a cold start, which is why the
+ * lookback is a few thousand blocks rather than tens of thousands.
+ */
+const CHUNK = BigInt(process.env.WITHDRAWAL_CHUNK_BLOCKS ?? 30);
 
 const COSTON2 = {
   id: 114,
@@ -62,12 +75,15 @@ async function scan(): Promise<void> {
   const from = cursor ?? (head > LOOKBACK ? head - LOOKBACK : 0n);
   if (from > head) return;
 
-  const logs = await client.getLogs({
-    address: BRIDGE,
-    event: bridgeAbi[0],
-    fromBlock: from,
-    toBlock: head,
-  });
+  const raw = [];
+  for (let start = from; start <= head; start += CHUNK) {
+    const end = start + CHUNK - 1n > head ? head : start + CHUNK - 1n;
+    raw.push(...(await client.getLogs({ address: BRIDGE, fromBlock: start, toBlock: end })));
+  }
+
+  // `parseEventLogs` keeps only what matches and drops the rest, so an
+  // unrelated event from the same contract is ignored rather than mis-decoded.
+  const logs = parseEventLogs({ abi: bridgeAbi, eventName: 'WithdrawToMina', logs: raw });
 
   for (const log of logs) {
     const { nonce, minaRecipient, amount } = log.args;
