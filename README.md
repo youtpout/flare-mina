@@ -273,7 +273,7 @@ than from documentation:
 
 | Contract | Address |
 |----------|---------|
-| Bridge escrow zkApp | [`B62qrJ6YnZPW5y9YSnjduEuCjpUzmo4qqcsqy4T7KwvTEK7uzGFNjmF`](https://minascan.io/devnet/account/B62qrJ6YnZPW5y9YSnjduEuCjpUzmo4qqcsqy4T7KwvTEK7uzGFNjmF) |
+| Bridge escrow zkApp | [`B62qrnXemTz7RhG8kKwv7id9eHTAVMafTiDrPMyDTMJUSUfpPQYPuMH`](https://minascan.io/devnet/account/B62qrnXemTz7RhG8kKwv7id9eHTAVMafTiDrPMyDTMJUSUfpPQYPuMH) |
 
 Deposits go through the zkApp's `deposit` method, which carries the Flare
 recipient as a 160-bit field element and dispatches the deposit action in the
@@ -295,7 +295,7 @@ only way in is `deposit` and the only way out is `releaseWithdrawal`, the accoun
 balance *is* the escrowed total.
 
 Verification key hash:
-`8787813373587944809243524125748744328530711262033152364127025440525038586927`
+`21021527467738518535788016258937719174547704517215919313249690369595765354609`
 
 ### Flare mainnet (chain 14) / Mina mainnet
 
