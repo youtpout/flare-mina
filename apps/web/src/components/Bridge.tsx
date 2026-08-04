@@ -221,10 +221,15 @@ export function Bridge({ session }: { session: Session }) {
           </div>
         </div>
 
-        <button disabled={depositing !== null || nanomina(amount) === null} onClick={startDeposit}>
-          {depositing ?? 'Deposit'}
+        <button
+          className="primary"
+          style={{ marginTop: 14 }}
+          disabled={depositing !== null || nanomina(amount) === null}
+          onClick={startDeposit}
+        >
+          {depositing ?? 'Escrow on Mina'}
         </button>
-        {depositError !== null && <p className="error small">{depositError}</p>}
+        {depositError !== null && <p className="status err">{depositError}</p>}
 
         <div className="notice" style={{ marginTop: 12 }}>
           <strong>The relayer proves, it does not custody.</strong> A zkApp call is a proof, so o1js
