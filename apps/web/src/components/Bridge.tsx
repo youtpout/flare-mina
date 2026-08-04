@@ -3,7 +3,7 @@ import { encodeFunctionData, type Hex } from 'viem';
 import type { Session } from '@/App';
 import { CONTRACTS, MINA, explorerTx } from '@/lib/config';
 import { bridgeAbi, submit } from '@/lib/flare';
-import { PURPOSE, depositActionHash, signAuthorization } from '@/lib/mina';
+import { PURPOSE, depositActionHash, depositCommitment, signAuthorization } from '@/lib/mina';
 
 /**
  * Deposit status, as the API reports it.
@@ -13,12 +13,7 @@ import { PURPOSE, depositActionHash, signAuthorization } from '@/lib/mina';
  * can produce the mint alone, so the UI has to show which half is outstanding
  * rather than a single opaque spinner.
  */
-type DepositStatus =
-  | 'awaiting-payment'
-  | 'awaiting-confirmations'
-  | 'attested'
-  | 'claimed'
-  | 'failed';
+type DepositStatus = 'built' | 'submitted' | 'attested' | 'claimed' | 'failed';
 
 type Deposit = {
   id: string;
@@ -36,8 +31,8 @@ type Deposit = {
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8787';
 
 const LABEL: Record<DepositStatus, string> = {
-  'awaiting-payment': 'Waiting for your MINA payment',
-  'awaiting-confirmations': 'Payment seen, waiting for confirmations',
+  built: 'Proof built — waiting for your signature',
+  submitted: 'Broadcast — waiting for inclusion on Mina',
   attested: 'Attested — ready to claim',
   claimed: 'Claimed',
   failed: 'Failed',
@@ -49,6 +44,9 @@ export function Bridge({ session }: { session: Session }) {
   const [copied, setCopied] = useState(false);
   const [claiming, setClaiming] = useState<string | null>(null);
   const [claimError, setClaimError] = useState<string | null>(null);
+  const [amount, setAmount] = useState('');
+  const [depositing, setDepositing] = useState<string | null>(null);
+  const [depositError, setDepositError] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -122,6 +120,72 @@ export function Bridge({ session }: { session: Session }) {
     }
   }
 
+  /** MINA as typed, in nanomina. Null when it is not a usable number. */
+  function nanomina(input: string): bigint | null {
+    if (!/^\d+(\.\d{1,9})?$/.test(input.trim())) return null;
+    const [whole, fraction = ''] = input.trim().split('.');
+    const value = BigInt(whole!) * 1_000_000_000n + BigInt(fraction.padEnd(9, '0'));
+    return value > 0n ? value : null;
+  }
+
+  /**
+   * Build, check, sign, broadcast.
+   *
+   * The check in the middle is the point: the relayer produced the proof, so
+   * this reads the escrowed amount back out of the transaction it returned and
+   * refuses to hand it to the wallet if it disagrees with what was asked for.
+   * The recipient needs no such check — it is bound by the Schnorr signature at
+   * claim time, which only the user can produce.
+   */
+  async function startDeposit() {
+    const value = nanomina(amount);
+    if (value === null) return;
+
+    setDepositError(null);
+    setDepositing('Building the proof…');
+    try {
+      const res = await fetch(`${API}/deposits/build`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sender: session.minaAddress,
+          recipient: session.account,
+          amountNanomina: value.toString(),
+        }),
+      });
+      const built = (await res.json()) as {
+        id: string;
+        transaction: string;
+        provingMs: number;
+        error?: string;
+      };
+      if (!res.ok) throw new Error(built.error ?? `relayer returned ${res.status}`);
+
+      const commitment = depositCommitment(built.transaction);
+      if (commitment === null) throw new Error('could not read the built transaction');
+      if (commitment.escrowedNanomina !== value) {
+        throw new Error(
+          `the built transaction escrows ${commitment.escrowedNanomina} nanomina, not ${value} — refusing to sign`,
+        );
+      }
+
+      setDepositing('Waiting for your wallet…');
+      const { hash } = await session.provider.sendTransaction({ transaction: built.transaction });
+
+      await fetch(`${API}/deposits/${built.id}/submitted`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ minaTxHash: hash }),
+      });
+
+      setAmount('');
+    } catch (e) {
+      setDepositError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDepositing(null);
+    }
+  }
+
   const copy = async (text: string) => {
     await navigator.clipboard.writeText(text);
     setCopied(true);
@@ -133,40 +197,47 @@ export function Bridge({ session }: { session: Session }) {
       <div className="panel">
         <h2>Mina → Flare</h2>
         <p className="muted small" style={{ marginTop: 0 }}>
-          Send MINA to the escrow account with your Flare address in the memo. It is an ordinary
-          payment — any Mina wallet can make it, and you generate no proof.
+          Escrow MINA on {MINA.network} and receive FMINA on Flare. The proof is built for you —
+          your wallet only signs.
         </p>
 
         <div className="field">
-          <label>1 · Send to this account on Mina {MINA.network}</label>
+          <label>Amount, in MINA</label>
+          <input
+            value={amount}
+            inputMode="decimal"
+            placeholder="1.0"
+            onChange={(e) => setAmount(e.target.value)}
+          />
+        </div>
+
+        <div className="field">
+          <label>Goes to your Flare account</label>
           <div style={{ display: 'flex', gap: 8 }}>
-            <input readOnly value={MINA.bridgeAccount} className="mono" />
-            <button className="ghost" onClick={() => copy(MINA.bridgeAccount)}>
+            <input readOnly value={session.account} className="mono" />
+            <button className="ghost" onClick={() => copy(session.account)}>
               {copied ? '✓' : 'Copy'}
             </button>
           </div>
         </div>
 
-        <div className="field">
-          <label>2 · Put this in the memo — it is where the FMINA goes</label>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input readOnly value={session.account} className="mono" />
-            <button className="ghost" onClick={() => copy(session.account)}>
-              Copy
-            </button>
-          </div>
-        </div>
+        <button disabled={depositing !== null || nanomina(amount) === null} onClick={startDeposit}>
+          {depositing ?? 'Deposit'}
+        </button>
+        {depositError !== null && <p className="error small">{depositError}</p>}
 
-        <div className="notice">
-          <strong>Claiming needs your signature too.</strong> The attestor confirms the escrow
-          landed, but it cannot say where the FMINA goes — that is in your signature, verified
-          on-chain against the Pallas curve. Neither half mints anything alone.
+        <div className="notice" style={{ marginTop: 12 }}>
+          <strong>The relayer proves, it does not custody.</strong> A zkApp call is a proof, so o1js
+          runs on the server rather than in your browser. The transaction comes back{' '}
+          <em>unsigned</em> — the escrow pulls your MINA through an account update only your key can
+          authorise, so nothing moves until you sign. This page re-reads the amount out of the
+          transaction before handing it to your wallet.
         </div>
 
         <div className="notice" style={{ marginTop: 10 }}>
-          The memo is how the attestor learns your destination — it reads it from the chain it is
-          already watching, so there is nothing to register beforehand. A Mina memo holds 32 bytes
-          and an address is 20, so it fits with room to spare.
+          <strong>Claiming needs your signature too.</strong> The attestor confirms the escrow
+          landed, but it cannot say where the FMINA goes — that is in your signature, verified
+          on-chain against the Pallas curve. Neither half mints anything alone.
         </div>
       </div>
 

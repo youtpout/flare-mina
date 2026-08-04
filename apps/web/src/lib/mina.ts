@@ -16,7 +16,50 @@ export type MinaProvider = {
     publicKey: string;
     signature: { field: string; scalar: string };
   }>;
+  /**
+   * Sign and broadcast a zkApp transaction the dApp built.
+   *
+   * The relayer produces the proof — a zkApp method call is a proof, and
+   * putting o1js in this bundle would mean proving on the user's machine. It
+   * costs no trust: `deposit` pulls funds through
+   * `AccountUpdate.createSigned(sender)`, so nothing moves until this call
+   * signs that exact account update.
+   */
+  sendTransaction(args: {
+    transaction: string;
+    feePayer?: { fee?: number; memo?: string };
+  }): Promise<{ hash: string }>;
 };
+
+/**
+ * What a built deposit commits to, read straight out of the transaction JSON.
+ *
+ * The relayer says what it built; this reads what it actually built. Parsing
+ * the account updates needs no o1js — they are plain JSON — and it turns "did
+ * the server put my address in the proof" from a question of trust into a
+ * check.
+ */
+export function depositCommitment(
+  transactionJson: string,
+): { escrowedNanomina: bigint } | null {
+  try {
+    const tx = JSON.parse(transactionJson) as {
+      accountUpdates?: { body?: { balanceChange?: { magnitude?: string; sgn?: string } } }[];
+    };
+
+    // The escrow's own update is the one whose balance goes up. Its magnitude
+    // is what the depositor is actually parting with.
+    for (const update of tx.accountUpdates ?? []) {
+      const change = update.body?.balanceChange;
+      if (change?.sgn === 'Positive' && change.magnitude !== undefined) {
+        return { escrowedNanomina: BigInt(change.magnitude) };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 declare global {
   interface Window {
