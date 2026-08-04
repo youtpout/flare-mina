@@ -11,6 +11,8 @@ const SLIPPAGE_BPS = 500n;
 /** Quotes go stale; a short deadline is what stops one being used much later. */
 const DEADLINE_SECONDS = 600n;
 
+const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8787';
+
 export function Swap({ session }: { session: Session }) {
   const [fromSymbol, setFromSymbol] = useState('USD₮0');
   const [toSymbol, setToSymbol] = useState('FXRP');
@@ -94,20 +96,49 @@ export function Swap({ session }: { session: Session }) {
       });
 
       setStatus('Submitting…');
-      const data = encodeFunctionData({
-        abi: accountAbi,
-        functionName: 'executeBatch',
-        args: [
-          [session.x, session.isOdd, session.y],
-          [BigInt(signature.field), BigInt(signature.scalar)],
-          nonce,
-          BigInt('18446744073709551615'),
-          calls.map((c) => [c.target, c.value, c.data] as const),
-        ],
-      });
+      const expiry = BigInt('18446744073709551615');
 
-      const hash = await submit(session.account, data);
-      setTxHash(hash);
+      // The relayer pays the gas. It cannot reorder the batch, drop a call,
+      // add one, or retarget anything — the signature commits to the ordered
+      // list and the account recomputes that commitment. Which is the point:
+      // a Mina key authorises, and needs no EVM key to be acted on.
+      const res = await fetch(`${API}/accounts/execute`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          account: session.account,
+          publicKey: { x: session.x.toString(), isOdd: session.isOdd, y: session.y.toString() },
+          signature: { field: signature.field, scalar: signature.scalar },
+          nonce: nonce.toString(),
+          expiry: expiry.toString(),
+          calls: calls.map((c) => ({
+            target: c.target,
+            value: c.value.toString(),
+            data: c.data,
+          })),
+        }),
+      });
+      const body = (await res.json()) as { flareTxHash?: string; error?: string };
+
+      if (res.status === 501) {
+        // No sponsor configured, so fall back to the user's own wallet.
+        const data = encodeFunctionData({
+          abi: accountAbi,
+          functionName: 'executeBatch',
+          args: [
+            [session.x, session.isOdd, session.y],
+            [BigInt(signature.field), BigInt(signature.scalar)],
+            nonce,
+            expiry,
+            calls.map((c) => [c.target, c.value, c.data] as const),
+          ],
+        });
+        setTxHash(await submit(session.account, data));
+      } else if (!res.ok) {
+        throw new Error(body.error ?? `relayer returned ${res.status}`);
+      } else {
+        setTxHash(body.flareTxHash as `0x${string}`);
+      }
       setStatus('Swapped.');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

@@ -17,7 +17,12 @@ import {
   recordBuilt,
 } from './db/index.js';
 import { buildDeposit } from './prover/index.js';
-import { deployAccount, submitClaim, submitterConfigured } from './submitter.js';
+import {
+  deployAccount,
+  submitBatch,
+  submitClaim,
+  submitterConfigured,
+} from './submitter.js';
 import { startWatcher } from './watcher.js';
 
 /**
@@ -116,6 +121,38 @@ app.post('/deposits/:id/submitted', async (req, res) => {
   try {
     await markSubmitted(req.params.id, minaTxHash);
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/**
+ * Execute a signed batch on a `MinaAccount`, paying the gas.
+ *
+ * The signature commits to the ordered calls, and the account recomputes that
+ * commitment, so this service cannot reorder, drop, add or retarget anything.
+ * It is the same bargain as a claim: gas in exchange for nothing.
+ */
+app.post('/accounts/execute', async (req, res) => {
+  if (!submitterConfigured()) {
+    return res.status(501).json({ error: 'no submitter configured; submit from your own wallet' });
+  }
+
+  const { account, publicKey, signature, nonce, expiry, calls } = req.body ?? {};
+  try {
+    const hash = await submitBatch({
+      account,
+      publicKey: { x: BigInt(publicKey.x), isOdd: Boolean(publicKey.isOdd), y: BigInt(publicKey.y) },
+      signature: { field: BigInt(signature.field), scalar: BigInt(signature.scalar) },
+      nonce: BigInt(nonce),
+      expiry: BigInt(expiry),
+      calls: (calls as { target: string; value: string; data: string }[]).map((c) => ({
+        target: c.target as `0x${string}`,
+        value: BigInt(c.value),
+        data: c.data as `0x${string}`,
+      })),
+    });
+    res.json({ flareTxHash: hash });
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }

@@ -40,6 +40,10 @@ const bridgeAbi = parseAbi([
   'function claimWithMinaSignature((uint256,bool,uint256) publicKey,(uint256,uint256) signature,address recipient,uint64 amountNanomina,uint64 nonce,uint64 expiry,bytes attestation)',
 ]);
 
+const accountAbi = parseAbi([
+  'function executeBatch((uint256,bool,uint256) publicKey,(uint256,uint256) signature,uint64 nonce,uint64 expiry,(address,uint256,bytes)[] calls) returns (bytes[])',
+]);
+
 const factoryAbi = parseAbi([
   'function deploy(bytes32 minaKey) returns (address)',
   'function isDeployed(bytes32 minaKey) view returns (bool)',
@@ -95,6 +99,53 @@ export async function deployAccount(minaKey: Hex): Promise<Hex> {
 
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
   if (receipt.status !== 'success') throw new Error(`deployment reverted (${hash})`);
+  return hash;
+}
+
+export type BatchRequest = {
+  account: `0x${string}`;
+  publicKey: { x: bigint; isOdd: boolean; y: bigint };
+  signature: { field: bigint; scalar: bigint };
+  nonce: bigint;
+  expiry: bigint;
+  calls: { target: `0x${string}`; value: bigint; data: Hex }[];
+};
+
+/**
+ * Execute a signed batch on the user's `MinaAccount`, paying the gas.
+ *
+ * Same property as a claim, and the reason batching exists: the Schnorr
+ * signature commits to the ordered list of calls through `batchHash`, and the
+ * account recomputes it. A submitter cannot reorder the batch, drop a call,
+ * add one, or change a target or its calldata. It can only decline.
+ *
+ * That is what makes an approve-then-swap safe to hand to someone else: the
+ * batch is atomic, so a granted approval cannot survive a failed swap, and the
+ * submitter cannot separate the two.
+ */
+export async function submitBatch(request: BatchRequest): Promise<Hex> {
+  const key = process.env.FLARE_SUBMITTER_PRIVATE_KEY;
+  if (!key) throw new Error('no submitter configured');
+
+  const account = privateKeyToAccount(key as Hex);
+  const wallet = createWalletClient({ account, chain: COSTON2, transport: http(RPC) });
+  const publicClient = createPublicClient({ chain: COSTON2, transport: http(RPC) });
+
+  const hash = await wallet.writeContract({
+    address: request.account,
+    abi: accountAbi,
+    functionName: 'executeBatch',
+    args: [
+      [request.publicKey.x, request.publicKey.isOdd, request.publicKey.y],
+      [request.signature.field, request.signature.scalar],
+      request.nonce,
+      request.expiry,
+      request.calls.map((c) => [c.target, c.value, c.data] as const),
+    ],
+  });
+
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== 'success') throw new Error(`batch reverted on Flare (${hash})`);
   return hash;
 }
 
