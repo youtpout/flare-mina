@@ -227,7 +227,7 @@ export function Bridge({ session }: { session: Session }) {
           disabled={depositing !== null || nanomina(amount) === null}
           onClick={startDeposit}
         >
-          {depositing ?? 'Escrow on Mina'}
+          {depositing ?? 'Deposit'}
         </button>
         {depositError !== null && <p className="status err">{depositError}</p>}
 
