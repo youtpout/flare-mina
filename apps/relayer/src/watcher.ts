@@ -28,8 +28,8 @@ import { markAttested, markFailed, submittedDeposits, type DepositRow } from './
  * separates the two.
  *
  * The precise signal would be reading the dispatched action back and matching
- * it, which needs an archive node. Neither Minascan's nor MinaExplorer's was
- * reachable when this was written, so this is the honest substitute.
+ * it, which needs an archive node. None of the public ones were reachable when
+ * this was written, so this is the honest substitute.
  */
 
 const GRAPHQL = process.env.MINA_GRAPHQL ?? 'https://mina-devnet-graphql.aurowallet.com/graphql';
