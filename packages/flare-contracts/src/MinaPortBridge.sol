@@ -1,10 +1,20 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
-import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {OwnableUpgradeable} from
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {Ownable2StepUpgradeable} from
+    "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
+import {PausableUpgradeable} from
+    "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+// Not the upgradeable variant: OpenZeppelin 5.7 removed it because the base
+// guard became proxy-safe. It keeps its flag in an ERC-7201 namespaced slot
+// rather than an inherited variable, so it claims no space in this contract's
+// layout, and its check is `== ENTERED` — an uninitialised slot reads as "not
+// entered", which is what a proxy that never ran the constructor leaves behind.
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {UUPSUpgradeable} from
+    "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
@@ -36,21 +46,42 @@ import {IMinaSettlementVerifier, SettlementPublicValues} from "./interfaces/IMin
 ///
 /// Collateral invariant: `totalSupply(FMINA) == escrowedNanomina`, and both only
 /// change inside `claimDeposit` (up) and `burnToMina` (down).
-contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
+/// # Upgradability
+///
+/// UUPS behind an ERC-1967 proxy, so the bridge address is permanent. That is
+/// worth more than the ability to fix bugs: `FMINA.BRIDGE` is immutable and
+/// points here, so without a stable address every new implementation would mean
+/// a new token and every holder of the old one left with nothing enforcing it.
+/// The proxy removes that problem rather than working around it.
+///
+/// The cost is that `owner` can replace this logic entirely, including with
+/// logic that mints without collateral. It is recorded in docs/threat-model.md
+/// beside the other trusted keys rather than treated as infrastructure.
+contract MinaPortBridge is
+    Ownable2StepUpgradeable,
+    PausableUpgradeable,
+    ReentrancyGuard,
+    UUPSUpgradeable
+{
     using MinaPortEncoding for MinaPortEncoding.Deposit;
 
     // -------------------------------------------------------------------------
-    // Immutables
+    // Deployment constants
+    //
+    // Storage rather than `immutable`: an immutable is baked into the
+    // implementation's bytecode, and the proxy runs a different implementation
+    // after every upgrade. These have to live in the proxy's storage or they
+    // would silently reset on the first upgrade.
     // -------------------------------------------------------------------------
 
     /// @notice The FMINA token. Deployed by this contract so the mint/burn
     /// authority can never be pointed at a token the bridge does not control.
-    FMINA public immutable TOKEN;
+    FMINA public TOKEN;
 
     /// @notice Binds this bridge to one Mina zkApp on one Mina network.
     /// @dev Every accepted batch must carry this exact id, so a proof produced
     /// for a devnet deployment can never settle on a mainnet bridge.
-    bytes32 public immutable BRIDGE_ID;
+    bytes32 public BRIDGE_ID;
 
     /// @notice Delay enforced on verifier rotation.
     uint256 public constant VERIFIER_UPDATE_DELAY = 2 days;
@@ -170,18 +201,35 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
     // Construction
     // -------------------------------------------------------------------------
 
+    /// @dev Disables initialisers on the implementation itself. Without this,
+    /// anyone can call `initialize` directly on the implementation and become
+    /// its owner — and since UUPS puts `upgradeToAndCall` in the implementation
+    /// rather than the proxy, that owner can brick what the proxy delegates to.
+    constructor() {
+        _disableInitializers();
+    }
+
+    /// @notice Initialise the proxy. Runs once, in the proxy's storage.
     /// @param owner_ Initial owner (two-step transferable).
     /// @param verifier_ Settlement verifier. May be a mock during development.
     /// @param bridgeId_ Identifier of the Mina zkApp + network this bridge serves.
     /// @param genesisActionState Mina action state the bridge starts from,
     ///        i.e. the zkApp's `Reducer.initialActionState` at deployment.
-    constructor(
+    ///
+    /// @dev FMINA is deployed here rather than passed in, so its immutable
+    /// bridge address is the proxy — which never changes — and an upgrade
+    /// cannot orphan holders.
+    function initialize(
         address owner_,
         IMinaSettlementVerifier verifier_,
         bytes32 bridgeId_,
         bytes32 genesisActionState
-    ) Ownable(owner_) {
+    ) external initializer {
         if (owner_ == address(0) || address(verifier_) == address(0)) revert ZeroAddress();
+        __Ownable_init(owner_);
+        __Ownable2Step_init();
+        __Pausable_init();
+
         verifier = verifier_;
         BRIDGE_ID = bridgeId_;
         currentMinaActionState = genesisActionState;
@@ -194,6 +242,16 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
         attestedMintCapNanomina = DEFAULT_ATTESTED_MINT_CAP;
         emit AttestedMintLimitsUpdated(DEFAULT_MAX_ATTESTED_DEPOSIT, DEFAULT_ATTESTED_MINT_CAP);
     }
+
+    /// @dev Only the owner may install a new implementation.
+    function _authorizeUpgrade(address) internal override onlyOwner {}
+
+    /// @notice Free storage slots reserved for future variables.
+    /// @dev Appending a variable in a later version must not shift anything
+    /// this version already wrote. Consuming a gap slot instead keeps every
+    /// existing offset fixed, which is the whole discipline of upgradeable
+    /// storage — get it wrong once and the balances read as something else.
+    uint256[45] private __gap;
 
     // -------------------------------------------------------------------------
     // Mina -> Flare

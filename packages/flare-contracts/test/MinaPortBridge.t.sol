@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {MinaPortBridge} from "../src/MinaPortBridge.sol";
+import {DeployBridge} from "./helpers/DeployBridge.sol";
 import {FMINA} from "../src/FMINA.sol";
 import {MockSettlementVerifier} from "../src/mocks/MockSettlementVerifier.sol";
 import {MinaPortEncoding} from "../src/libraries/MinaPortEncoding.sol";
@@ -29,7 +30,7 @@ contract MinaPortBridgeTest is Test {
 
     function setUp() public {
         verifier = new MockSettlementVerifier();
-        bridge = new MinaPortBridge(owner, verifier, BRIDGE_ID, GENESIS);
+        bridge = DeployBridge.deploy(owner, verifier, BRIDGE_ID, GENESIS);
         fmina = bridge.TOKEN();
     }
 

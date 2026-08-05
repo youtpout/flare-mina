@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {Test, console} from "forge-std/Test.sol";
 import {MinaPortBridge} from "../src/MinaPortBridge.sol";
+import {DeployBridge} from "./helpers/DeployBridge.sol";
 import {FMINA} from "../src/FMINA.sol";
 import {MockSettlementVerifier} from "../src/mocks/MockSettlementVerifier.sol";
 import {MinaSchnorr} from "../src/libraries/MinaSchnorr.sol";
@@ -42,7 +43,7 @@ contract MinaSignatureDepositTest is Test {
         vm.chainId(CHAIN_ID);
         attestor = vm.addr(attestorPk);
 
-        bridge = new MinaPortBridge(
+        bridge = DeployBridge.deploy(
             owner, new MockSettlementVerifier(), keccak256("test"), bytes32(0)
         );
         fmina = bridge.TOKEN();
@@ -276,7 +277,7 @@ contract MinaSignatureDepositTest is Test {
     }
 
     function test_rejectsWhenNoAttestorConfigured() public {
-        MinaPortBridge fresh = new MinaPortBridge(
+        MinaPortBridge fresh = DeployBridge.deploy(
             owner, new MockSettlementVerifier(), keccak256("t2"), bytes32(0)
         );
         Signed memory sig = _signDeposit(recipient, AMOUNT, 0);

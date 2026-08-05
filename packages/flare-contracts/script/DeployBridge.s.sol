@@ -2,6 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {Script, console} from "forge-std/Script.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {MinaPortBridge} from "../src/MinaPortBridge.sol";
 import {BridgeWrapperFactory} from "../src/BridgeWrapper.sol";
 import {MockSettlementVerifier} from "../src/mocks/MockSettlementVerifier.sol";
@@ -44,7 +45,19 @@ contract DeployBridge is Script {
         vm.startBroadcast();
 
         MockSettlementVerifier verifier = new MockSettlementVerifier();
-        bridge = new MinaPortBridge(owner, IMinaSettlementVerifier(address(verifier)), bridgeId, bytes32(0));
+
+        // UUPS: the proxy is the permanent address, the implementation is
+        // replaceable. FMINA is deployed by `initialize` and holds the proxy
+        // address as its immutable bridge, so upgrading never orphans holders.
+        MinaPortBridge implementation = new MinaPortBridge();
+        ERC1967Proxy proxy = new ERC1967Proxy(
+            address(implementation),
+            abi.encodeCall(
+                MinaPortBridge.initialize,
+                (owner, IMinaSettlementVerifier(address(verifier)), bridgeId, bytes32(0))
+            )
+        );
+        bridge = MinaPortBridge(address(proxy));
         wrappers = new BridgeWrapperFactory();
 
         vm.stopBroadcast();
@@ -52,7 +65,8 @@ contract DeployBridge is Script {
         console.log("chain id            :", block.chainid);
         console.log("MockSettlementVerifier:", address(verifier));
         console.log("  ^ ACCEPTS ANY PROOF - testnet only");
-        console.log("MinaPortBridge      :", address(bridge));
+        console.log("MinaPortBridge      :", address(bridge), "(proxy)");
+        console.log("  implementation    :", address(implementation));
         console.log("FMINA               :", address(bridge.TOKEN()));
         console.log("BridgeWrapperFactory:", address(wrappers));
     }

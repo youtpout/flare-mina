@@ -12,6 +12,7 @@ import {
   method,
   Permissions,
   Poseidon,
+  VerificationKey,
   state,
 } from 'o1js';
 import { DEPOSIT_DOMAIN, EVM_ADDRESS_BITS } from './constants.js';
@@ -273,8 +274,21 @@ export class MinaPortBridge extends SmartContract {
       send: Permissions.proof(),
       receive: Permissions.proof(),
       editState: Permissions.proof(),
-      // The verification key must not be swappable without an explicit upgrade.
-      setVerificationKey: Permissions.VerificationKey.impossibleDuringCurrentVersion(),
+      // Upgradable, and this is a real concession rather than housekeeping.
+      //
+      // Every circuit change produces a new verification key. With the key
+      // locked, shipping one means a fresh zkApp at a fresh address, and the
+      // MINA escrowed at the old one stays there unreachable. That has already
+      // cost this project funds.
+      //
+      // What it costs: whoever can upgrade can install a circuit that pays the
+      // escrow to itself. The admin key becomes as powerful as the collateral,
+      // which is why `upgrade` is a distinct signed method rather than an
+      // ambient capability, and why it is recorded in docs/threat-model.md.
+      //
+      // `proofDuringCurrentVersion` means the key can only change by running a
+      // method of the circuit currently deployed — never by signature alone.
+      setVerificationKey: Permissions.VerificationKey.proofDuringCurrentVersion(),
       setPermissions: Permissions.impossible(),
     });
   }
@@ -352,6 +366,32 @@ export class MinaPortBridge extends SmartContract {
       }),
     );
     this.emitEvent('deposit', new DepositEvent({ nonce, sender, flareRecipient, amount }));
+  }
+
+  /**
+   * Install a new verification key, keeping the address and the escrow.
+   *
+   * # What it does and does not carry over
+   *
+   * The account survives: address, balance, and all eight state fields. That is
+   * the point — redeploying strands every MINA held here.
+   *
+   * What does *not* upgrade is the **meaning** of those fields. They are raw
+   * field elements, so a new circuit that lays them out differently will read
+   * the old values as whatever its own layout says. Changing logic is safe;
+   * changing layout requires migrating deliberately, and nothing here checks
+   * that you did.
+   *
+   * This is the most dangerous method on the contract. A key whose circuit pays
+   * the balance out is, from here, indistinguishable from a bug fix — the admin
+   * signature is the whole of the protection.
+   */
+  @method async upgrade(vk: VerificationKey) {
+    const admin = this.admin.getAndRequireEquals();
+    const adminUpdate = AccountUpdate.createSigned(admin);
+    adminUpdate.body.useFullCommitment = Bool(true);
+
+    this.account.verificationKey.set(vk);
   }
 
   /**
