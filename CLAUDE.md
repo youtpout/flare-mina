@@ -333,9 +333,11 @@ IndexedMerkleMap insert ~2.79M. Coston2 block limit is 28M.
 - The systems explorer's *validators* page lists node identities, not signing
   policy addresses. Only the latter appear in `Relay` calldata.
 - Across an epoch boundary the signer **set and weights are unchanged** — only
-  the order rotates by one position, so every index shifts. The root therefore
+  the order rotates, by a varying amount (observed 2, 6, 1, 0, 6, 1 over epochs
+  5897-5903, ~42h). A rotation of 0 leaves the root identical. The root usually
   changes while nothing expensive does, and recovered keys stay valid: match
-  voters to keys **by address**, never by index or epoch.
+  voters to keys **by address**, never by index or epoch. Mainnet weights follow
+  stake, so do not assume any of this is guaranteed by the protocol.
 - FDC attests Flare itself (`testFLR` is a valid `EVMTransaction` source), and
   `provideInput: false` + one `logIndex` keeps the leaf small.
 
