@@ -65,6 +65,8 @@ export type SigningPolicy = {
   threshold: number;
   seed: Hex;
   voters: PolicyVoter[];
+  /** The packed bytes, as `Relay` hashes them. Kept for `signingPolicyHash`. */
+  encoded: Hex;
 };
 
 /** The 38 bytes the validators signed. */
@@ -135,6 +137,7 @@ export function parseRelayCalldata(calldata: Hex): RelayCall {
   const r = new Reader(calldata);
   r.take(4); // selector
 
+  const policyStart = r.position;
   const voterCount = r.number(2);
   const rewardEpochId = r.number(3);
   const startVotingRoundId = r.number(4);
@@ -149,6 +152,8 @@ export function parseRelayCalldata(calldata: Hex): RelayCall {
   // The signed message is these 38 bytes verbatim, so remember where it starts
   // rather than re-encoding it — a re-encoding that drifts would produce a hash
   // that recovers the wrong signers, silently.
+  const policyEncoded = r.slice(policyStart, r.position);
+
   const messageStart = r.position;
   const protocolId = r.number(1);
   const votingRoundId = r.number(4);
@@ -174,7 +179,14 @@ export function parseRelayCalldata(calldata: Hex): RelayCall {
   }
 
   return {
-    policy: { rewardEpochId, startVotingRoundId, threshold, seed, voters },
+    policy: {
+      rewardEpochId,
+      startVotingRoundId,
+      threshold,
+      seed,
+      voters,
+      encoded: policyEncoded,
+    },
     message: { protocolId, votingRoundId, isSecureRandom, merkleRoot, encoded },
     signatures,
   };
@@ -301,4 +313,37 @@ export async function harvestPolicyKeys(
 /** Weight represented by the voters whose keys are known. */
 export function knownWeight(known: PolicyKey[]): number {
   return known.reduce((sum, v) => sum + v.weight, 0);
+}
+
+/**
+ * The commitment `Relay` stores for a reward epoch's signing policy.
+ *
+ * # Why this matters more than the policy itself
+ *
+ * Any relay transaction carries a copy of the validator set, but a copy is not
+ * an authority. `toSigningPolicyHash(rewardEpochId)` is: it is written when
+ * governance publishes a new epoch's policy, and `relay()` refuses any calldata
+ * whose policy does not hash to it. Checking a candidate policy against it is
+ * how you know you have the *authorised* signers rather than a plausible list.
+ *
+ * # The scheme
+ *
+ * Not a keccak of the whole buffer. `Relay` hashes the first 64 bytes, then
+ * folds in each following 32-byte word:
+ *
+ *   h = keccak256(bytes[0..64])
+ *   h = keccak256(h || word)   for each 32-byte word after that
+ *
+ * The final word is whatever remains, zero-padded — Solidity reads a full
+ * memory word regardless, so trailing bytes past the buffer are zero.
+ */
+export function signingPolicyHash(policy: SigningPolicy): Hex {
+  const bytes = policy.encoded.slice(2);
+  let hash = keccak256(`0x${bytes.slice(0, 128)}`);
+
+  for (let at = 128; at < bytes.length; at += 64) {
+    const word = bytes.slice(at, at + 64).padEnd(64, '0');
+    hash = keccak256(`0x${hash.slice(2)}${word}`);
+  }
+  return hash;
 }

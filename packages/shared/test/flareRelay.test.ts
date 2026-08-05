@@ -7,6 +7,7 @@ import {
   addressFromPublicKey,
   harvestPolicyKeys,
   knownWeight,
+  signingPolicyHash,
   parseRelayCalldata,
   recoverSigners,
 } from '../src/flareRelay.js';
@@ -170,5 +171,47 @@ describe('harvesting the validator keys', () => {
   it('reports how much weight the known keys carry', async () => {
     const { known } = await harvestPolicyKeys(calls[0]!.policy, calls);
     expect(knownWeight(known)).toBeGreaterThanOrEqual(calls[0]!.policy.threshold);
+  });
+});
+
+describe('the authorised signer set', () => {
+  const calls = Object.values(fixtures).map((f) => parseRelayCalldata(f.calldata));
+
+  /**
+   * What makes the list authoritative rather than merely present.
+   *
+   * Every relay transaction carries a copy of the validator set, but a copy
+   * proves nothing on its own. `Relay.toSigningPolicyHash(rewardEpochId)` is
+   * the commitment governance wrote when the epoch opened, and `relay()`
+   * rejects any calldata whose policy does not hash to it.
+   *
+   * The expected value below was read from Coston2 at reward epoch 5902. It is
+   * pinned rather than fetched so the suite stays offline, but it is a real
+   * on-chain value, not one this implementation produced.
+   */
+  it('reproduces the hash Relay stores for the epoch', () => {
+    const policy = calls[0]!.policy;
+    expect(policy.rewardEpochId).toBe(5902);
+    expect(signingPolicyHash(policy)).toBe(
+      '0x4059cd5063e49a90718d0c48b1b13efccdf6f958952a3bf736309967cb816973',
+    );
+  });
+
+  /** Both fixtures relayed under the same epoch, so both must hash the same. */
+  it('agrees across transactions of the same epoch', () => {
+    const hashes = new Set(calls.map((c) => signingPolicyHash(c.policy)));
+    expect(hashes.size).toBe(1);
+  });
+
+  /** A single altered weight has to change the commitment. */
+  it('changes when a voter weight is tampered with', () => {
+    const policy = calls[0]!.policy;
+    const bytes = policy.encoded.slice(2);
+    // Last voter's weight is the final 2 bytes of the packed policy.
+    const tampered = {
+      ...policy,
+      encoded: `0x${bytes.slice(0, -4)}ffff` as const,
+    };
+    expect(signingPolicyHash(tampered)).not.toBe(signingPolicyHash(policy));
   });
 });
