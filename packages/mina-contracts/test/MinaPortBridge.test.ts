@@ -1,5 +1,14 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { AccountUpdate, Field, Mina, PrivateKey, PublicKey, UInt32, UInt64 } from 'o1js';
+import {
+  AccountUpdate,
+  Field,
+  MerkleTree,
+  Mina,
+  PrivateKey,
+  PublicKey,
+  UInt32,
+  UInt64,
+} from 'o1js';
 import {
   WithdrawalChain,
   type WithdrawalChainProof,
@@ -8,8 +17,11 @@ import {
 import {
   Bytes32,
   EcdsaSignature,
+  POLICY_TREE_HEIGHT,
+  PolicyWitness,
   Secp256k1,
   SigningPolicyFold,
+  policyLeaf,
 } from '../src/SigningPolicyFold.js';
 import {
   DepositAction,
@@ -34,6 +46,8 @@ let attestor: PublicKey;
 let zkAppKey: PrivateKey;
 let zkAppAddress: PublicKey;
 let bridge: MinaPortBridge;
+let policyTree: MerkleTree;
+let validatorKey: bigint;
 
 beforeAll(async () => {
   const Local = await Mina.LocalBlockchain({ proofsEnabled: false });
@@ -50,9 +64,20 @@ beforeAll(async () => {
   zkAppAddress = zkAppKey.toPublicKey();
   bridge = new MinaPortBridge(zkAppAddress);
 
+  // A one-validator signing policy. `requiredWeight` stays zero, so what is
+  // exercised here is the binding, not the threshold.
+  validatorKey = Secp256k1.Scalar.random().toBigInt();
+  const publicKey = Secp256k1.generator.scale(validatorKey);
+  policyTree = new MerkleTree(POLICY_TREE_HEIGHT);
+  policyTree.setLeaf(0n, policyLeaf(publicKey, UInt32.from(0), UInt32.from(1)));
+
   const deployTx = await Mina.transaction(deployer, async () => {
     AccountUpdate.fundNewAccount(deployer);
-    await bridge.deploy({ admin: deployer, withdrawalAttestor: attestor });
+    await bridge.deploy({
+      admin: deployer,
+      withdrawalAttestor: attestor,
+      signingPolicyRoot: policyTree.getRoot(),
+    });
   });
   await deployTx.prove();
   await deployTx.sign([deployerKey, zkAppKey]).send();
@@ -253,15 +278,15 @@ describe('withdrawal release', () => {
     s2 = applyWithdrawal(s1, w2);
   }, 300_000);
 
-  /** A signing-policy proof over an arbitrary root; `requiredWeight` is zero here. */
+  /** A proof from the one validator the deployed policy contains. */
   async function signingProof() {
-    const key = Secp256k1.Scalar.random().toBigInt();
     const message = Bytes32.random();
-    const { proof } = await SigningPolicyFold.single(message, Field(0xf1a2e), {
-      publicKey: Secp256k1.generator.scale(key),
-      signature: EcdsaSignature.signHash(message, key),
+    const { proof } = await SigningPolicyFold.single(message, policyTree.getRoot(), {
+      publicKey: Secp256k1.generator.scale(validatorKey),
+      signature: EcdsaSignature.signHash(message, validatorKey),
       index: UInt32.from(0),
       weight: UInt32.from(1),
+      witness: new PolicyWitness(policyTree.getWitness(0n)),
     } as never);
     return proof;
   }
@@ -324,7 +349,6 @@ describe('withdrawal release', () => {
     await release(w1, tail);
 
     expect(bridge.processedActionState.get().toString()).toBe(s1.toString());
-    expect(bridge.lastWithdrawalNonce.get().toBigInt()).toBe(1n);
     expect(Mina.getBalance(zkAppAddress).toBigInt()).toBe(escrowBefore - MINA);
     expect(Mina.getBalance(user).toBigInt()).toBe(balanceBefore + MINA);
   }, 300_000);
@@ -335,13 +359,16 @@ describe('withdrawal release', () => {
     await release(w2, tail);
 
     expect(bridge.processedActionState.get().toString()).toBe(s2.toString());
-    expect(bridge.lastWithdrawalNonce.get().toBigInt()).toBe(2n);
   }, 300_000);
 
-  /** Once the cursor has passed a withdrawal, its tail no longer starts there. */
+  /**
+   * Replay protection now comes from the cursor rather than a stored nonce.
+   * The cursor sits at s2, so folding w1 onto it lands somewhere the old tail
+   * does not begin — the release is refused because the two no longer meet.
+   */
   it('refuses a replayed withdrawal', async () => {
     const { proof: tail } = await WithdrawalChain.link(s1, w2);
-    await expect(release(w1, tail)).rejects.toThrow(/strictly increasing/);
+    await expect(release(w1, tail)).rejects.toThrow(/does not continue/);
   }, 300_000);
 });
 

@@ -2,6 +2,8 @@ import {
   Bytes,
   Crypto,
   Field,
+  MerkleWitness,
+  Poseidon,
   SelfProof,
   Struct,
   UInt32,
@@ -62,17 +64,36 @@ import {
  * weight, not headcount. A consumer checking only `count` is making a weaker
  * claim than Flare does.
  *
- * # NOT YET SOUND: the signer is not bound to the policy
+ * # How the signer is bound to the policy
  *
- * `policy` is carried but nothing constrains `(index, publicKey, weight)` to
- * belong to it, so a prover can name any key and claim any weight. What this
- * proves today is *"n valid ECDSA signatures over this message, at distinct
- * ascending indices"* — real, and the expensive part, but not yet *"Flare's
- * signing policy approved this root"*.
+ * `policy` is a Poseidon Merkle root over the validator set, and every leaf
+ * commits to the whole tuple:
  *
- * Closing it means proving membership against `Relay.toSigningPolicyHash`,
- * which is keccak — and keccak costs 14,636 rows against Poseidon's 13. That
- * is the next piece, and it must land before this replaces the attestor.
+ *   leaf = Poseidon([index, publicKey.x limbs, publicKey.y limbs, weight])
+ *
+ * A signer therefore cannot be invented, and a real signer's weight cannot be
+ * inflated — both live under the same hash. The witness index is checked
+ * against the claimed index too, or a prover could prove membership at one
+ * position while claiming another, and defeat the ascending-index rule that
+ * makes `count` mean distinct signers.
+ *
+ * # Why this tree is Poseidon and not keccak
+ *
+ * Flare commits to the same set with `Relay.toSigningPolicyHash`, in keccak,
+ * because an EVM has to verify it. Mina's copy only has to be *correct*, not
+ * identically encoded — so it is built in Poseidon, at 13 rows a level against
+ * keccak's 14,636.
+ *
+ * Measured, that makes membership **132 rows** beside the 31,814 of the ECDSA
+ * verification it accompanies: 0.4%.
+ *
+ * # What still has to be trusted
+ *
+ * That the root a consumer compares against really is Flare's validator set.
+ * It is a far weaker assumption than attesting individual withdrawals: the
+ * signing policy is public, changes once per reward epoch, and anyone can check
+ * a published root against `Relay`. A wrong one is visible; a wrong withdrawal
+ * attestation is not.
  */
 
 export class Secp256k1 extends createForeignCurve(Crypto.CurveParams.Secp256k1) {}
@@ -101,11 +122,41 @@ export class SignatureSet extends Struct({
   maxIndex: UInt32,
 }) {}
 
+/**
+ * Merkle depth of the policy tree: 128 leaves.
+ *
+ * Sized for mainnet, where `maxVoters()` is 100, rather than for Coston2's
+ * eight — a testnet-sized tree would mean recompiling every circuit to go live.
+ */
+export const POLICY_TREE_HEIGHT = 8;
+
+export class PolicyWitness extends MerkleWitness(POLICY_TREE_HEIGHT) {}
+
+/**
+ * The leaf committing one entry of the signing policy.
+ *
+ * Exported because the tree has to be built the same way off-chain; if the two
+ * ever disagree, every proof fails rather than some subtly wrong one passing.
+ *
+ * Both curve coordinates are hashed. Hashing only `x` would let a point and its
+ * negation share a leaf, and they are different public keys.
+ */
+export function policyLeaf(publicKey: Secp256k1, index: UInt32, weight: UInt32): Field {
+  return Poseidon.hash([
+    index.value,
+    ...publicKey.x.toFields(),
+    ...publicKey.y.toFields(),
+    weight.value,
+  ]);
+}
+
 export class SignerInput extends Struct({
   publicKey: Secp256k1,
   signature: EcdsaSignature,
   index: UInt32,
   weight: UInt32,
+  /** Path proving this entry belongs to the policy the proof names. */
+  witness: PolicyWitness,
 }) {}
 
 export const SigningPolicyFold = ZkProgram({
@@ -125,6 +176,19 @@ export const SigningPolicyFold = ZkProgram({
         signer.signature
           .verifySignedHash(message, signer.publicKey)
           .assertTrue('invalid validator signature');
+
+        // The signature is only worth counting if this key is in the policy at
+        // this index with this weight.
+        signer.witness
+          .calculateRoot(policyLeaf(signer.publicKey, signer.index, signer.weight))
+          .assertEquals(policy, 'signer is not in the signing policy');
+
+        // And at the index it claims. Without this a prover could prove
+        // membership at one position while reporting another, and merge the
+        // same signer repeatedly under ascending indices it never held.
+        signer.witness
+          .calculateIndex()
+          .assertEquals(signer.index.value, 'witness is for a different policy index');
 
         return {
           publicOutput: new SignatureSet({

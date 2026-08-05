@@ -145,14 +145,23 @@ export class WithdrawalEvent extends Struct({
  */
 export class MinaPortBridge extends SmartContract {
   /**
-   * Highest Flare withdrawal nonce released so far.
+   * Poseidon Merkle root over Flare's signing policy: one leaf per validator,
+   * committing to `(index, publicKey, weight)`.
    *
-   * Withdrawals must be released in strictly increasing nonce order, which
-   * gives replay protection in O(1) state instead of an unbounded set. The
-   * relayer is responsible for submitting them in order; it cannot skip one
-   * without permanently stranding it (see docs/threat-model.md).
+   * This is what makes a `SigningPolicyFold` proof mean something. Without it
+   * the proof says only "n valid ECDSA signatures at distinct indices" — real,
+   * but a prover could name any keys and claim any weights.
+   *
+   * Poseidon rather than Flare's keccak `toSigningPolicyHash`: this copy only
+   * has to be correct, not identically encoded, and Poseidon costs 13 rows a
+   * level against keccak's 14,636. Membership ends up at 132 rows beside the
+   * 31,814 of the signature it accompanies.
+   *
+   * It occupies the field `lastWithdrawalNonce` used to hold. That check is
+   * subsumed by the chain: a release must be the next link from the cursor, so
+   * the nonce order is already forced and could not fail independently.
    */
-  @state(UInt64) lastWithdrawalNonce = State<UInt64>();
+  @state(Field) signingPolicyRoot = State<Field>();
 
   /**
    * Key authorised to attest a Flare -> Mina withdrawal.
@@ -229,6 +238,8 @@ export class MinaPortBridge extends SmartContract {
     args: DeployArgs & {
       admin: PublicKey;
       withdrawalAttestor: PublicKey;
+      /** Poseidon root over Flare's validator set. Zero accepts no proof. */
+      signingPolicyRoot?: Field;
       /** Signing weight a Flare root must carry. Zero accepts any. */
       requiredWeight?: UInt64;
     },
@@ -237,11 +248,11 @@ export class MinaPortBridge extends SmartContract {
     this.admin.set(args.admin);
     this.withdrawalAttestor.set(args.withdrawalAttestor);
     this.requiredWeight.set(args.requiredWeight ?? UInt64.zero);
+    this.signingPolicyRoot.set(args.signingPolicyRoot ?? Field(0));
   }
 
   override init() {
     super.init();
-    this.lastWithdrawalNonce.set(UInt64.zero);
     // Zero is the empty chain on both sides: Flare's `withdrawalActionState`
     // starts there too, so a fresh bridge is already in agreement.
     this.flareActionState.set(Field(0));
@@ -376,6 +387,13 @@ export class MinaPortBridge extends SmartContract {
   @method async publishFlareActionState(actionState: Field, proof: SigningPolicyProof) {
     proof.verify();
 
+    // The signers must belong to the policy this bridge knows about, or the
+    // weight below is a number the prover chose.
+    proof.publicOutput.policy.assertEquals(
+      this.signingPolicyRoot.getAndRequireEquals(),
+      'proof is against a different signing policy',
+    );
+
     const required = this.requiredWeight.getAndRequireEquals();
     proof.publicOutput.weight.value.assertGreaterThanOrEqual(
       required.value,
@@ -414,9 +432,6 @@ export class MinaPortBridge extends SmartContract {
   @method async releaseWithdrawal(record: WithdrawalRecord, tail: WithdrawalChainProof) {
     record.amount.assertGreaterThan(UInt64.zero, 'withdrawal amount must be non-zero');
 
-    const lastNonce = this.lastWithdrawalNonce.getAndRequireEquals();
-    record.nonce.assertGreaterThan(lastNonce, 'withdrawal nonce must be strictly increasing');
-
     // Collateral check, against the account balance rather than a number we
     // maintain. With `receive: proof()` the balance moves only through these
     // methods, so it *is* the escrowed total — and a precondition on a range
@@ -438,7 +453,6 @@ export class MinaPortBridge extends SmartContract {
     );
 
     this.processedActionState.set(next);
-    this.lastWithdrawalNonce.set(record.nonce);
 
     this.send({ to: record.recipient, amount: record.amount });
     this.emitEvent(

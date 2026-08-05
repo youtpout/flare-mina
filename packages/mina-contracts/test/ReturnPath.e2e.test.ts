@@ -11,10 +11,18 @@
  * one. Roughly 70s on an M4, which is why it is one test rather than several.
  */
 import { expect, it } from 'vitest';
-import { AccountUpdate, Field, Mina, PrivateKey, UInt32, UInt64 } from 'o1js';
+import { AccountUpdate, Field, MerkleTree, Mina, PrivateKey, UInt32, UInt64 } from 'o1js';
 import { MinaPortBridge, WithdrawalRecord, flareRecipientField } from '../src/MinaPortBridge.js';
 import { WithdrawalChain, applyWithdrawal } from '../src/WithdrawalChain.js';
-import { Bytes32, EcdsaSignature, Secp256k1, SigningPolicyFold } from '../src/SigningPolicyFold.js';
+import {
+  Bytes32,
+  EcdsaSignature,
+  POLICY_TREE_HEIGHT,
+  PolicyWitness,
+  Secp256k1,
+  SigningPolicyFold,
+  policyLeaf,
+} from '../src/SigningPolicyFold.js';
 
 it('end to end with real proofs', async () => {
   const t = (s: string, ms: number) => console.log(`${s.padEnd(34)} ${(ms / 1000).toFixed(1)}s`);
@@ -33,10 +41,21 @@ it('end to end with real proofs', async () => {
   const zkAppKey = PrivateKey.random(), zkApp = zkAppKey.toPublicKey();
   const bridge = new MinaPortBridge(zkApp);
 
+  // One validator, committed to a Poseidon policy tree the circuit checks
+  // membership against.
+  const validatorKey = Secp256k1.Scalar.random().toBigInt();
+  const validator = Secp256k1.generator.scale(validatorKey);
+  const policyTree = new MerkleTree(POLICY_TREE_HEIGHT);
+  policyTree.setLeaf(0n, policyLeaf(validator, UInt32.from(0), UInt32.from(1)));
+
   m = Date.now();
   let tx = await Mina.transaction(deployer, async () => {
     AccountUpdate.fundNewAccount(deployer);
-    await bridge.deploy({ admin: deployer, withdrawalAttestor: attestor });
+    await bridge.deploy({
+      admin: deployer,
+      withdrawalAttestor: attestor,
+      signingPolicyRoot: policyTree.getRoot(),
+    });
   });
   await tx.prove(); await tx.sign([deployerKey, zkAppKey]).send();
   t('deploy', Date.now() - m);
@@ -55,12 +74,13 @@ it('end to end with real proofs', async () => {
   const s2 = applyWithdrawal(s1, w2);
 
   m = Date.now();
-  const key = Secp256k1.Scalar.random().toBigInt();
   const msg = Bytes32.random();
-  const { proof: sp } = await SigningPolicyFold.single(msg, Field(0xf1a2e), {
-    publicKey: Secp256k1.generator.scale(key),
-    signature: EcdsaSignature.signHash(msg, key),
-    index: UInt32.from(0), weight: UInt32.from(1),
+  const { proof: sp } = await SigningPolicyFold.single(msg, policyTree.getRoot(), {
+    publicKey: validator,
+    signature: EcdsaSignature.signHash(msg, validatorKey),
+    index: UInt32.from(0),
+    weight: UInt32.from(1),
+    witness: new PolicyWitness(policyTree.getWitness(0n)),
   } as never);
   t('prove signing policy (1 ECDSA)', Date.now() - m);
 

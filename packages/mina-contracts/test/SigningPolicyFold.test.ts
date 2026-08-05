@@ -1,11 +1,14 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { Field, UInt32 } from 'o1js';
+import { Field, MerkleTree, UInt32 } from 'o1js';
 import {
   Bytes32,
   EcdsaSignature,
+  POLICY_TREE_HEIGHT,
+  PolicyWitness,
   Secp256k1,
   SignerInput,
   SigningPolicyFold,
+  policyLeaf,
 } from '../src/SigningPolicyFold.js';
 
 /**
@@ -18,12 +21,13 @@ import {
  * be combined.
  */
 
-const POLICY = Field(0xf1a2e);
-
 type Voter = { key: bigint; publicKey: Secp256k1; index: number; weight: number };
 
 let message: Bytes32;
 let voters: Voter[];
+/** The policy tree, built exactly as the circuit expects it. */
+let policyTree: MerkleTree;
+let POLICY: Field;
 
 beforeAll(async () => {
   await SigningPolicyFold.compile({ proofsEnabled: false });
@@ -36,6 +40,15 @@ beforeAll(async () => {
     const key = Secp256k1.Scalar.random().toBigInt();
     return { key, publicKey: Secp256k1.generator.scale(key), index: i, weight: 100 * (i + 1) };
   });
+
+  policyTree = new MerkleTree(POLICY_TREE_HEIGHT);
+  for (const v of voters) {
+    policyTree.setLeaf(
+      BigInt(v.index),
+      policyLeaf(v.publicKey, UInt32.from(v.index), UInt32.from(v.weight)),
+    );
+  }
+  POLICY = policyTree.getRoot();
 }, 300_000);
 
 function signerFor(voter: Voter, over: Bytes32 = message): SignerInput {
@@ -44,6 +57,7 @@ function signerFor(voter: Voter, over: Bytes32 = message): SignerInput {
     signature: EcdsaSignature.signHash(over, voter.key),
     index: UInt32.from(voter.index),
     weight: UInt32.from(voter.weight),
+    witness: new PolicyWitness(policyTree.getWitness(BigInt(voter.index))),
   });
 }
 
@@ -89,6 +103,46 @@ describe('merging validator signatures', () => {
     const high = await single(voters[5]!);
     const low = await single(voters[2]!);
     await expect(SigningPolicyFold.merge(high, low)).rejects.toThrow(/strictly ascending/);
+  }, 300_000);
+
+  /**
+   * The binding that makes the count mean anything. Without it a prover names
+   * any key with any weight, and a "threshold" is whatever they typed.
+   */
+  it('refuses a signer who is not in the policy', async () => {
+    const key = Secp256k1.Scalar.random().toBigInt();
+    const outsider: Voter = {
+      key,
+      publicKey: Secp256k1.generator.scale(key),
+      index: 1,
+      weight: 100,
+    };
+    await expect(
+      SigningPolicyFold.single(message, POLICY, signerFor(outsider)),
+    ).rejects.toThrow(/not in the signing policy/);
+  }, 300_000);
+
+  /** Nor a real signer claiming more weight than the policy gives them. */
+  it('refuses an inflated weight', async () => {
+    const greedy = { ...voters[0]!, weight: 100_000 };
+    await expect(
+      SigningPolicyFold.single(message, POLICY, signerFor(greedy)),
+    ).rejects.toThrow(/not in the signing policy/);
+  }, 300_000);
+
+  /**
+   * A witness for one position with an index claimed elsewhere would let the
+   * same signer merge with itself under ascending indices it never held.
+   */
+  it('refuses a witness for a different index', async () => {
+    const signer = signerFor(voters[2]!);
+    await expect(
+      SigningPolicyFold.single(
+        message,
+        POLICY,
+        new SignerInput({ ...signer, index: UInt32.from(5) }),
+      ),
+    ).rejects.toThrow(/different policy index|not in the signing policy/);
   }, 300_000);
 
   it('refuses a signature over a different message', async () => {
