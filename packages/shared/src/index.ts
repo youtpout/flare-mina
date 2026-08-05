@@ -9,3 +9,4 @@ export * from './decimals.js';
 export * from './tokens.js';
 export * from './pallas.js';
 export * from './minaSignature.js';
+export * from './flareRelay.js';
