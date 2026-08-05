@@ -205,3 +205,25 @@ export async function withdrawalsFor(recipient: string): Promise<WithdrawalRow[]
   );
   return rows;
 }
+
+
+/** Remember a validator's public key, keyed by the address it hashes to. */
+export async function rememberValidatorKeys(
+  keys: Array<{ address: string; publicKey: string }>,
+): Promise<void> {
+  if (keys.length === 0) return;
+  await pool.query(
+    `INSERT INTO validator_keys (address, public_key)
+       SELECT * FROM UNNEST($1::text[], $2::text[])
+     ON CONFLICT (address) DO UPDATE SET last_seen = now()`,
+    [keys.map((k) => k.address.toLowerCase()), keys.map((k) => k.publicKey)],
+  );
+}
+
+/** Every validator key seen so far, address -> uncompressed public key. */
+export async function knownValidatorKeys(): Promise<Map<string, string>> {
+  const { rows } = await pool.query<{ address: string; public_key: string }>(
+    'SELECT address, public_key FROM validator_keys',
+  );
+  return new Map(rows.map((r) => [r.address.toLowerCase(), r.public_key]));
+}

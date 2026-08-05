@@ -1,5 +1,13 @@
 import { createPublicClient, http, parseAbi, decodeEventLog, type Hex } from 'viem';
-import { parseRelayCalldata, type RelayCall } from '@minaport/shared';
+import {
+  harvestPolicyKeys,
+  knownWeight,
+  parseRelayCalldata,
+  signingPolicyHash,
+  type PolicyKey,
+  type RelayCall,
+} from '@minaport/shared';
+import { knownValidatorKeys, rememberValidatorKeys } from './db/index.js';
 import { publishActionState } from './prover/index.js';
 
 /**
@@ -95,7 +103,44 @@ async function tick(): Promise<void> {
     return;
   }
 
-  const hash = await publishActionState({ actionState, calls });
+  // Newest epoch present, in case the window straddles a boundary.
+  const policy = calls.reduce((a, b) =>
+    a.policy.rewardEpochId >= b.policy.rewardEpochId ? a : b,
+  ).policy;
+
+  // The authority check: a copy of the validator set carried in calldata means
+  // nothing until it matches the commitment the chain stores for that epoch.
+  const onChain = await client.readContract({
+    address: await relay(),
+    abi: parseAbi(['function toSigningPolicyHash(uint256) view returns (bytes32)']),
+    functionName: 'toSigningPolicyHash',
+    args: [BigInt(policy.rewardEpochId)],
+  });
+  if (signingPolicyHash(policy).toLowerCase() !== onChain.toLowerCase()) {
+    console.warn(`publisher: policy for epoch ${policy.rewardEpochId} does not match on chain`);
+    return;
+  }
+
+  // Fresh recoveries from this window, plus everything ever seen. Coverage only
+  // grows; without the stored half it would depend on which validators happened
+  // to sign inside the lookback.
+  const fresh = (await harvestPolicyKeys(policy, calls)).known;
+  await rememberValidatorKeys(fresh);
+  const stored = await knownValidatorKeys();
+
+  const keys: PolicyKey[] = policy.voters.flatMap((voter) => {
+    const publicKey = stored.get(voter.address.toLowerCase());
+    return publicKey === undefined ? [] : [{ ...voter, publicKey: publicKey as `0x${string}` }];
+  });
+
+  if (knownWeight(keys) < policy.threshold) {
+    console.warn(
+      `publisher: known keys carry ${knownWeight(keys)} of ${policy.threshold} required`,
+    );
+    return;
+  }
+
+  const hash = await publishActionState({ actionState, calls, keys });
   published = actionState;
   console.log(`published Flare action state ${actionState} -> ${hash}`);
 }

@@ -235,6 +235,31 @@ export PRIVATE_KEY=0x...        # funded from https://faucet.flare.network
 forge script script/DeployAuth.s.sol --rpc-url $COSTON2_RPC_URL --broadcast
 ```
 
+The bridge, its libraries and the proxy:
+
+```sh
+forge script script/DeployBridge.s.sol --rpc-url $COSTON2_RPC_URL \
+  --with-gas-price 700gwei --legacy --broadcast
+```
+
+Both flags are required on Coston2. Without `--with-gas-price` forge estimates at
+roughly four times the real cost and refuses to broadcast on a balance that is
+in fact ample — 40 C2FLR demanded for a deployment that cost 9.8. Without
+`--legacy` the send fails with *max priority fee per gas higher than max fee per
+gas*, because `--with-gas-price` caps the max fee but not the priority fee.
+
+Then the Mina side:
+
+```sh
+set -a && . ./.env && . ./apps/relayer/.env && set +a
+pnpm --filter @minaport/mina-contracts exec tsc -p tsconfig.json
+node packages/mina-contracts/dist/scripts/deployBridge.js
+```
+
+Built first, and run from `dist`, deliberately: `tsx` does not emit decorator
+metadata, so o1js `@method` classes fail to load under it with
+`Cannot read properties of undefined (reading 'map')`.
+
 Two contracts, no constructor secrets, no owner, no upgrade path. Neither holds
 funds and neither has an admin, so there is nothing to configure afterwards and
 nothing to trust.
@@ -247,10 +272,20 @@ nothing to trust.
 |----------|---------|
 | `MinaAuthRegistry` | `0xcf12aCe3f7D13EE714D57ee22EfA14cbb662fc56` |
 | `MinaAccountFactory` | `0x2a2AcdD54B93675828028fb8108fACc0A387fe23` |
-| `MinaPortBridge` | `0xdb78DA6dd5eC73b7089799eE85Fc2E43126CBae2` |
-| `FMINA` | `0x68189e3a6F0Ef2D1accFd62b6De9abF791B3722e` |
-| `BridgeWrapperFactory` | `0x98f0CA385dBe0724b4D9211fA4e515eB4d6848b7` |
-| `MockSettlementVerifier` | `0xDF7519725DE130Ce083395D0e9Da6E31b5D04eEe` ⚠️ |
+| `MinaPortBridge` (proxy) | `0x871493412EDCcfE0d24f127E6Deb2B20AE5497aB` |
+| ↳ implementation | `0x261B9C6BA506562C14f9e592166934F25972B081` |
+| `FMINA` | `0x4aFce36d468136eD9d880E28C99373F0C3d3f046` |
+| `BridgeWrapperFactory` | `0xE4BB8D56CdF6C44Cc8878A636f77C352768f1b8b` |
+| `MockSettlementVerifier` | `0x6960d1119FeC5e7eA18C1CA64f7E614B61ea4506` ⚠️ |
+
+The bridge sits behind a **transparent proxy**: integrate against the proxy
+address, never the implementation. Upgrades go through the `ProxyAdmin` the
+proxy deployed for itself, owned by the deployer.
+
+Transparent rather than UUPS because the implementation is close to the EIP-170
+limit — UUPS would put the upgrade machinery inside it. `PoseidonPallas` and
+`MinaSchnorr` are deployed as external libraries for the same reason; together
+those three changes took the bridge from an undeployable 39,693 bytes to 19,323.
 
 ⚠️ **`MockSettlementVerifier` accepts any proof.** It exists so the deposit-batch
 path can be exercised end to end before the SP1 pipeline is wired in. The deploy
@@ -273,7 +308,25 @@ than from documentation:
 
 | Contract | Address |
 |----------|---------|
-| Bridge escrow zkApp | [`B62qrnXemTz7RhG8kKwv7id9eHTAVMafTiDrPMyDTMJUSUfpPQYPuMH`](https://minascan.io/devnet/account/B62qrnXemTz7RhG8kKwv7id9eHTAVMafTiDrPMyDTMJUSUfpPQYPuMH) |
+| Bridge escrow zkApp | [`B62qpRkbjE5wH6nFmZnVUN7yrjfAhpJPP2qXxn6z7KQsL6RojmkaDr6`](https://minascan.io/devnet/account/B62qpRkbjE5wH6nFmZnVUN7yrjfAhpJPP2qXxn6z7KQsL6RojmkaDr6) |
+
+Deployment parameters, which the return path depends on:
+
+| | |
+|---|---|
+| verification key hash | `1042487954473656537757452599880528136974818437316913921107387070707106011170` |
+| `signingPolicyRoot` | `9573309213728131632191235555805511915574463302731318985515435894312670369468` |
+| `requiredWeight` | `32767` — Coston2's real threshold, half of 65,534 |
+
+`signingPolicyRoot` is a Poseidon Merkle root over Flare's validator set, built
+by `packages/mina-contracts/scripts/fetchPolicyTree.ts` from `Relay` calldata and
+checked against `Relay.toSigningPolicyHash`. Coston2 rotates its signing policy
+every 6 hours, so this value goes stale four times a day; the relayer's publisher
+rebuilds it and calls `setSigningPolicyRoot` on its own.
+
+`setVerificationKey` is `signature()`, so circuits can be replaced without
+abandoning the escrow — but only by the zkApp's own key, which is the one thing
+in this deployment that cannot be recovered if lost.
 
 Deposits go through the zkApp's `deposit` method, which carries the Flare
 recipient as a 160-bit field element and dispatches the deposit action in the

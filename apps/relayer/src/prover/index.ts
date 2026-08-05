@@ -141,6 +141,8 @@ export function queueDepth(): number {
 export async function publishActionState(request: {
   actionState: bigint;
   calls: unknown[];
+  /** Voters whose public keys are known, already checked against the policy. */
+  keys: unknown[];
 }): Promise<string> {
   await start();
 
@@ -153,6 +155,7 @@ export async function publishActionState(request: {
         id,
         actionState: request.actionState.toString(),
         calls: request.calls,
+        keys: request.keys,
       });
     });
   };

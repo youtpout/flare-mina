@@ -86,3 +86,27 @@ CREATE TABLE IF NOT EXISTS withdrawals (
 );
 
 CREATE INDEX IF NOT EXISTS withdrawals_status_idx ON withdrawals (status);
+
+-- Flare's validator public keys.
+--
+-- The signing policy publishes addresses, and an address is a hash — the key
+-- itself is only knowable once that validator has signed something, recovered
+-- from the signature. Harvesting it again on every restart would make coverage
+-- depend on whatever happens to be in the lookback window; stored, it only ever
+-- grows.
+--
+-- Keyed by address rather than policy index: Coston2 reshuffles the order every
+-- reward epoch (6h) while keeping the same signers, so an index is valid for
+-- one epoch and an address is valid forever.
+--
+-- Not authoritative. Every key is re-checked against the address the policy
+-- lists before it is used, so a wrong row can only cause a proof to be skipped.
+CREATE TABLE IF NOT EXISTS validator_keys (
+  -- Lowercase signing-policy address.
+  address     TEXT        PRIMARY KEY,
+  -- Uncompressed secp256k1 point, 0x04 || x(32) || y(32).
+  public_key  TEXT        NOT NULL,
+
+  first_seen  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen   TIMESTAMPTZ NOT NULL DEFAULT now()
+);

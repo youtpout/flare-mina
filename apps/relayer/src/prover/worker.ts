@@ -43,8 +43,8 @@ import {
   Field,
 } from 'o1js';
 import {
-  harvestPolicyKeys,
   signedMessageHash,
+  type PolicyKey,
   type RelayCall,
 } from '@minaport/shared';
 
@@ -123,6 +123,7 @@ type PublishRequest = {
   id: number;
   actionState: string;
   calls: unknown[];
+  keys: unknown[];
 };
 
 type Request = BuildRequest | ReleaseRequest | PublishRequest;
@@ -239,9 +240,9 @@ async function handlePublish(request: PublishRequest) {
   const sender = feePayer.toPublicKey();
 
   const calls = request.calls as RelayCall[];
-  const policy = calls.reduce((a, b) => (a.policy.rewardEpochId >= b.policy.rewardEpochId ? a : b))
-    .policy;
-  const { known } = await harvestPolicyKeys(policy, calls);
+  // Keys arrive resolved and address-checked; recovery and the database live on
+  // the main thread, so this one only proves.
+  const known = request.keys as PolicyKey[];
   const tree = buildPolicyTree(known);
 
   // The round with the most usable signatures, so one message carries the most
