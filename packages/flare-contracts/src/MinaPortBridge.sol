@@ -12,6 +12,7 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
 import {FMINA} from "./FMINA.sol";
 import {MinaAddressLib} from "./libraries/MinaAddress.sol";
 import {MinaSchnorr} from "./libraries/MinaSchnorr.sol";
+import {PoseidonPallas} from "./libraries/PoseidonPallas.sol";
 import {SignaturePurpose} from "./libraries/SignaturePurpose.sol";
 import {MinaPortEncoding} from "./libraries/MinaPortEncoding.sol";
 import {IMinaSettlementVerifier, SettlementPublicValues} from "./interfaces/IMinaSettlementVerifier.sol";
@@ -86,6 +87,28 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Nanomina currently escrowed on Mina against circulating FMINA.
     uint256 public escrowedNanomina;
 
+    /// @notice Running Poseidon commitment to every withdrawal ever emitted.
+    ///
+    /// @dev The same shape as a Mina action state: each withdrawal folds into
+    /// the previous value, so one field element commits to the whole ordered
+    /// history. Starts at zero, which is the empty chain.
+    ///
+    /// This exists so the Mina side has something cheap to verify. Replaying a
+    /// link costs 13 rows in a Mina circuit against 14,733 for one keccak level,
+    /// so a chain the escrow zkApp can replay directly is worth far more than a
+    /// tree it would have to walk in Ethereum's hash. Emitting it is not enough:
+    /// the contract has to read the previous value to compute the next one.
+    uint256 public withdrawalActionState;
+
+    /// @notice Domain separator for the withdrawal chain, as o1js `prefixToField`
+    /// packs it: the UTF-8 bytes of "MinaPortWithdrawV1", zero-padded to 32 and
+    /// read little-endian.
+    ///
+    /// @dev Domain separation is not decoration here. Without it a digest from
+    /// one part of the protocol could be replayed as a link in this chain.
+    uint256 internal constant WITHDRAWAL_PREFIX_FIELD =
+        4297924978315896314651171907962194736605517;
+
     // -------------------------------------------------------------------------
     // Events
     // -------------------------------------------------------------------------
@@ -106,11 +129,17 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
 
     /// @notice Canonical withdrawal event. This is the event the Mina side
     /// proves against, so its signature and field order are protocol.
+    ///
+    /// @dev `newActionState` is what an FDC attestation ultimately carries to
+    /// Mina. Replaying the chain needs every link, not just the last one, so
+    /// each withdrawal publishes both its own fields and the state they produce.
     event WithdrawToMina(
         uint256 indexed nonce,
         address indexed sender,
         bytes32 indexed minaRecipient,
-        uint256 amount
+        uint256 amount,
+        uint256 previousActionState,
+        uint256 newActionState
     );
 
     event VerifierUpdateProposed(address indexed newVerifier, uint256 readyAt);
@@ -495,7 +524,8 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
         if (amount == 0) revert ZeroAmount();
         // The Mina side accounts in uint64 nanomina; reject anything it cannot represent.
         if (amount > type(uint64).max) revert AmountExceedsUint64();
-        MinaAddressLib.fromBytes32(minaRecipient);
+        (uint256 recipientX, bool recipientIsOdd) =
+            MinaAddressLib.unpack(MinaAddressLib.fromBytes32(minaRecipient));
 
         nonce = nextWithdrawalNonce;
         if (processedWithdrawalNonces[nonce]) revert WithdrawalNonceAlreadyUsed(nonce);
@@ -504,10 +534,27 @@ contract MinaPortBridge is Ownable2Step, Pausable, ReentrancyGuard {
 
         escrowedNanomina -= amount;
 
+        // Fold this withdrawal into the running commitment. The record is
+        // hashed, not the signature that authorised it: Mina needs the recipient
+        // and the amount to pay out, so those are what must be bound. Flare has
+        // already checked the signature by the time this runs.
+        uint256 previousActionState = withdrawalActionState;
+        uint256[] memory fields = new uint256[](5);
+        fields[0] = previousActionState;
+        fields[1] = nonce;
+        fields[2] = recipientX;
+        fields[3] = recipientIsOdd ? 1 : 0;
+        fields[4] = amount;
+        uint256 newActionState =
+            PoseidonPallas.hashWithPrefix(WITHDRAWAL_PREFIX_FIELD, fields);
+        withdrawalActionState = newActionState;
+
         // Burn before emitting so a reverting burn cannot leave a claimable event.
         TOKEN.burn(msg.sender, amount);
 
-        emit WithdrawToMina(nonce, msg.sender, minaRecipient, amount);
+        emit WithdrawToMina(
+            nonce, msg.sender, minaRecipient, amount, previousActionState, newActionState
+        );
     }
 
     // -------------------------------------------------------------------------

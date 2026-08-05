@@ -7,6 +7,7 @@ import {FMINA} from "../src/FMINA.sol";
 import {MockSettlementVerifier} from "../src/mocks/MockSettlementVerifier.sol";
 import {MinaPortEncoding} from "../src/libraries/MinaPortEncoding.sol";
 import {MinaAddressLib} from "../src/libraries/MinaAddress.sol";
+import {PoseidonPallas} from "../src/libraries/PoseidonPallas.sol";
 import {IMinaSettlementVerifier, SettlementPublicValues} from
     "../src/interfaces/IMinaSettlementVerifier.sol";
 
@@ -300,8 +301,18 @@ contract MinaPortBridgeTest is Test {
         _fund(alice, 1_000_000_000);
         bytes32 minaRecipient = bytes32(uint256(12345));
 
+        // The chain starts empty, so this withdrawal folds into zero. Agreement
+        // with o1js is covered in WithdrawalChain.t.sol against fixed vectors.
+        uint256[] memory f = new uint256[](5);
+        (f[0], f[1], f[2], f[3], f[4]) = (0, 0, 12345, 0, 400_000_000);
+        uint256 expectedState = PoseidonPallas.hashWithPrefix(
+            4297924978315896314651171907962194736605517, f
+        );
+
         vm.expectEmit(true, true, true, true);
-        emit MinaPortBridge.WithdrawToMina(0, alice, minaRecipient, 400_000_000);
+        emit MinaPortBridge.WithdrawToMina(
+            0, alice, minaRecipient, 400_000_000, 0, expectedState
+        );
 
         vm.prank(alice);
         uint256 nonce = bridge.burnToMina(400_000_000, minaRecipient);
@@ -309,6 +320,8 @@ contract MinaPortBridgeTest is Test {
         assertEq(nonce, 0);
         assertEq(fmina.balanceOf(alice), 600_000_000);
         assertEq(bridge.nextWithdrawalNonce(), 1);
+        // Stored, not only emitted: the next withdrawal has to read it back.
+        assertEq(bridge.withdrawalActionState(), expectedState);
         assertTrue(bridge.collateralInvariantHolds());
     }
 

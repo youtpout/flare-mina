@@ -294,4 +294,28 @@ library PoseidonPallas {
         absorb(state, input, rc);
         return state[0];
     }
+
+    /// @notice Domain-separated hash, matching o1js `Poseidon.hashWithPrefix`.
+    /// @param prefixField The prefix string packed into a field element.
+    /// @param input The fields to hash under that domain.
+    ///
+    /// @dev The prefix is absorbed **alone** and permuted before `input` is
+    /// absorbed. That is not the same as `hash([prefixField, ...input])`: the
+    /// sponge has rate 2, so prepending would absorb the prefix in the same
+    /// permutation as the first input field and yield a different digest.
+    ///
+    /// `prefixField` is o1js `prefixToField`: the prefix's UTF-8 bytes,
+    /// zero-padded to 32 and read little-endian. Computing it off-chain keeps
+    /// the string out of the calldata and the packing out of the gas cost.
+    function hashWithPrefix(uint256 prefixField, uint256[] memory input)
+        internal
+        pure
+        returns (uint256)
+    {
+        bytes memory rc = loadConstants();
+        uint256[3] memory state = [prefixField, 0, 0];
+        permute(state, rc);
+        absorb(state, input, rc);
+        return state[0];
+    }
 }
