@@ -236,3 +236,69 @@ export async function recoverSigners(
 export function addressFromPublicKey(publicKey: Hex): Hex {
   return `0x${keccak256(`0x${publicKey.slice(4)}`).slice(-40)}`;
 }
+
+/**
+ * A validator, once its public key is known.
+ *
+ * The policy Flare publishes holds addresses. The Mina circuit verifies
+ * signatures against public keys, and an address is a hash of one — so the key
+ * cannot be read out of the policy, only recovered from a signature the voter
+ * produced.
+ */
+export type PolicyKey = PolicyVoter & { publicKey: Hex };
+
+/**
+ * Collect public keys for a signing policy from relay transactions.
+ *
+ * # Why this is not just a lookup
+ *
+ * A voter's key becomes knowable only when they sign. In practice that is not
+ * a limitation: FTSO rounds finalise every 90 seconds, so any voter carrying
+ * weight signs constantly, and a short walk back through `Relay` history
+ * surfaces every one of them. A voter who never signs has no key here, and also
+ * contributes no weight to any threshold — so nothing is lost by not having it.
+ *
+ * # Why the result can be trusted
+ *
+ * Each recovered key is kept only if it hashes to the address the policy lists
+ * at that index. That check is what binds a recovered key to Flare's own
+ * commitment: a wrong message hash, a corrupted signature or a mismatched
+ * calldata offset all recover *some* key, and all of them fail this.
+ *
+ * What is still assumed is that `policy` is genuine. It is, when it came from a
+ * relay transaction that succeeded: `Relay.relay()` hashes the policy in its
+ * calldata against `toSigningPolicyHash[rewardEpochId]` and reverts otherwise.
+ */
+export async function harvestPolicyKeys(
+  policy: SigningPolicy,
+  calls: RelayCall[],
+): Promise<{ known: PolicyKey[]; missing: PolicyVoter[] }> {
+  const keys = new Map<number, Hex>();
+
+  for (const call of calls) {
+    // A different reward epoch is a different validator set; its indices mean
+    // something else and must not be mixed in.
+    if (call.policy.rewardEpochId !== policy.rewardEpochId) continue;
+
+    for (const { index, publicKey } of await recoverSigners(call.message, call.signatures)) {
+      const voter = policy.voters[index];
+      if (voter === undefined) continue;
+      if (addressFromPublicKey(publicKey).toLowerCase() !== voter.address.toLowerCase()) continue;
+      keys.set(index, publicKey);
+    }
+  }
+
+  const known: PolicyKey[] = [];
+  const missing: PolicyVoter[] = [];
+  for (const voter of policy.voters) {
+    const publicKey = keys.get(voter.index);
+    if (publicKey === undefined) missing.push(voter);
+    else known.push({ ...voter, publicKey });
+  }
+  return { known, missing };
+}
+
+/** Weight represented by the voters whose keys are known. */
+export function knownWeight(known: PolicyKey[]): number {
+  return known.reduce((sum, v) => sum + v.weight, 0);
+}

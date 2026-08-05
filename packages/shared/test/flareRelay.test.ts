@@ -5,6 +5,8 @@ import type { Hex } from 'viem';
 import {
   FDC_PROTOCOL_ID,
   addressFromPublicKey,
+  harvestPolicyKeys,
+  knownWeight,
   parseRelayCalldata,
   recoverSigners,
 } from '../src/flareRelay.js';
@@ -117,4 +119,56 @@ describe.each(Object.values(fixtures))('relay calldata for protocol $protocolId'
 it('captured an FDC round, not only FTSO', () => {
   const protocols = Object.values(fixtures).map((f) => f.protocolId);
   expect(protocols).toContain(FDC_PROTOCOL_ID);
+});
+
+describe('harvesting the validator keys', () => {
+  const calls = Object.values(fixtures).map((f) => parseRelayCalldata(f.calldata));
+
+  it('recovers keys for every voter that signed', async () => {
+    const { known, missing } = await harvestPolicyKeys(calls[0]!.policy, calls);
+
+    const signed = new Set(calls.flatMap((c) => c.signatures.map((s) => s.index)));
+    expect(known.map((k) => k.index).sort()).toEqual([...signed].sort());
+    // Everyone else is unknown, which is the honest state rather than a bug.
+    expect(known.length + missing.length).toBe(calls[0]!.policy.voters.length);
+  });
+
+  /**
+   * The point of harvesting rather than reading: a voter absent from one round
+   * appears in another, and two rounds already cover more than one.
+   */
+  it('accumulates across rounds', async () => {
+    const fromOne = await harvestPolicyKeys(calls[0]!.policy, [calls[0]!]);
+    const fromBoth = await harvestPolicyKeys(calls[0]!.policy, calls);
+    expect(fromBoth.known.length).toBeGreaterThanOrEqual(fromOne.known.length);
+  });
+
+  /** A key from a different reward epoch means different indices entirely. */
+  it('ignores calls from another reward epoch', async () => {
+    const foreign = {
+      ...calls[0]!,
+      policy: { ...calls[0]!.policy, rewardEpochId: calls[0]!.policy.rewardEpochId + 1 },
+    };
+    const { known } = await harvestPolicyKeys(calls[0]!.policy, [foreign]);
+    expect(known).toHaveLength(0);
+  });
+
+  /**
+   * The binding that makes a recovered key usable. Corrupting the message
+   * changes the digest, recovery still yields a key, and it is silently the
+   * wrong one — so it must be rejected on the address check alone.
+   */
+  it('drops a key whose address does not match the policy', async () => {
+    const tampered = {
+      ...calls[0]!,
+      message: { ...calls[0]!.message, encoded: `0x${'11'.repeat(38)}` as const },
+    };
+    const { known } = await harvestPolicyKeys(calls[0]!.policy, [tampered]);
+    expect(known).toHaveLength(0);
+  });
+
+  it('reports how much weight the known keys carry', async () => {
+    const { known } = await harvestPolicyKeys(calls[0]!.policy, calls);
+    expect(knownWeight(known)).toBeGreaterThanOrEqual(calls[0]!.policy.threshold);
+  });
 });
