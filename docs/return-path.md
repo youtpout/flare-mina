@@ -4,91 +4,94 @@ How a burn on Flare becomes a release on Mina without anyone being trusted to
 say it happened. This is the design that replaces `withdrawalAttestor`
 (GAP 2 in [threat-model.md](./threat-model.md)).
 
-## The problem in one number
-
-Mina and the EVM disagree about which hash is cheap. Measured in o1js, against
-a 65,536-row domain:
-
-| operation | rows |
-|---|---|
-| Poseidon over two fields | 13 |
-| `IndexedMerkleMap` height 33 — full inclusion, root bound | **514** |
-| one keccak256 over 64 bytes | **14,636** |
-
-A keccak Merkle path is ~14.6k rows *per level*. Four levels is all that fits
-in one proof, so a 32-level path costs eight recursive proofs. The same path
-over Poseidon costs 514 rows *in total*, for a tree of four billion leaves.
-
-So the design principle is not "avoid keccak" — it is **pay keccak once per
-root, never once per withdrawal**.
-
 ## The chain
 
 ```
-Solidity            withdrawals accumulate under a keccak commitment
-                    (cheap on an EVM, and the EVM is where they happen)
-      │
-SP1 guest           reads the withdrawal list, checks it against the keccak
-                    commitment, rebuilds the o1js IndexedMerkleMap,
-                    commits { keccakAcc, poseidonRoot }
-      │
-Flare bridge        ISP1Verifier.verifyProof(...)
-                    require(pv.keccakAcc == storedKeccakAcc)
-                    store pv.poseidonRoot
-      │
-FDC                 EVMTransaction attestation of that store, folded into the
-                    voting round's Merkle tree
-      │
-Relay               the signing policy signs the round root
-      │
-Mina  publishFlareRoot   SigningPolicyFold: enough validator weight signed the
-                         round root, + inclusion of our attestation in it
-      │
-Mina  releaseWithdrawal  IndexedMerkleMap inclusion against the stored root
-                         — Poseidon, 514 rows
+Flare     the user signs a bridge-specific withdrawal intent with their Mina
+          wallet; Solidity verifies the Schnorr signature, checks the balance,
+          burns the FMINA, and emits a minimal event
+
+FDC       an EVMTransaction attestation of that transaction becomes one leaf of
+          the voting round's Merkle tree
+
+Relay     the signing policy signs the round root, stored in
+          `merkleRoots[roundId % 6720]` under protocol 200
+
+Mina      publishFlareRoot   SigningPolicyFold: enough validator weight signed
+                             the round root
+          claim              MerkleInclusion: a path from our leaf to that root
 ```
 
-## Why SP1 is in the picture at all
+Every step is verified by the chain that finds it cheap. Flare checks a Pallas
+Schnorr signature, because its base field fits one EVM word. Mina checks
+secp256k1 signatures and keccak, because it has no alternative — but only once
+per round, amortised over every withdrawal that round carries.
 
-Not to carry anything to Mina. **Mina never sees the SP1 proof**: it is Groth16
-over BN254, and verifying a pairing in a Kimchi circuit over Pallas is not a
-cost problem, it is a different-arithmetic problem. The proof is verified on
-Flare, where a precompile makes it trivial.
+## What it costs
 
-SP1's only job is to compute a Poseidon-Pallas root that Solidity does not want
-to pay for. An `IndexedMerkleMap` insertion at height 33 recomputes two paths,
-~64 permutations; in Solidity that is plausibly 2–4 M gas per withdrawal —
-an estimate, not a measurement, and the one worth taking before building the
-guest. If it fits comfortably in a Flare block, the zkVM disappears from this
-diagram and Solidity maintains the map directly.
+Measured in o1js, against a 65,536-row domain:
 
-`~/Projects/zkdex/sp1` already has this shape: a guest that commits a
-Poseidon-Mina root, bound by an EVM verifier. Its Poseidon-Pallas
-implementation — the part that must agree with o1js bit for bit — is reusable
-as-is.
+| operation | rows |
+|---|---|
+| Mina Schnorr verify, 4-field message | 349 |
+| `MerkleInclusion.merge` | 328 |
+| `MerkleInclusion.level` — one keccak pair | 14,733 |
+| `SigningPolicyFold.merge` | 185 |
+| `SigningPolicyFold.single` — one secp256k1 verify | 31,814 |
+| keccak256 over 512 bytes | 59,675 |
 
-## Where keccak survives
+Both expensive operations exceed a third of the domain, so recursion is not a
+choice — a *second* signature or a *second* keccak already does not fit
+alongside the first. Both programs are therefore merge trees: leaves are
+independent and prove in parallel, and depth costs log(n) merges rather than n
+sequential steps.
 
-The signing policy does not sign our bridge's storage. It signs **FDC voting
-round roots**. Getting our Poseidon root under a validator signature therefore
-means requesting an `EVMTransaction` attestation of the transaction that stored
-it, and proving on Mina that our attestation is a leaf of that round's tree —
-which is a keccak tree.
+The last row is the one to design against. Keccak's rate is 136 bytes, so cost
+steps by block: 64 and 128 bytes both cost one permutation, 512 bytes costs
+four. **Attest the smallest possible event** — `(nonce, minaRecipient, amount)`
+and nothing else. The Mina signature does not belong in the leaf: Flare would
+not have emitted the event without it.
 
-That path is short (round trees hold one attestation per request, not one per
-withdrawal) and it is walked **once per published root**, amortised over every
-withdrawal that root covers. But it is not zero, and it is why
-`MerkleInclusion.ts` is still needed: what the Poseidon map removes is the
-*per-withdrawal* keccak path, not this one.
+## Why there is no SP1 in this diagram
 
-## What does not get fixed by any of this
+There was, in an earlier draft. The idea was to have a zkVM guest rebuild the
+withdrawal set as an o1js `IndexedMerkleMap` — Poseidon costs 13 rows against
+keccak's 14,636 — so Mina would verify a Poseidon path instead of a keccak one,
+and pay 514 rows for a 32-level inclusion.
 
-**Double release.** Proving a withdrawal is in the tree does not prove it has
-not already been paid. Mina still needs `lastWithdrawalNonce` or a spent-set,
-which is read-modify-write, which serialises releases to one per block.
-Deposits stay concurrent because they read no state; withdrawals cannot.
+It works, and `~/Projects/ethereum-settlement` shows the pattern in production
+for Zeko: the guest computes both hash worlds and proves they describe the same
+batch. But it buys a per-withdrawal saving at the cost of a guest, a
+Poseidon-Pallas implementation that must agree with o1js bit for bit, and an SP1
+verifier deployment — and Mina cannot verify the SP1 proof anyway (Groth16 over
+BN254 is not Kimchi over Pallas), so it never removed the FDC step it was meant
+to replace. Proving inclusion directly against the round root is strictly
+simpler and needs nothing that is not already built.
+
+## What a Mina signature can and cannot do
+
+It authorises: which recipient, which amount, which nonce, and only the holder
+of that Mina key can produce it. Bound to a per-user nonce it also cannot be
+replayed, and a stuck withdrawal strands only its own signer rather than
+everyone behind it — unlike today's single global `lastWithdrawalNonce`.
+
+It cannot attest. A signature observes nothing, so nothing in it distinguishes
+*submitted to Flare, balance checked, FMINA burned* from *signed and pocketed*.
+A user could sign, never submit, and claim on Mina while keeping their FMINA.
+Only an artifact authenticated by Flare itself — validator signatures, or a
+proof — closes that, which is exactly what the FDC path above provides.
+
+## What is still open
 
 **Signer binding.** `SigningPolicyFold` proves *n* valid ECDSA signatures at
 distinct ascending indices. Nothing yet constrains those signers to belong to
-the policy they name — see the header of `SigningPolicyFold.ts`. That gap is
-independent of everything above and must close before the attestor is removed.
+the policy they name — see the header of `SigningPolicyFold.ts`. This must
+close before the attestor is removed.
+
+**Double release.** Proving a withdrawal is in a round root does not prove it
+has not already been paid. Mina still needs a spent-set or a nonce, which is
+read-modify-write, which serialises releases to one per block. Deposits stay
+concurrent because they read no state; withdrawals cannot.
+
+**Round root storage.** `flareRoot` holds one root. Rounds are 90 seconds, so
+the zkApp needs a set of accepted roots rather than the latest one.

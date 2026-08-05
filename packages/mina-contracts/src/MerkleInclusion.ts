@@ -1,142 +1,142 @@
 import { Bool, Bytes, Keccak, Provable, SelfProof, Struct, UInt32, ZkProgram } from 'o1js';
 
 /**
- * Proves a leaf is in a keccak Merkle tree, one level at a time.
+ * Proves a leaf is in a keccak Merkle tree, by merging path segments.
  *
- * # Why this is its own program
+ * # What it is for
  *
- * The other half of a verified withdrawal — `SigningPolicyFold` — proves that
- * Flare's validators signed a root. It does not prove what is *in* that root.
- * This does, and keeping them apart matters for three reasons:
+ * Flare's Data Connector publishes one Merkle root per voting round, over every
+ * attestation confirmed in that round, and the signing policy signs that root.
+ * `SigningPolicyFold` proves enough validator weight signed it; this proves what
+ * is *inside* it. Together they replace `withdrawalAttestor` — a burn on Flare
+ * becomes a release on Mina with nobody trusted to say it happened.
  *
- *   - they have unrelated depths, so folding them together would force the
- *     shallower one to carry the deeper one's recursion;
- *   - they are independent, so they can be proven in parallel;
- *   - the consumer binds them by the root, which is the public output of both,
- *     and that binding is a single equality rather than a shared circuit.
+ * The two are separate programs on purpose: they have unrelated depths, they can
+ * be proven in parallel, and the consumer binds them by the root, which is a
+ * public output of both. One equality, not one shared circuit.
  *
- * # Why it recurses over so few levels
+ * # Why one level per proof, and merges
  *
- * Keccak is not free on Mina the way Poseidon is. Measured:
+ * Keccak is not free on Mina the way Poseidon is. Measured, against a
+ * 65,536-row domain:
  *
- *   one Poseidon over two fields        13 rows
- *   one keccak256 over 64 bytes     14,636 rows      ×1126
+ *   Poseidon over two fields             13 rows
+ *   keccak256 over 64 bytes          14,636 rows      x1126
  *
- * Against a 65,536-row domain that is **four levels per proof**, and eight
- * levels (115,881 rows) already do not fit. So the path is walked in short
- * recursive hops rather than in one shot.
+ * An earlier version walked four levels per proof inside a loop, each guarded by
+ * a `Provable.if` on whether that level was used. It measured 58,859 rows and
+ * never compiled.
  *
- * That ratio is also the reason this bridge verifies Mina signatures directly
- * in Solidity rather than wrapping them in a proof: the asymmetry runs the
- * other way. Ethereum-flavoured hashing is cheap on an EVM and expensive on
- * Mina; Pallas arithmetic is the reverse.
+ * Merging removes both problems. Each proof does exactly one hash, so the
+ * conditional disappears — a segment that is not needed is simply not proven.
+ * Segments are independent, so a whole path can be proven at once rather than
+ * bottom-up in sequence, and depth costs log(n) merges instead of n steps.
  *
- * # STATUS: does not compile yet
+ * # How segments chain
  *
- * The constraint system builds and measures — `base` 58,859 rows, `step`
- * 58,943, both inside the 65,536 domain, which is what confirmed four levels
- * per proof is the right split. `compile()` then fails inside Pickles with:
+ * A segment records where it started, where it reached, and how far it climbed.
+ * A merge asserts the left segment's top *is* the right segment's bottom, which
+ * is what makes the two describe one continuous path rather than two unrelated
+ * fragments. Height sums, so the consumer can require the tree's exact depth and
+ * reject a short path that happened to land on the right value.
  *
- *   length mismatch in Array.map2_exn: 1 <> 2
+ * # On Flare's pair ordering
  *
- * It is not the row count and not the per-byte conditionals — selecting whole
- * `Bytes32` values instead of mapping over bytes changed nothing. The sibling
- * program `SigningPolicyFold` has the same base/step shape and compiles, so
- * the difference is somewhere in this program's `Bytes32`-heavy public output.
- * Committed unfinished because the measurements it produced are the useful
- * part and they are real; the compile is the next thing to chase.
+ * Flare hashes pairs sorted: `keccak256(abi.encode(sort([a, b])))`. This carries
+ * an explicit side bit instead of sorting in-circuit, which is sound for the same
+ * reason it is cheap: the published root already fixes the ordering, so a prover
+ * who flips a bit computes a different hash and simply fails to reach the root.
+ * Sorting would cost a 32-byte comparison per level to constrain something the
+ * root constrains for free.
  */
 
 export class Bytes32 extends Bytes(32) {}
 export class Bytes64 extends Bytes(64) {}
 
-/** How many levels one proof walks. Four is what the domain allows. */
-export const LEVELS_PER_STEP = 4;
-
-export class InclusionState extends Struct({
-  /** The leaf this path started from. Carried so a consumer can bind it. */
-  leaf: Bytes32,
-  /** The node reached so far. At the end of the walk, the tree's root. */
-  node: Bytes32,
-  /** Levels climbed. The consumer checks this against the expected depth. */
-  depth: UInt32,
-}) {}
-
-/** One level: a sibling, and which side it sits on. */
-export class Step extends Struct({
-  sibling: Bytes32,
-  /** True when the sibling is on the left, i.e. the current node is the right child. */
-  siblingIsLeft: Bool,
-}) {}
-
 /**
- * Hash a pair in the order the tree does.
+ * A stretch of the path from a leaf towards the root.
  *
- * Order is part of the commitment, not a detail: swapping the children of one
- * node yields a different root, and an implementation that sorted them would
- * accept paths the tree never contained.
+ * `bottom` and `top` are what merges chain on; `height` is what stops a prover
+ * from presenting a partial climb as a complete one.
  */
-function hashPair(node: Bytes32, step: Step): Bytes32 {
-  // Selected as whole 32-byte values rather than byte by byte: mapping
-  // `Provable.if` over the bytes builds an array o1js cannot reconcile between
-  // the two methods, and fails at compile with a shape mismatch rather than
-  // anywhere useful.
-  const left = Provable.if(step.siblingIsLeft, Bytes32, step.sibling, node);
-  const right = Provable.if(step.siblingIsLeft, Bytes32, node, step.sibling);
-  return Bytes32.from(Keccak.ethereum(Bytes64.from([...left.bytes, ...right.bytes])).bytes);
+export class PathSegment extends Struct({
+  /** Node this segment starts from. For a full path, the leaf. */
+  bottom: Bytes32,
+  /** Node this segment reaches. For a full path, the root. */
+  top: Bytes32,
+  /** Levels climbed. Summed across merges; checked by the consumer. */
+  height: UInt32,
+}) {}
+
+/** The other child at one level, and which side it sits on. */
+export class Sibling extends Struct({
+  value: Bytes32,
+  /** True when the sibling is the left child, i.e. `bottom` is the right one. */
+  isLeft: Bool,
+}) {}
+
+/** Assert two 32-byte values are equal, byte by byte. */
+function assertSameBytes(a: Bytes32, b: Bytes32, message: string): void {
+  // `Bytes` has no equality helper, and comparing the structs wholesale would
+  // compare witnesses rather than values.
+  for (let i = 0; i < 32; i++) {
+    a.bytes[i]!.value.assertEquals(b.bytes[i]!.value, message);
+  }
 }
 
 export const MerkleInclusion = ZkProgram({
   name: 'flare-merkle-inclusion',
-  publicOutput: InclusionState,
+  publicOutput: PathSegment,
 
   methods: {
-    /** Start from the leaf and climb up to `LEVELS_PER_STEP` levels. */
-    base: {
-      privateInputs: [Bytes32, Step, Step, Step, Step, UInt32],
-      async method(leaf: Bytes32, s0: Step, s1: Step, s2: Step, s3: Step, levels: UInt32) {
-        let node = leaf;
-        // `levels` says how many of the four are real. Padding a short path
-        // with repeated siblings would change the root, so unused levels are
-        // skipped rather than hashed.
-        const steps = [s0, s1, s2, s3];
-        for (let i = 0; i < LEVELS_PER_STEP; i++) {
-          const used = levels.greaterThan(UInt32.from(i));
-          const climbed = hashPair(node, steps[i]!);
-          node = Provable.if(used, Bytes32, climbed, node);
-        }
+    /**
+     * One level: hash a node with its sibling to get the parent.
+     *
+     * Independent of every other level, which is the point — a full path can be
+     * proven all at once and merged afterwards.
+     */
+    level: {
+      privateInputs: [Bytes32, Sibling],
+      async method(node: Bytes32, sibling: Sibling) {
+        // Order is part of the commitment, not a detail: swapping the children
+        // of one node yields a different root.
+        const left = Provable.if(sibling.isLeft, Bytes32, sibling.value, node);
+        const right = Provable.if(sibling.isLeft, Bytes32, node, sibling.value);
+        const parent = Bytes32.from(
+          Keccak.ethereum(Bytes64.from([...left.bytes, ...right.bytes])).bytes,
+        );
 
-        return { publicOutput: new InclusionState({ leaf, node, depth: levels }) };
+        return { publicOutput: new PathSegment({ bottom: node, top: parent, height: UInt32.one }) };
       },
     },
 
-    /** Continue an existing walk. Same shape, so depth is unbounded. */
-    step: {
-      privateInputs: [SelfProof, Step, Step, Step, Step, UInt32],
+    /**
+     * Join two segments into one.
+     *
+     * No hashing here — both sides already did theirs. This only checks they
+     * meet, which is what turns two fragments into a path.
+     */
+    merge: {
+      privateInputs: [SelfProof, SelfProof],
       async method(
-        previous: SelfProof<undefined, InclusionState>,
-        s0: Step,
-        s1: Step,
-        s2: Step,
-        s3: Step,
-        levels: UInt32,
+        lower: SelfProof<undefined, PathSegment>,
+        upper: SelfProof<undefined, PathSegment>,
       ) {
-        previous.verify();
-        const state = previous.publicOutput;
+        lower.verify();
+        upper.verify();
 
-        let node = state.node;
-        const steps = [s0, s1, s2, s3];
-        for (let i = 0; i < LEVELS_PER_STEP; i++) {
-          const used = levels.greaterThan(UInt32.from(i));
-          const climbed = hashPair(node, steps[i]!);
-          node = Provable.if(used, Bytes32, climbed, node);
-        }
+        const a = lower.publicOutput;
+        const b = upper.publicOutput;
+
+        // Contiguity. Without it a prover could staple together two segments
+        // from unrelated parts of the tree and call the result a path.
+        assertSameBytes(a.top, b.bottom, 'segments do not meet');
 
         return {
-          publicOutput: new InclusionState({
-            leaf: state.leaf,
-            node,
-            depth: state.depth.add(levels),
+          publicOutput: new PathSegment({
+            bottom: a.bottom,
+            top: b.top,
+            height: a.height.add(b.height),
           }),
         };
       },
