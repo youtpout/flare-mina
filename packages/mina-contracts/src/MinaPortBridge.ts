@@ -214,6 +214,20 @@ export class MinaPortBridge extends SmartContract {
   }
 
   /**
+   * Rotate the signing-policy root. Mandatory, not administrative: Flare's
+   * validator set changes every reward epoch — 6h on Coston2, 3.5 days on
+   * mainnet — and a fixed root would stop accepting proofs at the first change.
+   */
+  @method async setSigningPolicyRoot(root: Field) {
+    const admin = this.admin.getAndRequireEquals();
+    const adminUpdate = AccountUpdate.createSigned(admin);
+    adminUpdate.body.useFullCommitment = Bool(true);
+
+    this.signingPolicyRoot.getAndRequireEquals();
+    this.signingPolicyRoot.set(root);
+  }
+
+  /**
    * Lock native MINA and dispatch a deposit action.
    *
    * @param nonce chosen by the caller. It exists only to make a deposit

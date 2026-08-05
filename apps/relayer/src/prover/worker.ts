@@ -280,6 +280,26 @@ async function handlePublish(request: PublishRequest) {
   await fetchAccount({ publicKey: bridge.address });
   await fetchAccount({ publicKey: attestor.toPublicKey() });
 
+  // Coston2 rotates its validator set every 6 hours, so a root fixed at deploy
+  // goes stale the same day. Rotate before publishing rather than leaving an
+  // operator to notice.
+  if (bridge.signingPolicyRoot.get().toString() !== tree.root.toString()) {
+    const admin = PrivateKey.fromBase58(
+      process.env.MINA_ADMIN_PRIVATE_KEY ?? feePayerKey,
+    );
+    const rotate = await Mina.transaction(
+      { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000) },
+      async () => {
+        await bridge.setSigningPolicyRoot(tree.root);
+      },
+    );
+    await rotate.prove();
+    const rotated = await rotate.sign([feePayer, admin]).send();
+    console.log(`rotated signing policy root -> ${rotated.hash}`);
+    await rotated.wait();
+    await fetchAccount({ publicKey: bridge.address });
+  }
+
   const tx = await Mina.transaction(
     { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000) },
     async () => {

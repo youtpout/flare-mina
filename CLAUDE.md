@@ -325,9 +325,13 @@ IndexedMerkleMap insert ~2.79M. Coston2 block limit is 28M.
 - `toSigningPolicyHash` is chained, not a flat keccak: hash the first 64 bytes,
   then fold in each following 32-byte word, last one zero-padded.
 - FDC round trees use sorted pairs: `keccak256(abi.encode(sort([a,b])))`.
-- Protocol 100 = FTSO, 200 = FDC. Rounds are 90s; reward epochs ~3.5 days.
+- Protocol 100 = FTSO, 200 = FDC. Voting rounds 90s. Reward epochs **6h on
+  Coston2** (`rewardEpochDurationSeconds` = 21600), 3.5 days on mainnet — so the
+  signing policy, and `signingPolicyRoot`, go stale four times a day on testnet.
 - Coston2: 8 voters, total weight 65,534, threshold 32,767. A voter may have
   weight 0. The public RPC caps `getLogs` at **30 blocks**.
+- The systems explorer's *validators* page lists node identities, not signing
+  policy addresses. Only the latter appear in `Relay` calldata.
 - FDC attests Flare itself (`testFLR` is a valid `EVMTransaction` source), and
   `provideInput: false` + one `logIndex` keeps the leaf small.
 

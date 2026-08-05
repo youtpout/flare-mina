@@ -372,6 +372,31 @@ describe('withdrawal release', () => {
   }, 300_000);
 });
 
+describe('signing policy rotation', () => {
+  /**
+   * Not administrative housekeeping: Coston2 rotates its validator set every
+   * 6 hours, so a root fixed at deploy stops accepting proofs the same day.
+   */
+  it('lets the admin rotate the root, and only the admin', async () => {
+    const fresh = Field(123456789n);
+
+    // The admin here is `deployer`, so a transaction it never signs must fail.
+    const rejected = await Mina.transaction(user, async () => {
+      await bridge.setSigningPolicyRoot(fresh);
+    });
+    await rejected.prove();
+    await expect(rejected.sign([userKey]).send()).rejects.toThrow();
+
+    const tx = await Mina.transaction(deployer, async () => {
+      await bridge.setSigningPolicyRoot(fresh);
+    });
+    await tx.prove();
+    await tx.sign([deployerKey]).send();
+
+    expect(bridge.signingPolicyRoot.get().toString()).toBe(fresh.toString());
+  }, 300_000);
+});
+
 describe('attestor rotation', () => {
   it('separates admin from attestor: the admin can rotate, and only the admin', async () => {
     const fresh = PrivateKey.random().toPublicKey();
