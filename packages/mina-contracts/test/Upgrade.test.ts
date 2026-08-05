@@ -70,16 +70,25 @@ beforeAll(async () => {
   await deposit.sign([userKey]).send();
 }, 1_800_000);
 
+/**
+ * Install a verification key by signature.
+ *
+ * No contract method is involved: the account's own key authorises the change
+ * directly. That is the whole reason this is the signature variant — a
+ * proof-gated upgrade would need an `upgrade` circuit deployed in advance, so
+ * it could never repair the deployment that shipped without one.
+ */
 async function upgrade(signers: PrivateKey[]) {
   const tx = await Mina.transaction(deployer, async () => {
-    await bridge.upgrade(vk);
+    const update = AccountUpdate.createSigned(zkAppAddress);
+    update.account.verificationKey.set(vk);
   });
   await tx.prove();
   return tx.sign([deployerKey, ...signers]).send();
 }
 
 describe('upgrading the escrow', () => {
-  it('refuses without the admin signature', async () => {
+  it("refuses without the zkApp key's signature", async () => {
     await expect(upgrade([])).rejects.toThrow();
   }, 600_000);
 
@@ -91,7 +100,7 @@ describe('upgrading the escrow', () => {
     const balanceBefore = Mina.getBalance(zkAppAddress).toBigInt();
     expect(balanceBefore).toBe(4n * MINA);
 
-    await upgrade([adminKey]);
+    await upgrade([zkAppKey]);
 
     expect(Mina.getBalance(zkAppAddress).toBigInt()).toBe(balanceBefore);
     expect(bridge.signingPolicyRoot.get().toString()).toBe('7');

@@ -1,54 +1,14 @@
 import { hashMessage, keccak256, recoverPublicKey, toBytes, type Hex } from 'viem';
 
 /**
- * Reads Flare's validator signatures out of a `Relay.relay()` transaction.
+ * Reads Flare's validator signatures out of a `Relay.relay()` transaction —
+ * the only place they exist, since Relay stores just the root. `relay()`
+ * declares no arguments and reads calldata in assembly, hence the layout below.
  *
- * # Where the signatures live
- *
- * Nowhere convenient. `Relay` stores only the Merkle root — the signatures that
- * justified it are never written to storage and never emitted in an event. They
- * exist in exactly one place: the **calldata of the transaction that finalised
- * the round**.
- *
- * So retrieving them means finding the `ProtocolMessageRelayed` log for the
- * round, fetching its transaction, and decoding a hand-packed byte layout.
- * There is no ABI for it: `relay()` takes no declared arguments and reads
- * calldata directly in assembly, because at ~100 voters the ABI overhead is
- * worth removing.
- *
- * # The layout
- *
- * ```
- *   4  selector
- *   2  number of voters
- *   3  reward epoch id
- *   4  first voting round of the epoch
- *   2  threshold
- *  32  random seed
- *      per voter:  20 address + 2 weight
- *   1  protocol id          <- the signed message starts here, 38 bytes
- *   4  voting round id
- *   1  isSecureRandom
- *  32  merkle root
- *   2  number of signatures
- *      per signature: 1 v + 32 r + 32 s + 2 signer index
- * ```
- *
- * Verified against a real Coston2 transaction: 8 voters, 3 signatures, and a
- * 201-byte tail — exactly 3 x 67.
- *
- * # Why this is the right shape for the Mina side
- *
- * Three things fall out of one transaction, and `SigningPolicyFold` needs all
- * three: the signatures, the signer indices it orders them by, and the voter
- * set with weights that the Poseidon policy tree is built from. Nothing has to
- * be reconciled across sources.
- *
- * What it does *not* give directly is public keys — the policy holds addresses,
- * which are hashes. Recovering them from the signatures is not a workaround but
- * the only route, and it is self-checking: a recovered key that hashes to the
- * address the policy lists at that index is the right key, and one that does
- * not means the message hash was wrong.
+ *   4 selector | 2 voters | 3 rewardEpoch | 4 startRound | 2 threshold | 32 seed
+ *   per voter: 20 address + 2 weight
+ *   38 signed message: 1 protocolId | 4 round | 1 isSecureRandom | 32 root
+ *   2 signature count | per signature: 1 v + 32 r + 32 s + 2 signer index
  */
 
 /** One entry of Flare's signing policy. */
@@ -149,9 +109,8 @@ export function parseRelayCalldata(calldata: Hex): RelayCall {
     voters.push({ index, address: r.hexOf(20), weight: r.number(2) });
   }
 
-  // The signed message is these 38 bytes verbatim, so remember where it starts
-  // rather than re-encoding it — a re-encoding that drifts would produce a hash
-  // that recovers the wrong signers, silently.
+  // Sliced verbatim rather than re-encoded: a drifting re-encoding would
+  // silently recover the wrong signers.
   const policyEncoded = r.slice(policyStart, r.position);
 
   const messageStart = r.position;
@@ -193,35 +152,15 @@ export function parseRelayCalldata(calldata: Hex): RelayCall {
 }
 
 /**
- * What the validators actually signed.
- *
- * Not the keccak of the message, which is the natural guess and is wrong.
- * Flare's providers sign it as a personal message, so the digest carries the
- * EIP-191 prefix:
- *
- *   keccak256("\x19Ethereum Signed Message:\n32" || keccak256(message))
- *
- * Determined by recovery rather than by reading: only this variant yields keys
- * whose addresses match the policy. The other two candidates recover
- * successfully and produce plausible, entirely wrong addresses — which is why
- * the test checks recovered signers against the policy rather than checking
- * that recovery merely succeeded.
- *
- * It also costs the Mina side a second keccak: binding the signed digest back
- * to the Merkle root means reproducing both hashes in circuit.
+ * The EIP-191 prefixed digest, not `keccak(message)` — which is the natural
+ * guess, recovers successfully, and yields entirely wrong addresses. Found by
+ * checking recovered signers against the policy, which is why that test exists.
  */
 export function signedMessageHash(message: ProtocolMessage): Hex {
   return hashMessage({ raw: toBytes(keccak256(message.encoded)) });
 }
 
-/**
- * Recover the secp256k1 public key behind each signature.
- *
- * The Mina circuit verifies against public keys; Flare's policy lists
- * addresses, which are truncated hashes of them. Recovery is the only way
- * across, and the caller should check each result against the address the
- * policy holds at that index — see `recoveredAddressMatches`.
- */
+/** Recover each signer's public key. The circuit needs keys; the policy only has addresses. */
 export async function recoverSigners(
   message: ProtocolMessage,
   signatures: RelaySignature[],
@@ -238,48 +177,18 @@ export async function recoverSigners(
   );
 }
 
-/**
- * The address a recovered public key corresponds to.
- *
- * Last 20 bytes of the keccak of the uncompressed key without its 0x04 prefix —
- * the standard derivation, spelled out here so the check against Flare's policy
- * is visible rather than delegated.
- */
+/** Last 20 bytes of keccak of the uncompressed key, minus its 0x04 prefix. */
 export function addressFromPublicKey(publicKey: Hex): Hex {
   return `0x${keccak256(`0x${publicKey.slice(4)}`).slice(-40)}`;
 }
 
-/**
- * A validator, once its public key is known.
- *
- * The policy Flare publishes holds addresses. The Mina circuit verifies
- * signatures against public keys, and an address is a hash of one — so the key
- * cannot be read out of the policy, only recovered from a signature the voter
- * produced.
- */
+/** A validator whose public key has been recovered. */
 export type PolicyKey = PolicyVoter & { publicKey: Hex };
 
 /**
- * Collect public keys for a signing policy from relay transactions.
- *
- * # Why this is not just a lookup
- *
- * A voter's key becomes knowable only when they sign. In practice that is not
- * a limitation: FTSO rounds finalise every 90 seconds, so any voter carrying
- * weight signs constantly, and a short walk back through `Relay` history
- * surfaces every one of them. A voter who never signs has no key here, and also
- * contributes no weight to any threshold — so nothing is lost by not having it.
- *
- * # Why the result can be trusted
- *
- * Each recovered key is kept only if it hashes to the address the policy lists
- * at that index. That check is what binds a recovered key to Flare's own
- * commitment: a wrong message hash, a corrupted signature or a mismatched
- * calldata offset all recover *some* key, and all of them fail this.
- *
- * What is still assumed is that `policy` is genuine. It is, when it came from a
- * relay transaction that succeeded: `Relay.relay()` hashes the policy in its
- * calldata against `toSigningPolicyHash[rewardEpochId]` and reverts otherwise.
+ * Collect public keys from relay history. A key is only knowable once its voter
+ * signs, and FTSO rounds land every 90s, so a short walk back covers the weight
+ * that matters. Each key is kept only if it hashes to the policy's address.
  */
 export async function harvestPolicyKeys(
   policy: SigningPolicy,
@@ -288,8 +197,7 @@ export async function harvestPolicyKeys(
   const keys = new Map<number, Hex>();
 
   for (const call of calls) {
-    // A different reward epoch is a different validator set; its indices mean
-    // something else and must not be mixed in.
+    // Another epoch is another validator set; its indices mean something else.
     if (call.policy.rewardEpochId !== policy.rewardEpochId) continue;
 
     for (const { index, publicKey } of await recoverSigners(call.message, call.signatures)) {
@@ -316,26 +224,9 @@ export function knownWeight(known: PolicyKey[]): number {
 }
 
 /**
- * The commitment `Relay` stores for a reward epoch's signing policy.
- *
- * # Why this matters more than the policy itself
- *
- * Any relay transaction carries a copy of the validator set, but a copy is not
- * an authority. `toSigningPolicyHash(rewardEpochId)` is: it is written when
- * governance publishes a new epoch's policy, and `relay()` refuses any calldata
- * whose policy does not hash to it. Checking a candidate policy against it is
- * how you know you have the *authorised* signers rather than a plausible list.
- *
- * # The scheme
- *
- * Not a keccak of the whole buffer. `Relay` hashes the first 64 bytes, then
- * folds in each following 32-byte word:
- *
- *   h = keccak256(bytes[0..64])
- *   h = keccak256(h || word)   for each 32-byte word after that
- *
- * The final word is whatever remains, zero-padded — Solidity reads a full
- * memory word regardless, so trailing bytes past the buffer are zero.
+ * The commitment Relay stores for an epoch — what makes a policy authoritative
+ * rather than merely present. Not a keccak of the buffer: the first 64 bytes
+ * are hashed, then each following 32-byte word is folded in, last one padded.
  */
 export function signingPolicyHash(policy: SigningPolicy): Hex {
   const bytes = policy.encoded.slice(2);

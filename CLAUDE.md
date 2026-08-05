@@ -285,5 +285,61 @@ Stated here so they are never accidentally presented as solved:
 ## Conventions
 
 - All code, comments and docs in **English**.
+- **Comments: 3 lines max** per method and per contract/module summary. Facts
+  worth keeping longer than a diff go here, not in a doc block.
 - TypeScript strict mode; Rust with no `unsafe` unless documented.
 - Never use floating-point arithmetic for token amounts.
+
+## Measured costs
+
+Mina circuit rows (65,536-row domain, so >21k forces recursion):
+
+| | rows |
+|---|---|
+| Poseidon, 2 fields | 13 |
+| Mina Schnorr verify | 349 |
+| `WithdrawalChain.link` | 48 |
+| policy membership, 128 leaves | 132 |
+| `IndexedMerkleMap` h=21, get | 340 |
+| `releaseWithdrawal` | 795 |
+| `deposit` | 797 |
+| `publishFlareActionState` | 1,009 |
+| keccak256 over 64 B | 14,733 |
+| keccak256 over 512 B | 59,675 |
+| `SigningPolicyFold.single` (ECDSA) | 31,973 |
+
+Proving on an idle M4 (wasm; native ~1.8x faster): compile 6-13s, one keccak
+level 6s, a merge 8.6s, one ECDSA 9.4s, a release 6.4s.
+
+Flare gas: Poseidon(2 fields) 41,894 · withdrawal chain link 166,694 ·
+IndexedMerkleMap insert ~2.79M. Coston2 block limit is 28M.
+
+## Flare protocol facts (verified on Coston2)
+
+- Validator signatures live **only in `Relay.relay()` calldata** — never in
+  storage, never in an event. Layout: `4 selector | 2 voters | 3 rewardEpoch |
+  4 startRound | 2 threshold | 32 seed | voters*(20+2) | 38 message |
+  2 sigCount | sigs*(1 v + 32 r + 32 s + 2 index)`.
+- Signatures are over the **EIP-191 prefixed** digest,
+  `hashMessage(keccak256(message))` — not `keccak256(message)`.
+- `toSigningPolicyHash` is chained, not a flat keccak: hash the first 64 bytes,
+  then fold in each following 32-byte word, last one zero-padded.
+- FDC round trees use sorted pairs: `keccak256(abi.encode(sort([a,b])))`.
+- Protocol 100 = FTSO, 200 = FDC. Rounds are 90s; reward epochs ~3.5 days.
+- Coston2: 8 voters, total weight 65,534, threshold 32,767. A voter may have
+  weight 0. The public RPC caps `getLogs` at **30 blocks**.
+- FDC attests Flare itself (`testFLR` is a valid `EVMTransaction` source), and
+  `provideInput: false` + one `logIndex` keeps the leaf small.
+
+## Gotchas
+
+- `tsx` does not emit decorator metadata, so o1js `@method` classes fail under
+  it. Run such scripts through vitest.
+- Loops with `Provable.if` in a ZkProgram can measure fine and still fail
+  `compile()` with `length mismatch in Array.map2_exn`. Prefer merges.
+- `Poseidon.hashWithPrefix(p, x)` is not `hash([p, ...x])`: the sponge has
+  rate 2, so prepending absorbs the prefix with the first field.
+- OZ 5.7 removed `ReentrancyGuardUpgradeable`; importing the base one is the
+  documented migration.
+- The zkApp's 8 state fields are raw — a verification-key upgrade does not
+  migrate their meaning.

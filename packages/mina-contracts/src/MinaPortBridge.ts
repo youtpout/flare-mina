@@ -12,7 +12,6 @@ import {
   method,
   Permissions,
   Poseidon,
-  VerificationKey,
   state,
 } from 'o1js';
 import { DEPOSIT_DOMAIN, EVM_ADDRESS_BITS } from './constants.js';
@@ -52,15 +51,8 @@ export class FlareAddress extends Struct({ value: Field }) {
 }
 
 /**
- * The canonical deposit action.
- *
- * Field order here IS the protocol. It is mirrored by:
- *   - `minaport_core::leaf::DepositLeaf` (Rust, inside the SP1 guest)
- *   - `MinaPortEncoding.hashDepositLeaf` (Solidity, keccak variant)
- *
- * The Poseidon hash below is the Mina-native commitment; the SP1 guest proves
- * that each Poseidon leaf it consumed corresponds to the keccak leaf that ends
- * up in the Flare-facing Merkle tree.
+ * The canonical deposit action. Field order IS the protocol — mirrored by
+ * `minaport_core::leaf::DepositLeaf` and `MinaPortEncoding.hashDepositLeaf`.
  */
 export class DepositAction extends Struct({
   nonce: UInt64,
@@ -81,32 +73,7 @@ export class DepositAction extends Struct({
   }
 }
 
-/**
- * A deposit, as a readable log line.
- *
- * Events and actions are not alternatives here, they answer different
- * questions. The action is the machine: it feeds `actionState`, which is the
- * commitment a settlement proof attests to. The event is the journal: nothing
- * on chain reads it, and it exists so a watcher that has not implemented the
- * action encoding can still see what happened.
- *
- * What it does NOT do is remove the archive-node dependency — events are
- * fetched the same way actions are. It buys readability, not availability.
- *
- * # What it costs
- *
- * ~53 rows per emit: `deposit` 744 -> 797, `releaseWithdrawal` 1006 -> 1058.
- * The second one crosses 1024, so the Pickles domain doubles to 2048.
- *
- * Proving measured 2.1 s without and 2.3 s with — but on a machine whose load
- * moved between the runs, and a follow-up that should have been *faster* came
- * out slower. The effect is at or below the noise floor here, so treat "about
- * 10%, maybe less" as the honest answer and re-measure on an idle machine
- * before optimising against it.
- *
- * It does not touch `actionState`, so it cannot affect settlement or the
- * concurrency property that keeps `deposit` free of state preconditions.
- */
+/** A deposit, as a readable log line. ~53 rows; does not touch `actionState`. */
 export class DepositEvent extends Struct({
   nonce: UInt64,
   sender: PublicKey,
@@ -122,103 +89,37 @@ export class WithdrawalEvent extends Struct({
 }) {}
 
 /**
- * The deposit escrow.
- *
- * # Why there is almost no state here
- *
- * Three fields used to live on this contract and all three were duplicates:
- *
- *   - a hash chain over dispatched deposits — `reducer.dispatch` already
- *     advances the account's own `actionState`, which is what a settlement
- *     proof would attest to anyway. Ours was a second, parallel commitment
- *     that could only ever agree or be a bug;
- *   - a deposit-nonce counter — the nonce only has to make a deposit *unique*,
- *     and it travels inside the action where the Flare side reads it. Storing
- *     it bought sequentiality nobody needs and cost a read-modify-write that
- *     serialised every depositor against every other;
- *   - an escrowed-balance total — with `receive: Permissions.proof()` the
- *     balance cannot move except through these methods, so the account balance
- *     *is* the escrowed total. Tracking it separately meant maintaining a
- *     number the protocol already maintains, with the two able to disagree.
- *
- * The collateral invariant is unchanged in meaning:
- * `totalSupply(FMINA) == balance of this account`.
+ * The deposit escrow. Almost no state on purpose: with `receive: proof()` the
+ * account balance IS the escrowed total, and the reducer already advances
+ * `actionState`, so anything we tracked ourselves could only agree or be a bug.
  */
 export class MinaPortBridge extends SmartContract {
   /**
-   * Poseidon Merkle root over Flare's signing policy: one leaf per validator,
-   * committing to `(index, publicKey, weight)`.
-   *
-   * This is what makes a `SigningPolicyFold` proof mean something. Without it
-   * the proof says only "n valid ECDSA signatures at distinct indices" — real,
-   * but a prover could name any keys and claim any weights.
-   *
-   * Poseidon rather than Flare's keccak `toSigningPolicyHash`: this copy only
-   * has to be correct, not identically encoded, and Poseidon costs 13 rows a
-   * level against keccak's 14,636. Membership ends up at 132 rows beside the
-   * 31,814 of the signature it accompanies.
-   *
-   * It occupies the field `lastWithdrawalNonce` used to hold. That check is
-   * subsumed by the chain: a release must be the next link from the cursor, so
-   * the nonce order is already forced and could not fail independently.
+   * Poseidon root over Flare's signing policy, one leaf per validator. Without
+   * it a `SigningPolicyFold` proof names any keys with any weights. Occupies
+   * the field `lastWithdrawalNonce` held — the chain forces nonce order now.
    */
   @state(Field) signingPolicyRoot = State<Field>();
 
   /**
-   * Key authorised to attest a Flare -> Mina withdrawal.
-   *
-   * HACKATHON TRUST ASSUMPTION — this is the "temporary trusted signing-policy
-   * checkpoint" described in docs/threat-model.md. The production design
-   * replaces this with in-circuit verification of the Flare Relay signing
-   * policy (FDC attestation + ECDSA set + weight threshold). It is deliberately
-   * a single explicit state field so that removing it is a visible diff, not a
-   * silent behaviour change.
+   * HACKATHON TRUST ASSUMPTION: co-signs `publishFlareActionState`. A single
+   * explicit field so removing it is a visible diff. See docs/threat-model.md.
    */
   @state(PublicKey) withdrawalAttestor = State<PublicKey>();
 
   /**
-   * The newest state of Flare's withdrawal chain this bridge has accepted.
-   *
-   * Flare folds every withdrawal into a running Poseidon commitment, so this
-   * one field element stands for the entire ordered history up to the moment it
-   * was attested. Published once per batch, and every release in that batch
-   * proves against it — the expensive verification is paid once and amortised
-   * rather than repeated per withdrawal.
-   *
-   * A chain rather than a Merkle root because it is append-only: a newer state
-   * contains every older one, so publishing does not strand a withdrawal that
-   * missed its window. Remembering a set of independent roots would need state
-   * this contract does not have — eight field elements, and the layout below
-   * already uses all eight.
+   * Newest attested state of Flare's withdrawal chain. Append-only, so a newer
+   * state contains every older one and publishing strands nothing.
    */
   @state(Field) flareActionState = State<Field>();
 
-  /**
-   * How far along Flare's chain this bridge has released.
-   *
-   * Starts at zero, the empty chain, and advances by exactly one link per
-   * release. The gap between this and `flareActionState` is what remains owed.
-   */
+  /** How far along Flare's chain this bridge has released. */
   @state(Field) processedActionState = State<Field>();
 
-  /**
-   * Signing weight required before a root is accepted.
-   *
-   * Set at deployment rather than hard-coded, because the number that means
-   * "the validators agreed" is a property of the network, not of this
-   * contract: Coston2 has 8 voters and mainnet allows 100. A demo can require
-   * very little and production the real threshold, without the circuits
-   * changing.
-   */
+  /** Signing weight a root must carry. Deployment state, since the number belongs to the network. */
   @state(UInt64) requiredWeight = State<UInt64>();
 
-  /**
-   * Administrative key, fixed at deployment.
-   *
-   * The only privilege it holds is rotating `withdrawalAttestor`. It cannot
-   * move funds, mint, or edit any accounting state — those are reachable only
-   * through proof-authorised methods.
-   */
+  /** Admin key. Only privilege is rotating `withdrawalAttestor`; it cannot move funds. */
   @state(PublicKey) admin = State<PublicKey>();
 
   reducer = Reducer({ actionType: DepositAction });
@@ -228,13 +129,7 @@ export class MinaPortBridge extends SmartContract {
     withdrawal: WithdrawalEvent,
   };
 
-  /**
-   * Deploy with an explicit admin and attestor.
-   *
-   * `super.deploy` runs `init()` (zeroing the accounting state and locking down
-   * permissions); the two keys are written afterwards so the contract is never
-   * live with an unset admin that a third party could claim.
-   */
+  /** Keys are written after `super.deploy` so the contract is never live with an unset admin. */
   override async deploy(
     args: DeployArgs & {
       admin: PublicKey;
@@ -274,21 +169,23 @@ export class MinaPortBridge extends SmartContract {
       send: Permissions.proof(),
       receive: Permissions.proof(),
       editState: Permissions.proof(),
-      // Upgradable, and this is a real concession rather than housekeeping.
+      // Upgradable by signature from the zkApp's own key.
       //
       // Every circuit change produces a new verification key. With the key
       // locked, shipping one means a fresh zkApp at a fresh address, and the
-      // MINA escrowed at the old one stays there unreachable. That has already
-      // cost this project funds.
+      // MINA escrowed at the old one stays there unreachable — which has
+      // already cost this project funds.
       //
-      // What it costs: whoever can upgrade can install a circuit that pays the
-      // escrow to itself. The admin key becomes as powerful as the collateral,
-      // which is why `upgrade` is a distinct signed method rather than an
-      // ambient capability, and why it is recorded in docs/threat-model.md.
+      // Signature rather than proof, deliberately. A proof-gated upgrade needs
+      // an `upgrade` method, which is a circuit that must itself be deployed
+      // before it can ever be used — so it cannot fix the deployment that
+      // shipped without it, which is exactly when an upgrade is wanted. A
+      // signature works from the first block and costs no rows.
       //
-      // `proofDuringCurrentVersion` means the key can only change by running a
-      // method of the circuit currently deployed — never by signature alone.
-      setVerificationKey: Permissions.VerificationKey.proofDuringCurrentVersion(),
+      // The concession is real and belongs in docs/threat-model.md rather than
+      // in a footnote: whoever holds this key can install a circuit that pays
+      // the escrow to itself, so it is as powerful as the collateral.
+      setVerificationKey: Permissions.VerificationKey.signature(),
       setPermissions: Permissions.impossible(),
     });
   }
@@ -369,60 +266,9 @@ export class MinaPortBridge extends SmartContract {
   }
 
   /**
-   * Install a new verification key, keeping the address and the escrow.
-   *
-   * # What it does and does not carry over
-   *
-   * The account survives: address, balance, and all eight state fields. That is
-   * the point — redeploying strands every MINA held here.
-   *
-   * What does *not* upgrade is the **meaning** of those fields. They are raw
-   * field elements, so a new circuit that lays them out differently will read
-   * the old values as whatever its own layout says. Changing logic is safe;
-   * changing layout requires migrating deliberately, and nothing here checks
-   * that you did.
-   *
-   * This is the most dangerous method on the contract. A key whose circuit pays
-   * the balance out is, from here, indistinguishable from a bug fix — the admin
-   * signature is the whole of the protection.
-   */
-  @method async upgrade(vk: VerificationKey) {
-    const admin = this.admin.getAndRequireEquals();
-    const adminUpdate = AccountUpdate.createSigned(admin);
-    adminUpdate.body.useFullCommitment = Bool(true);
-
-    this.account.verificationKey.set(vk);
-  }
-
-  /**
-   * Accept a new state of Flare's withdrawal chain.
-   *
-   * # Why this is separate from releasing
-   *
-   * Establishing what Flare committed to is the expensive half — one secp256k1
-   * verification is 31,814 rows and a threshold needs several, plus a keccak
-   * Merkle path at 14,733 rows a level. Doing that inside `releaseWithdrawal`
-   * would charge every user for work that is identical across a whole batch.
-   *
-   * So it happens once, here. Afterwards a release only replays chain links, at
-   * 48 rows each — the cost is amortised over the batch rather than repeated.
-   *
-   * # What it does not check
-   *
-   * Two things, both tracked in docs/return-path.md.
-   *
-   * That the signers belong to Flare's signing policy: `SigningPolicyFold`
-   * proves valid signatures at distinct ascending indices, but nothing yet binds
-   * `(index, publicKey, weight)` to the policy they name.
-   *
-   * And that `actionState` is what those validators actually signed over. The
-   * signed value is an FDC voting-round root; linking it to Flare's event needs
-   * `MerkleInclusion` plus decoding of the attested response.
-   *
-   * Until both land, the attestor co-signs. That is a far smaller assumption
-   * than before: the attestor is now trusted once per batch instead of once per
-   * withdrawal, and it cannot choose recipients or amounts — those come from the
-   * chain, and only the sequence Flare committed to reaches this state.
+   * Accept a new attested chain state. Separate from releasing because
+   * establishing it costs ECDSA and keccak, identical across a whole batch.
+   * Still attestor-co-signed: nothing yet binds this to the FDC round root.
    */
   @method async publishFlareActionState(actionState: Field, proof: SigningPolicyProof) {
     proof.verify();
@@ -449,25 +295,9 @@ export class MinaPortBridge extends SmartContract {
   }
 
   /**
-   * Release escrowed MINA for the next withdrawal on Flare's chain.
-   *
-   * # What makes the withdrawal real
-   *
-   * The record itself is untrusted input. What constrains it is `tail`: a proof
-   * that from the state this record produces, the rest of Flare's chain runs to
-   * the attested state. No fabricated record has such a continuation, because
-   * producing one means finding a Poseidon collision.
-   *
-   * So the caller cannot invent a withdrawal, redirect one, or change an amount
-   * — every field is inside the hash that has to land on `flareActionState`.
-   * There is no attestor here any more; the trust that remains sits in
-   * `publishFlareActionState`, once per batch.
-   *
-   * # Why releases are serialised
-   *
-   * This reads and writes the cursor, so two releases in one block conflict.
-   * That is inherent to a chain: withdrawals are released in Flare's order, one
-   * at a time. Deposits stay concurrent because they read no state.
+   * Release the next withdrawal. The record is untrusted; `tail` constrains it,
+   * since no fabricated record has a continuation reaching the attested state.
+   * Serialised: it advances a cursor, so two releases in one block conflict.
    */
   @method async releaseWithdrawal(record: WithdrawalRecord, tail: WithdrawalChainProof) {
     record.amount.assertGreaterThan(UInt64.zero, 'withdrawal amount must be non-zero');

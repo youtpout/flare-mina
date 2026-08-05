@@ -3,33 +3,12 @@ import type { PolicyKey } from '@minaport/shared';
 import { POLICY_TREE_HEIGHT, PolicyWitness, Secp256k1, policyLeaf } from './SigningPolicyFold.js';
 
 /**
- * Turns Flare's validator set into the Merkle root the bridge stores.
- *
- * This is the join between the two halves of the return path. `@minaport/shared`
- * reads the authorised signers out of `Relay` — addresses, weights, and public
- * keys recovered from their signatures — and `SigningPolicyFold` proves a signer
- * belongs to a Poseidon tree. This builds that tree.
- *
- * # What a leaf commits to
- *
- * `(index, publicKey.x, publicKey.y, weight)`, all four together. A signer
- * cannot be invented and a real one's weight cannot be inflated, because both
- * live under the same hash — and the index is checked against the witness so a
- * signer cannot be presented at a position it does not hold.
- *
- * # What an empty leaf means
- *
- * Nothing can be proven at that index. Voters whose public key has never been
- * observed simply have no leaf, which is fail-safe: an incomplete tree lowers
- * the weight a fold can reach and can never raise it. On Coston2 two rounds of
- * history already cover enough weight to clear the threshold.
+ * Turns Flare's validator set into the Poseidon root the bridge stores. A leaf
+ * commits to (index, publicKey, weight) together. An unknown key means no leaf,
+ * which is fail-safe: it lowers the weight a fold can reach, never raises it.
  */
 
-/**
- * Convert a recovered secp256k1 key into the circuit's representation.
- *
- * Input is the uncompressed form viem returns: `0x04 || x(32) || y(32)`.
- */
+/** From viem's uncompressed form: `0x04 || x || y`. */
 export function toSecp256k1(publicKey: string): Secp256k1 {
   const hex = publicKey.startsWith('0x') ? publicKey.slice(2) : publicKey;
   if (hex.length !== 130 || !hex.startsWith('04')) {
@@ -50,11 +29,8 @@ export type PolicyTree = {
 };
 
 /**
- * Build the tree from voters whose keys are known.
- *
- * Leaves are placed at their policy index, not packed — the index is part of
- * the commitment and of the ordering the fold relies on, so shifting a voter
- * into a free slot would silently break both.
+ * Leaves sit at their policy index, not packed: the index is part of both the
+ * commitment and the ordering the fold relies on.
  */
 export function buildPolicyTree(keys: PolicyKey[]): PolicyTree {
   const tree = new MerkleTree(POLICY_TREE_HEIGHT);

@@ -7,11 +7,9 @@ import {Ownable2StepUpgradeable} from
     "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import {PausableUpgradeable} from
     "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-// Not the upgradeable variant: OpenZeppelin 5.7 removed it because the base
-// guard became proxy-safe. It keeps its flag in an ERC-7201 namespaced slot
-// rather than an inherited variable, so it claims no space in this contract's
-// layout, and its check is `== ENTERED` — an uninitialised slot reads as "not
-// entered", which is what a proxy that never ran the constructor leaves behind.
+// Not `ReentrancyGuardUpgradeable`: OZ 5.7 removed it and its CHANGELOG names
+// this import as the migration. The guard keeps its flag in an ERC-7201 slot,
+// so it needs no initialiser and an uninitialised slot reads as "not entered".
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {UUPSUpgradeable} from
     "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -46,17 +44,9 @@ import {IMinaSettlementVerifier, SettlementPublicValues} from "./interfaces/IMin
 ///
 /// Collateral invariant: `totalSupply(FMINA) == escrowedNanomina`, and both only
 /// change inside `claimDeposit` (up) and `burnToMina` (down).
-/// # Upgradability
-///
-/// UUPS behind an ERC-1967 proxy, so the bridge address is permanent. That is
-/// worth more than the ability to fix bugs: `FMINA.BRIDGE` is immutable and
-/// points here, so without a stable address every new implementation would mean
-/// a new token and every holder of the old one left with nothing enforcing it.
-/// The proxy removes that problem rather than working around it.
-///
-/// The cost is that `owner` can replace this logic entirely, including with
-/// logic that mints without collateral. It is recorded in docs/threat-model.md
-/// beside the other trusted keys rather than treated as infrastructure.
+/// UUPS behind ERC-1967, so the bridge address is permanent — `FMINA.BRIDGE` is
+/// immutable and points here, so a stable address is what keeps upgrades from
+/// orphaning holders. `owner` can replace this logic entirely; see the threat model.
 contract MinaPortBridge is
     Ownable2StepUpgradeable,
     PausableUpgradeable,
@@ -65,14 +55,8 @@ contract MinaPortBridge is
 {
     using MinaPortEncoding for MinaPortEncoding.Deposit;
 
-    // -------------------------------------------------------------------------
-    // Deployment constants
-    //
-    // Storage rather than `immutable`: an immutable is baked into the
-    // implementation's bytecode, and the proxy runs a different implementation
-    // after every upgrade. These have to live in the proxy's storage or they
-    // would silently reset on the first upgrade.
-    // -------------------------------------------------------------------------
+    // Storage, not `immutable`: an immutable lives in the implementation's
+    // bytecode, and the proxy runs a new implementation after every upgrade.
 
     /// @notice The FMINA token. Deployed by this contract so the mint/burn
     /// authority can never be pointed at a token the bridge does not control.
@@ -118,25 +102,13 @@ contract MinaPortBridge is
     /// @notice Nanomina currently escrowed on Mina against circulating FMINA.
     uint256 public escrowedNanomina;
 
-    /// @notice Running Poseidon commitment to every withdrawal ever emitted.
-    ///
-    /// @dev The same shape as a Mina action state: each withdrawal folds into
-    /// the previous value, so one field element commits to the whole ordered
-    /// history. Starts at zero, which is the empty chain.
-    ///
-    /// This exists so the Mina side has something cheap to verify. Replaying a
-    /// link costs 13 rows in a Mina circuit against 14,733 for one keccak level,
-    /// so a chain the escrow zkApp can replay directly is worth far more than a
-    /// tree it would have to walk in Ethereum's hash. Emitting it is not enough:
-    /// the contract has to read the previous value to compute the next one.
+    /// @notice Running Poseidon commitment to every withdrawal, Mina action-state
+    /// shaped. One field commits to the whole ordered history; replaying a link
+    /// costs Mina 13 rows against 14,733 for a keccak level. Starts at zero.
     uint256 public withdrawalActionState;
 
-    /// @notice Domain separator for the withdrawal chain, as o1js `prefixToField`
-    /// packs it: the UTF-8 bytes of "MinaPortWithdrawV1", zero-padded to 32 and
-    /// read little-endian.
-    ///
-    /// @dev Domain separation is not decoration here. Without it a digest from
-    /// one part of the protocol could be replayed as a link in this chain.
+    /// @notice o1js `prefixToField("MinaPortWithdrawV1")`. Without domain
+    /// separation a digest from elsewhere could be replayed as a link here.
     uint256 internal constant WITHDRAWAL_PREFIX_FIELD =
         4297924978315896314651171907962194736605517;
 
@@ -161,9 +133,7 @@ contract MinaPortBridge is
     /// @notice Canonical withdrawal event. This is the event the Mina side
     /// proves against, so its signature and field order are protocol.
     ///
-    /// @dev `newActionState` is what an FDC attestation ultimately carries to
-    /// Mina. Replaying the chain needs every link, not just the last one, so
-    /// each withdrawal publishes both its own fields and the state they produce.
+    /// @dev Replaying the chain needs every link, not just the last one.
     event WithdrawToMina(
         uint256 indexed nonce,
         address indexed sender,
@@ -201,10 +171,8 @@ contract MinaPortBridge is
     // Construction
     // -------------------------------------------------------------------------
 
-    /// @dev Disables initialisers on the implementation itself. Without this,
-    /// anyone can call `initialize` directly on the implementation and become
-    /// its owner — and since UUPS puts `upgradeToAndCall` in the implementation
-    /// rather than the proxy, that owner can brick what the proxy delegates to.
+    /// @dev UUPS puts `upgradeToAndCall` in the implementation, so an
+    /// implementation anyone can initialise is one anyone can own and brick.
     constructor() {
         _disableInitializers();
     }
@@ -216,9 +184,7 @@ contract MinaPortBridge is
     /// @param genesisActionState Mina action state the bridge starts from,
     ///        i.e. the zkApp's `Reducer.initialActionState` at deployment.
     ///
-    /// @dev FMINA is deployed here rather than passed in, so its immutable
-    /// bridge address is the proxy — which never changes — and an upgrade
-    /// cannot orphan holders.
+    /// @dev FMINA is deployed here, so its immutable bridge is the proxy.
     function initialize(
         address owner_,
         IMinaSettlementVerifier verifier_,
@@ -246,11 +212,7 @@ contract MinaPortBridge is
     /// @dev Only the owner may install a new implementation.
     function _authorizeUpgrade(address) internal override onlyOwner {}
 
-    /// @notice Free storage slots reserved for future variables.
-    /// @dev Appending a variable in a later version must not shift anything
-    /// this version already wrote. Consuming a gap slot instead keeps every
-    /// existing offset fixed, which is the whole discipline of upgradeable
-    /// storage — get it wrong once and the balances read as something else.
+    /// @dev Room to append without shifting anything this version wrote.
     uint256[45] private __gap;
 
     // -------------------------------------------------------------------------
@@ -592,10 +554,8 @@ contract MinaPortBridge is
 
         escrowedNanomina -= amount;
 
-        // Fold this withdrawal into the running commitment. The record is
-        // hashed, not the signature that authorised it: Mina needs the recipient
-        // and the amount to pay out, so those are what must be bound. Flare has
-        // already checked the signature by the time this runs.
+        // The record is hashed, not the signature: Mina needs the recipient
+        // and amount to pay out, so those are what must be bound.
         uint256 previousActionState = withdrawalActionState;
         uint256[] memory fields = new uint256[](5);
         fields[0] = previousActionState;
