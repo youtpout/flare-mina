@@ -37,10 +37,16 @@ import {
   Mina,
   PrivateKey,
   PublicKey,
+  UInt32,
   UInt64,
   fetchAccount,
-  type Field,
+  Field,
 } from 'o1js';
+import {
+  harvestPolicyKeys,
+  signedMessageHash,
+  type RelayCall,
+} from '@minaport/shared';
 
 /**
  * Builds and proves `MinaPortBridge.deposit` transactions.
@@ -106,7 +112,20 @@ type ReleaseRequest = {
   tail: Array<{ nonce: string; recipient: string; amountNanomina: string }>;
 };
 
-type Request = BuildRequest | ReleaseRequest;
+/**
+ * Push Flare's withdrawal chain state to the escrow.
+ *
+ * `calls` are recent `Relay.relay()` transactions: the signing policy and the
+ * validator signatures both come out of their calldata, and nowhere else.
+ */
+type PublishRequest = {
+  kind: 'publish';
+  id: number;
+  actionState: string;
+  calls: unknown[];
+};
+
+type Request = BuildRequest | ReleaseRequest | PublishRequest;
 
 type Ready = { type: 'ready'; compileMs: number };
 type Built = { type: 'built'; id: number; transaction: string; provingMs: number };
@@ -127,6 +146,12 @@ await initializeBindings();
 // starts.
 const { WithdrawalChain, applyWithdrawal } = await import(
   '@minaport/mina-contracts/dist/src/WithdrawalChain.js'
+);
+const { SigningPolicyFold, EcdsaSignature, Bytes32 } = await import(
+  '@minaport/mina-contracts/dist/src/SigningPolicyFold.js'
+);
+const { buildPolicyTree, toSecp256k1 } = await import(
+  '@minaport/mina-contracts/dist/src/policyTree.js'
 );
 const { MinaPortBridge, WithdrawalRecord, flareRecipientField } = await import(
   '@minaport/mina-contracts/dist/src/MinaPortBridge.js'
@@ -153,6 +178,7 @@ const compileStart = Date.now();
 // The chain program first: the contract verifies its proofs, so its
 // verification key has to exist before the contract compiles.
 await WithdrawalChain.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
+await SigningPolicyFold.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 await MinaPortBridge.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 port.postMessage({ type: 'ready', compileMs: Date.now() - compileStart } satisfies Ready);
 
@@ -194,6 +220,77 @@ async function proveTail(from: Field, tail: ReleaseRequest['tail']) {
   return segment;
 }
 
+/**
+ * Prove enough validator weight signed a Flare round, then publish the state.
+ *
+ * The signed digest is not yet bound to `actionState` — that needs the FDC
+ * attestation and MerkleInclusion — so the attestor still co-signs. What the
+ * proof does establish is that real policy members really signed.
+ */
+async function handlePublish(request: PublishRequest) {
+  const attestorKey = process.env.MINA_WITHDRAWAL_ATTESTOR_PRIVATE_KEY;
+  const feePayerKey = process.env.MINA_DEVNET_PRIVATE_KEY;
+  if (!attestorKey || !feePayerKey) {
+    throw new Error('MINA_WITHDRAWAL_ATTESTOR_PRIVATE_KEY and MINA_DEVNET_PRIVATE_KEY are required');
+  }
+
+  const attestor = PrivateKey.fromBase58(attestorKey);
+  const feePayer = PrivateKey.fromBase58(feePayerKey);
+  const sender = feePayer.toPublicKey();
+
+  const calls = request.calls as RelayCall[];
+  const policy = calls.reduce((a, b) => (a.policy.rewardEpochId >= b.policy.rewardEpochId ? a : b))
+    .policy;
+  const { known } = await harvestPolicyKeys(policy, calls);
+  const tree = buildPolicyTree(known);
+
+  // The round with the most usable signatures, so one message carries the most
+  // weight and the merge stays shallow.
+  const usable = calls
+    .map((call) => ({
+      call,
+      signatures: call.signatures
+        .filter((s) => known.some((k) => k.index === s.index))
+        .sort((a, b) => a.index - b.index),
+    }))
+    .sort((a, b) => b.signatures.length - a.signatures.length)[0];
+
+  if (usable === undefined || usable.signatures.length === 0) {
+    throw new Error('no relay signature matches a known policy key');
+  }
+
+  // Cast: the static helpers survive the build but not the emitted .d.ts.
+  const digest = (Bytes32 as unknown as { fromHex(hex: string): unknown }).fromHex(
+    signedMessageHash(usable.call.message).slice(2),
+  );
+  let merged;
+  for (const signature of usable.signatures) {
+    const voter = known.find((k) => k.index === signature.index)!;
+    const { proof } = await SigningPolicyFold.single(digest as never, tree.root, {
+      publicKey: toSecp256k1(voter.publicKey),
+      signature: EcdsaSignature.from({ r: BigInt(signature.r), s: BigInt(signature.s) }),
+      index: UInt32.from(voter.index),
+      weight: UInt32.from(voter.weight),
+      witness: tree.witnessFor(voter.index),
+    } as never);
+    merged = merged === undefined ? proof : (await SigningPolicyFold.merge(merged, proof)).proof;
+  }
+
+  await fetchAccount({ publicKey: sender });
+  await fetchAccount({ publicKey: bridge.address });
+  await fetchAccount({ publicKey: attestor.toPublicKey() });
+
+  const tx = await Mina.transaction(
+    { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000) },
+    async () => {
+      await bridge.publishFlareActionState(Field(request.actionState), merged!);
+    },
+  );
+  await tx.prove();
+  const pending = await tx.sign([feePayer, attestor]).send();
+  return pending.hash;
+}
+
 async function handleRelease(request: ReleaseRequest) {
   const feePayerKey = process.env.MINA_DEVNET_PRIVATE_KEY;
   if (!feePayerKey) throw new Error('MINA_DEVNET_PRIVATE_KEY is required');
@@ -227,6 +324,18 @@ async function handleRelease(request: ReleaseRequest) {
 }
 
 port.on('message', async (request: Request) => {
+  if (request.kind === 'publish') {
+    try {
+      port.postMessage({ type: 'released', id: request.id, hash: await handlePublish(request) });
+    } catch (error) {
+      port.postMessage({
+        type: 'failed',
+        id: request.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
   if (request.kind === 'release') {
     try {
       port.postMessage({ type: 'released', id: request.id, hash: await handleRelease(request) });

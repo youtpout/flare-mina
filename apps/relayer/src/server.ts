@@ -25,6 +25,7 @@ import {
   submitterConfigured,
 } from './submitter.js';
 import { startWatcher } from './watcher.js';
+import { startPublisher } from './publisher.js';
 import { startWithdrawals } from './withdrawals.js';
 
 /**
@@ -292,6 +293,8 @@ async function main() {
   await migrate();
 
   const watcher = startWatcher();
+  // Before withdrawals: a release cannot land ahead of the state it proves against.
+  const publisher = startPublisher();
   const withdrawals = startWithdrawals();
 
   const server = app.listen(PORT, () => {
@@ -301,6 +304,7 @@ async function main() {
   const shutdown = async (signal: string) => {
     console.log(`${signal} received, shutting down`);
     watcher.stop();
+    publisher.stop();
     withdrawals.stop();
     server.close();
     await pool.end();

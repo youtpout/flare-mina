@@ -132,6 +132,36 @@ export function queueDepth(): number {
  * releases are serialised anyway because `releaseWithdrawal` advances the
  * bridge's cursor along Flare's chain. Returns the Mina transaction hash.
  */
+/**
+ * Push Flare's withdrawal chain state to the escrow.
+ *
+ * Queued on the same worker as everything else: proving saturates its cores,
+ * and a release that lands before its state would fail anyway.
+ */
+export async function publishActionState(request: {
+  actionState: bigint;
+  calls: unknown[];
+}): Promise<string> {
+  await start();
+
+  const run = async (): Promise<string> => {
+    const id = nextId++;
+    return new Promise<string>((resolve, reject) => {
+      pending.set(id, { resolve: (built) => resolve(built.transaction), reject });
+      worker?.postMessage({
+        kind: 'publish',
+        id,
+        actionState: request.actionState.toString(),
+        calls: request.calls,
+      });
+    });
+  };
+
+  const result = queue.then(run, run);
+  queue = result.catch(() => undefined);
+  return result;
+}
+
 export async function releaseWithdrawal(request: {
   nonce: bigint;
   recipient: string;

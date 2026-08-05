@@ -1,5 +1,7 @@
-import { AccountUpdate, Mina, PrivateKey, PublicKey, fetchAccount } from 'o1js';
+import { AccountUpdate, Field, Mina, PrivateKey, PublicKey, UInt64, fetchAccount } from 'o1js';
 import { MinaPortBridge } from '../src/MinaPortBridge.js';
+import { SigningPolicyFold } from '../src/SigningPolicyFold.js';
+import { WithdrawalChain } from '../src/WithdrawalChain.js';
 
 /**
  * Deploy the escrow zkApp to Mina devnet.
@@ -18,6 +20,10 @@ import { MinaPortBridge } from '../src/MinaPortBridge.js';
  * Usage, from the repository root:
  *   set -a && . ./.env && set +a
  *   pnpm --filter @minaport/mina-contracts exec tsx scripts/deployBridge.ts
+ *
+ * `MINA_SIGNING_POLICY_ROOT` comes from `scripts/fetchPolicyTree.ts`. Without
+ * it no signing-policy proof can ever be accepted, so it is required rather
+ * than defaulted.
  */
 
 const GRAPHQL = process.env.MINA_DEVNET_GRAPHQL ?? 'https://api.minascan.io/node/devnet/v1/graphql';
@@ -47,15 +53,25 @@ async function main() {
     process.env.MINA_WITHDRAWAL_ATTESTOR ?? deployer.toBase58(),
   );
 
+  const signingPolicyRoot = Field(required('MINA_SIGNING_POLICY_ROOT'));
+  // Coston2's real threshold is 32,767 of 65,534. A demo can require less, but
+  // the number has to be a deliberate choice rather than an omission.
+  const requiredWeight = UInt64.from(BigInt(process.env.MINA_REQUIRED_WEIGHT ?? '32767'));
+
   console.log('deployer :', deployer.toBase58());
   console.log('zkApp    :', zkAppAddress.toBase58());
   console.log('attestor :', attestor.toBase58());
+  console.log('policy   :', signingPolicyRoot.toString());
+  console.log('weight   :', requiredWeight.toString());
   console.log('\nzkApp private key (store it, it is not recoverable):');
   console.log(zkAppKey.toBase58(), '\n');
 
   await fetchAccount({ publicKey: deployer });
 
   console.log('compiling…');
+  // The contract verifies proofs from both, so their keys must exist first.
+  await WithdrawalChain.compile();
+  await SigningPolicyFold.compile();
   const { verificationKey } = await MinaPortBridge.compile();
   console.log('verification key hash:', verificationKey.hash.toString());
 
@@ -64,7 +80,12 @@ async function main() {
   console.log('building deploy transaction…');
   const tx = await Mina.transaction({ sender: deployer, fee: FEE }, async () => {
     AccountUpdate.fundNewAccount(deployer);
-    await bridge.deploy({ admin: deployer, withdrawalAttestor: attestor });
+    await bridge.deploy({
+      admin: deployer,
+      withdrawalAttestor: attestor,
+      signingPolicyRoot,
+      requiredWeight,
+    });
   });
 
   console.log('proving…');
