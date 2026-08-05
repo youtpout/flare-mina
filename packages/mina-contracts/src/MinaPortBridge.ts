@@ -14,8 +14,16 @@ import {
   Poseidon,
   state,
 } from 'o1js';
-import { DEPOSIT_DOMAIN, EVM_ADDRESS_BITS, WITHDRAWAL_DOMAIN } from './constants.js';
+import { DEPOSIT_DOMAIN, EVM_ADDRESS_BITS } from './constants.js';
+import {
+  WithdrawalChainProof,
+  WithdrawalRecord,
+  applyWithdrawal,
+} from './WithdrawalChain.js';
 import { SigningPolicyProof } from './SigningPolicyFold.js';
+
+/** Re-exported so callers of this contract get the record from one place. */
+export { WithdrawalRecord };
 
 /**
  * MinaPort bridge zkApp — the Mina side of the MINA <-> wMINA bridge.
@@ -67,24 +75,6 @@ export class DepositAction extends Struct({
       this.senderX,
       this.senderIsOdd.toField(),
       this.flareRecipient,
-      this.amount.value,
-    ]);
-  }
-}
-
-/** A withdrawal proven to have happened on Flare. */
-export class WithdrawalRecord extends Struct({
-  nonce: UInt64,
-  recipient: PublicKey,
-  amount: UInt64,
-}) {
-  hash(): Field {
-    const { x, isOdd } = this.recipient;
-    return Poseidon.hash([
-      WITHDRAWAL_DOMAIN,
-      this.nonce.value,
-      x,
-      isOdd.toField(),
       this.amount.value,
     ]);
   }
@@ -177,20 +167,29 @@ export class MinaPortBridge extends SmartContract {
   @state(PublicKey) withdrawalAttestor = State<PublicKey>();
 
   /**
-   * The Flare Merkle root this bridge has accepted, as a Poseidon commitment
-   * over its 32 bytes.
+   * The newest state of Flare's withdrawal chain this bridge has accepted.
    *
-   * Published once per Flare voting round by `publishFlareRoot`, which verifies
-   * that enough of Flare's validators signed it. Every withdrawal in that round
-   * then proves inclusion against this one value — so the expensive half, the
-   * ECDSA verification, is paid once and amortised across all of them rather
-   * than repeated per withdrawal.
+   * Flare folds every withdrawal into a running Poseidon commitment, so this
+   * one field element stands for the entire ordered history up to the moment it
+   * was attested. Published once per batch, and every release in that batch
+   * proves against it — the expensive verification is paid once and amortised
+   * rather than repeated per withdrawal.
    *
-   * Stored as a Poseidon hash because a 32-byte root does not fit in one field
-   * element, and because comparing one field is cheaper than comparing 32
-   * bytes in a circuit.
+   * A chain rather than a Merkle root because it is append-only: a newer state
+   * contains every older one, so publishing does not strand a withdrawal that
+   * missed its window. Remembering a set of independent roots would need state
+   * this contract does not have — eight field elements, and the layout below
+   * already uses all eight.
    */
-  @state(Field) flareRoot = State<Field>();
+  @state(Field) flareActionState = State<Field>();
+
+  /**
+   * How far along Flare's chain this bridge has released.
+   *
+   * Starts at zero, the empty chain, and advances by exactly one link per
+   * release. The gap between this and `flareActionState` is what remains owed.
+   */
+  @state(Field) processedActionState = State<Field>();
 
   /**
    * Signing weight required before a root is accepted.
@@ -243,7 +242,10 @@ export class MinaPortBridge extends SmartContract {
   override init() {
     super.init();
     this.lastWithdrawalNonce.set(UInt64.zero);
-    this.flareRoot.set(Field(0));
+    // Zero is the empty chain on both sides: Flare's `withdrawalActionState`
+    // starts there too, so a fresh bridge is already in agreement.
+    this.flareActionState.set(Field(0));
+    this.processedActionState.set(Field(0));
 
     this.account.permissions.set({
       ...Permissions.default(),
@@ -342,31 +344,36 @@ export class MinaPortBridge extends SmartContract {
   }
 
   /**
-   * Accept a Flare Merkle root that enough validators signed.
+   * Accept a new state of Flare's withdrawal chain.
    *
    * # Why this is separate from releasing
    *
-   * Verifying Flare's signing policy is the expensive half — one secp256k1
-   * verification is 31,812 rows, and a threshold needs several. Doing it inside
-   * `releaseWithdrawal` would charge every withdrawal for work that is
-   * identical across all withdrawals in the same voting round.
+   * Establishing what Flare committed to is the expensive half — one secp256k1
+   * verification is 31,814 rows and a threshold needs several, plus a keccak
+   * Merkle path at 14,733 rows a level. Doing that inside `releaseWithdrawal`
+   * would charge every user for work that is identical across a whole batch.
    *
-   * So it happens once, here. A root is checked and stored; every withdrawal
-   * that round then proves inclusion against it, which is only a Merkle path.
-   * The cost is amortised over the round rather than repeated per user.
+   * So it happens once, here. Afterwards a release only replays chain links, at
+   * 48 rows each — the cost is amortised over the batch rather than repeated.
    *
    * # What it does not check
    *
-   * That the signers belong to Flare's signing policy — see the note at the top
-   * of `SigningPolicyFold`. Until that lands, this is a structural placeholder:
-   * the shape is right and the trust is not yet there, which is why
-   * `withdrawalAttestor` is still what `releaseWithdrawal` requires.
+   * Two things, both tracked in docs/return-path.md.
    *
-   * Permissionless on purpose. The proof is the authorisation, so anyone may
-   * pay to publish a root, and a relayer that stops publishing can be routed
-   * around by any party holding the same proof.
+   * That the signers belong to Flare's signing policy: `SigningPolicyFold`
+   * proves valid signatures at distinct ascending indices, but nothing yet binds
+   * `(index, publicKey, weight)` to the policy they name.
+   *
+   * And that `actionState` is what those validators actually signed over. The
+   * signed value is an FDC voting-round root; linking it to Flare's event needs
+   * `MerkleInclusion` plus decoding of the attested response.
+   *
+   * Until both land, the attestor co-signs. That is a far smaller assumption
+   * than before: the attestor is now trusted once per batch instead of once per
+   * withdrawal, and it cannot choose recipients or amounts — those come from the
+   * chain, and only the sequence Flare committed to reaches this state.
    */
-  @method async publishFlareRoot(proof: SigningPolicyProof) {
+  @method async publishFlareActionState(actionState: Field, proof: SigningPolicyProof) {
     proof.verify();
 
     const required = this.requiredWeight.getAndRequireEquals();
@@ -375,23 +382,36 @@ export class MinaPortBridge extends SmartContract {
       'signing weight below the required threshold',
     );
 
-    // The root is 32 bytes; state holds field elements. Poseidon over the bytes
-    // is the commitment an inclusion proof will be compared against, and one
-    // field comparison is far cheaper in circuit than thirty-two.
-    this.flareRoot.getAndRequireEquals();
-    this.flareRoot.set(Poseidon.hash(proof.publicOutput.message.bytes.map((b) => b.value)));
+    const attestor = this.withdrawalAttestor.getAndRequireEquals();
+    const attestorUpdate = AccountUpdate.createSigned(attestor);
+    attestorUpdate.body.useFullCommitment = Bool(true);
+
+    this.flareActionState.getAndRequireEquals();
+    this.flareActionState.set(actionState);
   }
 
   /**
-   * Release escrowed MINA for a withdrawal that was proven on Flare.
+   * Release escrowed MINA for the next withdrawal on Flare's chain.
    *
-   * HACKATHON TRUST ASSUMPTION: authorisation is a signature from
-   * `withdrawalAttestor` rather than an in-circuit proof of the Flare Relay
-   * signing policy. Everything else — nonce monotonicity, amount, recipient
-   * binding, collateral accounting — is enforced by the circuit and does not
-   * change when the attestor is replaced by a real proof.
+   * # What makes the withdrawal real
+   *
+   * The record itself is untrusted input. What constrains it is `tail`: a proof
+   * that from the state this record produces, the rest of Flare's chain runs to
+   * the attested state. No fabricated record has such a continuation, because
+   * producing one means finding a Poseidon collision.
+   *
+   * So the caller cannot invent a withdrawal, redirect one, or change an amount
+   * — every field is inside the hash that has to land on `flareActionState`.
+   * There is no attestor here any more; the trust that remains sits in
+   * `publishFlareActionState`, once per batch.
+   *
+   * # Why releases are serialised
+   *
+   * This reads and writes the cursor, so two releases in one block conflict.
+   * That is inherent to a chain: withdrawals are released in Flare's order, one
+   * at a time. Deposits stay concurrent because they read no state.
    */
-  @method async releaseWithdrawal(record: WithdrawalRecord) {
+  @method async releaseWithdrawal(record: WithdrawalRecord, tail: WithdrawalChainProof) {
     record.amount.assertGreaterThan(UInt64.zero, 'withdrawal amount must be non-zero');
 
     const lastNonce = this.lastWithdrawalNonce.getAndRequireEquals();
@@ -404,11 +424,20 @@ export class MinaPortBridge extends SmartContract {
     // invalidate an in-flight release.
     this.account.balance.requireBetween(record.amount, UInt64.MAXINT());
 
-    // The attestor must co-sign this transaction.
-    const attestor = this.withdrawalAttestor.getAndRequireEquals();
-    const attestorUpdate = AccountUpdate.createSigned(attestor);
-    attestorUpdate.body.useFullCommitment = Bool(true);
+    tail.verify();
 
+    // This record's own link is computed here, not taken from the proof: it is
+    // what binds the recipient and amount being paid to the chain.
+    const processed = this.processedActionState.getAndRequireEquals();
+    const next = applyWithdrawal(processed, record);
+
+    tail.publicOutput.from.assertEquals(next, 'tail does not continue from this withdrawal');
+    tail.publicOutput.to.assertEquals(
+      this.flareActionState.getAndRequireEquals(),
+      'tail does not reach the attested Flare state',
+    );
+
+    this.processedActionState.set(next);
     this.lastWithdrawalNonce.set(record.nonce);
 
     this.send({ to: record.recipient, amount: record.amount });

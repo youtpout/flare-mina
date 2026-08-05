@@ -1,5 +1,16 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { AccountUpdate, Field, Mina, PrivateKey, PublicKey, UInt64 } from 'o1js';
+import { AccountUpdate, Field, Mina, PrivateKey, PublicKey, UInt32, UInt64 } from 'o1js';
+import {
+  WithdrawalChain,
+  type WithdrawalChainProof,
+  applyWithdrawal,
+} from '../src/WithdrawalChain.js';
+import {
+  Bytes32,
+  EcdsaSignature,
+  Secp256k1,
+  SigningPolicyFold,
+} from '../src/SigningPolicyFold.js';
 import {
   DepositAction,
   DepositEvent,
@@ -212,71 +223,126 @@ describe('deposit', () => {
 });
 
 describe('withdrawal release', () => {
-  async function release(record: WithdrawalRecord, signers: PrivateKey[]) {
-    const tx = await Mina.transaction(deployer, async () => {
-      await bridge.releaseWithdrawal(record);
-    });
-    await tx.prove();
-    return tx.sign([deployerKey, ...signers]).send();
-  }
+  /**
+   * The chain Flare would have built. States are computed the same way
+   * `burnToMina` computes them, so these are the exact values the contract has
+   * to land on.
+   */
+  let w1: WithdrawalRecord;
+  let s1: Field;
+  let w2: WithdrawalRecord;
+  let s2: Field;
 
-  it('requires the attestor signature', async () => {
-    const record = new WithdrawalRecord({
+  beforeAll(async () => {
+    await WithdrawalChain.compile({ proofsEnabled: false });
+    await SigningPolicyFold.compile({ proofsEnabled: false });
+
+    // Built here, not at describe scope: `user` is only assigned in the outer
+    // beforeAll, which has not run when the describe body is evaluated.
+    w1 = new WithdrawalRecord({
       nonce: UInt64.from(1n),
       recipient: user,
       amount: UInt64.from(MINA),
     });
-    await expect(release(record, [])).rejects.toThrow();
-  }, 120_000);
+    s1 = applyWithdrawal(Field(0), w1);
+    w2 = new WithdrawalRecord({
+      nonce: UInt64.from(2n),
+      recipient: user,
+      amount: UInt64.from(2n * MINA),
+    });
+    s2 = applyWithdrawal(s1, w2);
+  }, 300_000);
 
-  it('releases MINA and advances the withdrawal nonce', async () => {
-    const balanceBefore = Mina.getBalance(user);
-    const escrowBefore = Mina.getBalance(zkAppAddress).toBigInt();
+  /** A signing-policy proof over an arbitrary root; `requiredWeight` is zero here. */
+  async function signingProof() {
+    const key = Secp256k1.Scalar.random().toBigInt();
+    const message = Bytes32.random();
+    const { proof } = await SigningPolicyFold.single(message, Field(0xf1a2e), {
+      publicKey: Secp256k1.generator.scale(key),
+      signature: EcdsaSignature.signHash(message, key),
+      index: UInt32.from(0),
+      weight: UInt32.from(1),
+    } as never);
+    return proof;
+  }
 
-    await release(
-      new WithdrawalRecord({ nonce: UInt64.from(1n), recipient: user, amount: UInt64.from(MINA) }),
-      [attestorKey],
-    );
+  async function publish(actionState: Field) {
+    const proof = await signingProof();
+    const tx = await Mina.transaction(deployer, async () => {
+      await bridge.publishFlareActionState(actionState, proof);
+    });
+    await tx.prove();
+    return tx.sign([deployerKey, attestorKey]).send();
+  }
 
-    expect(bridge.lastWithdrawalNonce.get().toBigInt()).toBe(1n);
-    // The escrow shrinks by exactly the released amount — no separate figure
-    // to keep in step with it.
-    expect(Mina.getBalance(zkAppAddress).toBigInt()).toBe(escrowBefore - MINA);
-    expect(Mina.getBalance(user).toBigInt()).toBe(balanceBefore.toBigInt() + MINA);
-  }, 120_000);
+  async function release(record: WithdrawalRecord, tail: WithdrawalChainProof) {
+    const tx = await Mina.transaction(deployer, async () => {
+      await bridge.releaseWithdrawal(record, tail);
+    });
+    await tx.prove();
+    return tx.sign([deployerKey]).send();
+  }
 
-  it('rejects a replayed withdrawal nonce', async () => {
-    await expect(
-      release(
-        new WithdrawalRecord({ nonce: UInt64.from(1n), recipient: user, amount: UInt64.from(MINA) }),
-        [attestorKey],
-      ),
-    ).rejects.toThrow(/strictly increasing/);
-  }, 120_000);
+  it('publishes the attested Flare state', async () => {
+    await publish(s2);
+    expect(bridge.flareActionState.get().toString()).toBe(s2.toString());
+  }, 300_000);
 
   /**
-   * The collateral bound is now a precondition on the account balance rather
-   * than an in-circuit assertion against a stored total, so the refusal comes
-   * from the protocol and reads `Account_balance_precondition_unsatisfied`
-   * instead of a message we wrote.
-   *
-   * That is a worse error string and a better check: it tests the real balance
-   * rather than a number the contract maintains and could get out of step with,
-   * and being a range rather than an equality it survives a deposit landing in
-   * the same block.
+   * The property the design rests on: the record is untrusted input, and what
+   * constrains it is that no other record has a continuation reaching the
+   * attested state.
    */
-  it('rejects a withdrawal exceeding the escrowed balance', async () => {
-    await expect(
-      release(
-        new WithdrawalRecord({
-          nonce: UInt64.from(2n),
-          recipient: user,
-          amount: UInt64.from(1_000_000n * MINA),
-        }),
-        [attestorKey],
-      ),
-    ).rejects.toThrow(/Account_balance_precondition_unsatisfied/);
-  }, 120_000);
+  it('refuses a fabricated withdrawal', async () => {
+    const fake = new WithdrawalRecord({
+      nonce: UInt64.from(1n),
+      recipient: deployer,
+      amount: UInt64.from(MINA),
+    });
+    const { proof: tail } = await WithdrawalChain.link(applyWithdrawal(Field(0), fake), w2);
+
+    await expect(release(fake, tail)).rejects.toThrow(/does not reach the attested/);
+  }, 300_000);
+
+  /** Same withdrawal, altered amount — the amount is inside the hash. */
+  it('refuses a withdrawal whose amount was changed', async () => {
+    const altered = new WithdrawalRecord({
+      nonce: UInt64.from(1n),
+      recipient: user,
+      amount: UInt64.from(5n * MINA),
+    });
+    const { proof: tail } = await WithdrawalChain.link(s1, w2);
+
+    await expect(release(altered, tail)).rejects.toThrow(/does not continue/);
+  }, 300_000);
+
+  it('releases the first withdrawal and advances the cursor', async () => {
+    const balanceBefore = Mina.getBalance(user).toBigInt();
+    const escrowBefore = Mina.getBalance(zkAppAddress).toBigInt();
+
+    const { proof: tail } = await WithdrawalChain.link(s1, w2);
+    await release(w1, tail);
+
+    expect(bridge.processedActionState.get().toString()).toBe(s1.toString());
+    expect(bridge.lastWithdrawalNonce.get().toBigInt()).toBe(1n);
+    expect(Mina.getBalance(zkAppAddress).toBigInt()).toBe(escrowBefore - MINA);
+    expect(Mina.getBalance(user).toBigInt()).toBe(balanceBefore + MINA);
+  }, 300_000);
+
+  /** The newest withdrawal has an empty tail — that is what `empty` is for. */
+  it('releases the last withdrawal against an empty tail', async () => {
+    const { proof: tail } = await WithdrawalChain.empty(s2);
+    await release(w2, tail);
+
+    expect(bridge.processedActionState.get().toString()).toBe(s2.toString());
+    expect(bridge.lastWithdrawalNonce.get().toBigInt()).toBe(2n);
+  }, 300_000);
+
+  /** Once the cursor has passed a withdrawal, its tail no longer starts there. */
+  it('refuses a replayed withdrawal', async () => {
+    const { proof: tail } = await WithdrawalChain.link(s1, w2);
+    await expect(release(w1, tail)).rejects.toThrow(/strictly increasing/);
+  }, 300_000);
 });
 
 describe('attestor rotation', () => {

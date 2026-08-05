@@ -39,6 +39,7 @@ import {
   PublicKey,
   UInt64,
   fetchAccount,
+  type Field,
 } from 'o1js';
 
 /**
@@ -85,10 +86,15 @@ type BuildRequest = {
 /**
  * Release escrowed MINA against a burn that already happened on Flare.
  *
- * Unlike a deposit, this transaction is proved *and signed* here: it needs the
- * withdrawal attestor's co-signature, and the user has nothing to sign — their
- * FMINA is already gone. That is also what makes it the trusted half of the
- * return path, GAP 2 in docs/threat-model.md.
+ * Unlike a deposit, this transaction is proved *and signed* here: the user has
+ * nothing to sign, their FMINA is already gone.
+ *
+ * `tail` is every withdrawal Flare committed to *after* this one, up to the
+ * state the zkApp has accepted. It is what proves this record is genuinely the
+ * next link in Flare's chain rather than something the relayer made up — no
+ * other record has a continuation reaching that state. The relayer therefore
+ * cannot invent, redirect or resize a withdrawal, which is what the attestor
+ * co-signature used to be standing in for.
  */
 type ReleaseRequest = {
   kind: 'release';
@@ -96,6 +102,8 @@ type ReleaseRequest = {
   nonce: string;
   recipient: string;
   amountNanomina: string;
+  /** Subsequent withdrawals, in Flare's order. Empty when this is the newest. */
+  tail: Array<{ nonce: string; recipient: string; amountNanomina: string }>;
 };
 
 type Request = BuildRequest | ReleaseRequest;
@@ -117,6 +125,9 @@ await initializeBindings();
 // which this worker's loader does not rewrite — the contracts package must be
 // built (`pnpm --filter @minaport/mina-contracts build`) before the relayer
 // starts.
+const { WithdrawalChain, applyWithdrawal } = await import(
+  '@minaport/mina-contracts/dist/src/WithdrawalChain.js'
+);
 const { MinaPortBridge, WithdrawalRecord, flareRecipientField } = await import(
   '@minaport/mina-contracts/dist/src/MinaPortBridge.js'
 );
@@ -139,43 +150,79 @@ Mina.setActiveInstance(Mina.Network({ mina: graphql, archive: graphql }));
 // bases and costs seconds; a warm one reads them back. Mount O1JS_CACHE_DIR on
 // a volume so a redeploy does not pay for it again.
 const compileStart = Date.now();
+// The chain program first: the contract verifies its proofs, so its
+// verification key has to exist before the contract compiles.
+await WithdrawalChain.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 await MinaPortBridge.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 port.postMessage({ type: 'ready', compileMs: Date.now() - compileStart } satisfies Ready);
 
 const bridge = new MinaPortBridge(PublicKey.fromBase58(bridgeAddress));
 
-async function handleRelease(request: ReleaseRequest) {
-  const attestorKey = process.env.MINA_WITHDRAWAL_ATTESTOR_PRIVATE_KEY;
-  const feePayerKey = process.env.MINA_DEVNET_PRIVATE_KEY;
-  if (!attestorKey || !feePayerKey) {
-    throw new Error('MINA_WITHDRAWAL_ATTESTOR_PRIVATE_KEY and MINA_DEVNET_PRIVATE_KEY are required');
+const toRecord = (w: { nonce: string; recipient: string; amountNanomina: string }) =>
+  new WithdrawalRecord({
+    nonce: UInt64.from(BigInt(w.nonce)),
+    recipient: PublicKey.fromBase58(w.recipient),
+    amount: UInt64.from(BigInt(w.amountNanomina)),
+  });
+
+/**
+ * Prove the stretch of Flare's chain that follows the released withdrawal.
+ *
+ * Links are proven first and merged afterwards rather than chained, so they are
+ * independent — every intermediate state is known in advance, so a batch can
+ * prove in parallel instead of waiting on its predecessor. Merging is folded
+ * left because a release tail is short; a balanced tree would only pay off at
+ * depths this will not reach.
+ */
+async function proveTail(from: Field, tail: ReleaseRequest['tail']) {
+  if (tail.length === 0) return (await WithdrawalChain.empty(from)).proof;
+
+  const states: Field[] = [from];
+  const records = tail.map(toRecord);
+  for (const record of records) {
+    states.push(applyWithdrawal(states[states.length - 1]!, record));
   }
 
-  const attestor = PrivateKey.fromBase58(attestorKey);
+  const links = await Promise.all(
+    records.map(async (record, i) => (await WithdrawalChain.link(states[i]!, record)).proof),
+  );
+
+  let segment = links[0]!;
+  for (let i = 1; i < links.length; i++) {
+    segment = (await WithdrawalChain.merge(segment, links[i]!)).proof;
+  }
+  return segment;
+}
+
+async function handleRelease(request: ReleaseRequest) {
+  const feePayerKey = process.env.MINA_DEVNET_PRIVATE_KEY;
+  if (!feePayerKey) throw new Error('MINA_DEVNET_PRIVATE_KEY is required');
+
   const feePayer = PrivateKey.fromBase58(feePayerKey);
   const sender = feePayer.toPublicKey();
 
   await fetchAccount({ publicKey: sender });
   await fetchAccount({ publicKey: bridge.address });
-  await fetchAccount({ publicKey: attestor.toPublicKey() });
 
-  const record = new WithdrawalRecord({
-    nonce: UInt64.from(BigInt(request.nonce)),
-    recipient: PublicKey.fromBase58(request.recipient),
-    amount: UInt64.from(BigInt(request.amountNanomina)),
-  });
+  const record = toRecord(request);
+
+  // The cursor is read from chain rather than tracked here: it is the only
+  // value the proof has to start from, and a stale local copy would produce a
+  // tail that silently fails to meet it.
+  const processed = bridge.processedActionState.get();
+  const tail = await proveTail(applyWithdrawal(processed, record), request.tail);
 
   const tx = await Mina.transaction(
     { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000) },
     async () => {
-      await bridge.releaseWithdrawal(record);
+      await bridge.releaseWithdrawal(record, tail);
     },
   );
   await tx.prove();
 
-  // Both signatures: the fee payer's, and the attestor's on the account update
-  // `releaseWithdrawal` creates for it.
-  const pending = await tx.sign([feePayer, attestor]).send();
+  // Only the fee payer signs now. Authorisation is the tail proof, so a relayer
+  // holding this key still cannot release anything Flare did not commit to.
+  const pending = await tx.sign([feePayer]).send();
   return pending.hash;
 }
 

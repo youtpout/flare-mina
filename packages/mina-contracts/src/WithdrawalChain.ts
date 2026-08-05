@@ -1,7 +1,17 @@
-import { Field, Poseidon, SelfProof, Struct, ZkProgram } from 'o1js';
-import { WithdrawalRecord } from './MinaPortBridge.js';
+import { Field, Poseidon, PublicKey, SelfProof, Struct, UInt64, ZkProgram } from 'o1js';
 
-export { WithdrawalRecord };
+/**
+ * A withdrawal, exactly as Flare committed to it.
+ *
+ * Lives here rather than beside the contract because the chain is what gives
+ * the record meaning: these are the fields `burnToMina` folds, in the order it
+ * folds them.
+ */
+export class WithdrawalRecord extends Struct({
+  nonce: UInt64,
+  recipient: PublicKey,
+  amount: UInt64,
+}) {}
 
 /**
  * Replays Flare's withdrawal chain, so Mina can tell where a withdrawal sits in it.

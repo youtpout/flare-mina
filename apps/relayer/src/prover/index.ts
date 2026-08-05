@@ -129,13 +129,15 @@ export function queueDepth(): number {
  * Release escrowed MINA for a burn that already happened on Flare.
  *
  * Queued behind deposits on the same worker: proving saturates its cores, and
- * releases are serialised anyway because `releaseWithdrawal` reads and writes
- * `lastWithdrawalNonce`. Returns the Mina transaction hash.
+ * releases are serialised anyway because `releaseWithdrawal` advances the
+ * bridge's cursor along Flare's chain. Returns the Mina transaction hash.
  */
 export async function releaseWithdrawal(request: {
   nonce: bigint;
   recipient: string;
   amountNanomina: bigint;
+  /** Withdrawals Flare committed to after this one, in order. */
+  tail: Array<{ nonce: bigint; recipient: string; amountNanomina: bigint }>;
 }): Promise<string> {
   await start();
 
@@ -152,6 +154,11 @@ export async function releaseWithdrawal(request: {
         nonce: request.nonce.toString(),
         recipient: request.recipient,
         amountNanomina: request.amountNanomina.toString(),
+        tail: request.tail.map((w) => ({
+          nonce: w.nonce.toString(),
+          recipient: w.recipient,
+          amountNanomina: w.amountNanomina.toString(),
+        })),
       });
     });
   };

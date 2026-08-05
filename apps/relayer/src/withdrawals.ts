@@ -107,12 +107,20 @@ async function release(): Promise<void> {
   // nonces, so releasing out of order would strand everything behind it.
   const pending = await releasableWithdrawals();
 
-  for (const withdrawal of pending) {
+  for (const [index, withdrawal] of pending.entries()) {
     try {
       const hash = await releaseWithdrawal({
         nonce: BigInt(withdrawal.nonce),
         recipient: withdrawal.recipient,
         amountNanomina: BigInt(withdrawal.amount_nanomina),
+        // Everything Flare committed to after this one. The proof over it is
+        // what authorises the release, so the order here is not a convenience:
+        // a tail in the wrong order reaches a different state and is refused.
+        tail: pending.slice(index + 1).map((w) => ({
+          nonce: BigInt(w.nonce),
+          recipient: w.recipient,
+          amountNanomina: BigInt(w.amount_nanomina),
+        })),
       });
       await markWithdrawalReleased(withdrawal.id, hash);
       console.log(`released withdrawal ${withdrawal.nonce} -> ${withdrawal.recipient}`);
