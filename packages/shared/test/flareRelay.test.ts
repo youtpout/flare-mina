@@ -144,14 +144,21 @@ describe('harvesting the validator keys', () => {
     expect(fromBoth.known.length).toBeGreaterThanOrEqual(fromOne.known.length);
   });
 
-  /** A key from a different reward epoch means different indices entirely. */
-  it('ignores calls from another reward epoch', async () => {
-    const foreign = {
+  /**
+   * Coston2 rotates the signer order every reward epoch but keeps the set, so a
+   * key recovered under one epoch is still that voter's key under the next —
+   * only its index moved. Matching by address is what survives the rotation.
+   */
+  it('uses keys recovered under a different epoch', async () => {
+    const shifted = {
       ...calls[0]!,
-      policy: { ...calls[0]!.policy, rewardEpochId: calls[0]!.policy.rewardEpochId + 1 },
+      policy: {
+        ...calls[0]!.policy,
+        rewardEpochId: calls[0]!.policy.rewardEpochId - 1,
+      },
     };
-    const { known } = await harvestPolicyKeys(calls[0]!.policy, [foreign]);
-    expect(known).toHaveLength(0);
+    const { known } = await harvestPolicyKeys(calls[0]!.policy, [shifted]);
+    expect(known.length).toBeGreaterThan(0);
   });
 
   /**

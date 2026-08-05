@@ -332,6 +332,10 @@ IndexedMerkleMap insert ~2.79M. Coston2 block limit is 28M.
   weight 0. The public RPC caps `getLogs` at **30 blocks**.
 - The systems explorer's *validators* page lists node identities, not signing
   policy addresses. Only the latter appear in `Relay` calldata.
+- Across an epoch boundary the signer **set and weights are unchanged** — only
+  the order rotates by one position, so every index shifts. The root therefore
+  changes while nothing expensive does, and recovered keys stay valid: match
+  voters to keys **by address**, never by index or epoch.
 - FDC attests Flare itself (`testFLR` is a valid `EVMTransaction` source), and
   `provideInput: false` + one `logIndex` keeps the leaf small.
 

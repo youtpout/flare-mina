@@ -186,32 +186,33 @@ export function addressFromPublicKey(publicKey: Hex): Hex {
 export type PolicyKey = PolicyVoter & { publicKey: Hex };
 
 /**
- * Collect public keys from relay history. A key is only knowable once its voter
- * signs, and FTSO rounds land every 90s, so a short walk back covers the weight
- * that matters. Each key is kept only if it hashes to the policy's address.
+ * Collect public keys from relay history. Keys are matched to voters by
+ * address, not by epoch: Coston2 rotates the signer order every 6 hours but
+ * keeps the same set, so a key seen under one epoch is valid under the next.
  */
 export async function harvestPolicyKeys(
   policy: SigningPolicy,
   calls: RelayCall[],
 ): Promise<{ known: PolicyKey[]; missing: PolicyVoter[] }> {
-  const keys = new Map<number, Hex>();
+  // Keyed by address, which is what stays fixed across epochs. Indices do not:
+  // discarding other epochs' calls would leave almost no history to work with
+  // in the hours after a rotation, and could drop below the threshold.
+  const byAddress = new Map<string, Hex>();
 
   for (const call of calls) {
-    // Another epoch is another validator set; its indices mean something else.
-    if (call.policy.rewardEpochId !== policy.rewardEpochId) continue;
-
     for (const { index, publicKey } of await recoverSigners(call.message, call.signatures)) {
-      const voter = policy.voters[index];
-      if (voter === undefined) continue;
-      if (addressFromPublicKey(publicKey).toLowerCase() !== voter.address.toLowerCase()) continue;
-      keys.set(index, publicKey);
+      const signer = call.policy.voters[index];
+      if (signer === undefined) continue;
+      // The key is only kept if it hashes to the address its own call claims.
+      if (addressFromPublicKey(publicKey).toLowerCase() !== signer.address.toLowerCase()) continue;
+      byAddress.set(signer.address.toLowerCase(), publicKey);
     }
   }
 
   const known: PolicyKey[] = [];
   const missing: PolicyVoter[] = [];
   for (const voter of policy.voters) {
-    const publicKey = keys.get(voter.index);
+    const publicKey = byAddress.get(voter.address.toLowerCase());
     if (publicKey === undefined) missing.push(voter);
     else known.push({ ...voter, publicKey });
   }
