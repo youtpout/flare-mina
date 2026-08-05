@@ -117,7 +117,7 @@ library MinaSchnorr {
         Signature memory signature,
         uint256[] memory message,
         bool mainnet
-    ) internal view returns (bool) {
+    ) public view returns (bool) {
         if (signature.s >= Pallas.Q || signature.rx >= Pallas.P) revert ScalarOutOfRange();
 
         Pallas.Point memory key = Pallas.pointFromKey(publicKey.x, publicKey.isOdd, publicKey.y);
@@ -148,7 +148,7 @@ library MinaSchnorr {
         Signature memory signature,
         uint256[] memory message,
         bool mainnet
-    ) internal view {
+    ) public view {
         if (!verify(publicKey, signature, message, mainnet)) revert InvalidSignature();
     }
 }

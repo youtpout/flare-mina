@@ -2,13 +2,18 @@
 pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {TransparentUpgradeableProxy} from
+    "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+import {ProxyAdmin} from "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
+import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {MinaPortBridge} from "../src/MinaPortBridge.sol";
 import {FMINA} from "../src/FMINA.sol";
 import {MockSettlementVerifier} from "../src/mocks/MockSettlementVerifier.sol";
 import {IMinaSettlementVerifier, SettlementPublicValues} from
     "../src/interfaces/IMinaSettlementVerifier.sol";
+import {ITransparentUpgradeableProxy} from
+    "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {DeployBridge} from "./helpers/DeployBridge.sol";
 
 /// A later implementation, appending state the way a real upgrade would.
@@ -49,10 +54,17 @@ contract UpgradeTest is Test {
         fmina = bridge.TOKEN();
     }
 
+    /// The ProxyAdmin the proxy deployed for itself, read from its ERC-1967 slot.
+    function _admin() internal view returns (ProxyAdmin) {
+        return ProxyAdmin(
+            address(uint160(uint256(vm.load(address(bridge), ERC1967Utils.ADMIN_SLOT))))
+        );
+    }
+
     function _upgrade() internal returns (MinaPortBridgeV2) {
         MinaPortBridgeV2 next = new MinaPortBridgeV2();
         vm.prank(owner);
-        bridge.upgradeToAndCall(address(next), "");
+        _admin().upgradeAndCall(ITransparentUpgradeableProxy(address(bridge)), address(next), "");
         return MinaPortBridgeV2(address(bridge));
     }
 
@@ -112,7 +124,7 @@ contract UpgradeTest is Test {
         MinaPortBridgeV2 next = new MinaPortBridgeV2();
         vm.prank(stranger);
         vm.expectRevert();
-        bridge.upgradeToAndCall(address(next), "");
+        _admin().upgradeAndCall(ITransparentUpgradeableProxy(address(bridge)), address(next), "");
     }
 
     function test_cannotReinitialiseThroughTheProxy() public {
@@ -120,11 +132,8 @@ contract UpgradeTest is Test {
         bridge.initialize(stranger, verifier, BRIDGE_ID, GENESIS);
     }
 
-    /**
-     * UUPS puts `upgradeToAndCall` in the implementation, so an implementation
-     * anyone can initialise is an implementation anyone can own and brick. The
-     * constructor disables initialisers for exactly this.
-     */
+    /// An implementation anyone can initialise is one anyone can own; the
+    /// constructor disables initialisers for exactly that.
     function test_implementationCannotBeInitialised() public {
         MinaPortBridge implementation = new MinaPortBridge();
         vm.expectRevert(Initializable.InvalidInitialization.selector);

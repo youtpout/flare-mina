@@ -2,7 +2,8 @@
 pragma solidity ^0.8.28;
 
 import {Script, console} from "forge-std/Script.sol";
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {TransparentUpgradeableProxy} from
+    "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {MinaPortBridge} from "../src/MinaPortBridge.sol";
 import {BridgeWrapperFactory} from "../src/BridgeWrapper.sol";
 import {MockSettlementVerifier} from "../src/mocks/MockSettlementVerifier.sol";
@@ -46,12 +47,15 @@ contract DeployBridge is Script {
 
         MockSettlementVerifier verifier = new MockSettlementVerifier();
 
-        // UUPS: the proxy is the permanent address, the implementation is
-        // replaceable. FMINA is deployed by `initialize` and holds the proxy
-        // address as its immutable bridge, so upgrading never orphans holders.
+        // The proxy is the permanent address, the implementation replaceable.
+        // FMINA is deployed by `initialize` and holds the proxy as its immutable
+        // bridge, so upgrading never orphans holders. Transparent rather than
+        // UUPS: the upgrade logic lives in the proxy, and the implementation is
+        // already close to the EIP-170 limit without it.
         MinaPortBridge implementation = new MinaPortBridge();
-        ERC1967Proxy proxy = new ERC1967Proxy(
+        TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(
             address(implementation),
+            owner,
             abi.encodeCall(
                 MinaPortBridge.initialize,
                 (owner, IMinaSettlementVerifier(address(verifier)), bridgeId, bytes32(0))
@@ -67,6 +71,7 @@ contract DeployBridge is Script {
         console.log("  ^ ACCEPTS ANY PROOF - testnet only");
         console.log("MinaPortBridge      :", address(bridge), "(proxy)");
         console.log("  implementation    :", address(implementation));
+        console.log("  ^ upgrades go through the ProxyAdmin the proxy deployed");
         console.log("FMINA               :", address(bridge.TOKEN()));
         console.log("BridgeWrapperFactory:", address(wrappers));
     }

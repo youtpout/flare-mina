@@ -11,8 +11,6 @@ import {PausableUpgradeable} from
 // this import as the migration. The guard keeps its flag in an ERC-7201 slot,
 // so it needs no initialiser and an uninitialised slot reads as "not entered".
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {UUPSUpgradeable} from
-    "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
@@ -44,15 +42,10 @@ import {IMinaSettlementVerifier, SettlementPublicValues} from "./interfaces/IMin
 ///
 /// Collateral invariant: `totalSupply(FMINA) == escrowedNanomina`, and both only
 /// change inside `claimDeposit` (up) and `burnToMina` (down).
-/// UUPS behind ERC-1967, so the bridge address is permanent — `FMINA.BRIDGE` is
-/// immutable and points here, so a stable address is what keeps upgrades from
-/// orphaning holders. `owner` can replace this logic entirely; see the threat model.
-contract MinaPortBridge is
-    Ownable2StepUpgradeable,
-    PausableUpgradeable,
-    ReentrancyGuard,
-    UUPSUpgradeable
-{
+/// Behind a transparent proxy, so the bridge address is permanent — `FMINA.BRIDGE`
+/// is immutable and points here. Transparent rather than UUPS: the upgrade logic
+/// lives in the proxy, and this contract is already near the EIP-170 limit.
+contract MinaPortBridge is Ownable2StepUpgradeable, PausableUpgradeable, ReentrancyGuard {
     using MinaPortEncoding for MinaPortEncoding.Deposit;
 
     // Storage, not `immutable`: an immutable lives in the implementation's
@@ -171,8 +164,7 @@ contract MinaPortBridge is
     // Construction
     // -------------------------------------------------------------------------
 
-    /// @dev UUPS puts `upgradeToAndCall` in the implementation, so an
-    /// implementation anyone can initialise is one anyone can own and brick.
+    /// @dev An implementation anyone can initialise is one anyone can own.
     constructor() {
         _disableInitializers();
     }
@@ -208,9 +200,6 @@ contract MinaPortBridge is
         attestedMintCapNanomina = DEFAULT_ATTESTED_MINT_CAP;
         emit AttestedMintLimitsUpdated(DEFAULT_MAX_ATTESTED_DEPOSIT, DEFAULT_ATTESTED_MINT_CAP);
     }
-
-    /// @dev Only the owner may install a new implementation.
-    function _authorizeUpgrade(address) internal override onlyOwner {}
 
     /// @dev Room to append without shifting anything this version wrote.
     uint256[45] private __gap;

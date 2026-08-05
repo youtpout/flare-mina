@@ -288,7 +288,7 @@ library PoseidonPallas {
 
     /// @notice Hash a field vector with Mina's sponge construction.
     /// @dev Mirrors `mina_hasher`: absorb, then squeeze `state[0]`.
-    function hash(uint256[] memory input) internal pure returns (uint256) {
+    function hash(uint256[] memory input) public pure returns (uint256) {
         bytes memory rc = loadConstants();
         uint256[3] memory state = [uint256(0), 0, 0];
         absorb(state, input, rc);
@@ -308,7 +308,7 @@ library PoseidonPallas {
     /// zero-padded to 32 and read little-endian. Computing it off-chain keeps
     /// the string out of the calldata and the packing out of the gas cost.
     function hashWithPrefix(uint256 prefixField, uint256[] memory input)
-        internal
+        public
         pure
         returns (uint256)
     {

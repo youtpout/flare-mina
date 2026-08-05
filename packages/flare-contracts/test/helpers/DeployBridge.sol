@@ -1,17 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {TransparentUpgradeableProxy} from
+    "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {MinaPortBridge} from "../../src/MinaPortBridge.sol";
 import {IMinaSettlementVerifier} from "../../src/interfaces/IMinaSettlementVerifier.sol";
 
-/// @title DeployBridge
-/// @notice Deploys the bridge the way production does — behind a proxy.
-///
-/// @dev Tests that instantiated the implementation directly would pass while
-/// the deployed system behaved differently: the implementation's own storage is
-/// not the proxy's, `initialize` is disabled on it, and an immutable read there
-/// is not the value the proxy serves. Every suite therefore goes through this.
+/// Deploys the bridge the way production does — behind a transparent proxy.
+/// Instantiating the implementation directly would pass while the deployed
+/// system behaved differently: its storage is not the proxy's.
 library DeployBridge {
     function deploy(
         address owner,
@@ -20,8 +17,11 @@ library DeployBridge {
         bytes32 genesisActionState
     ) internal returns (MinaPortBridge) {
         MinaPortBridge implementation = new MinaPortBridge();
-        ERC1967Proxy proxy = new ERC1967Proxy(
+        // The constructor deploys a ProxyAdmin owned by `owner`; upgrades go
+        // through it, never through the bridge.
+        TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(
             address(implementation),
+            owner,
             abi.encodeCall(
                 MinaPortBridge.initialize, (owner, verifier, bridgeId, genesisActionState)
             )
