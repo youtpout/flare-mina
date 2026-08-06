@@ -14,7 +14,7 @@ import {
   state,
 } from 'o1js';
 import { LockChainProof, LockRecord, applyLock } from './LockChain.js';
-import { SigningPolicyProof } from './SigningPolicyFold.js';
+import { FdcAttestationProof } from './FdcAttestation.js';
 import { FDC_PROTOCOL_ID } from './RelayMessage.js';
 
 /**
@@ -26,7 +26,7 @@ import { FDC_PROTOCOL_ID } from './RelayMessage.js';
  * signed — the same mechanism the MINA rail already uses for withdrawals.
  *
  * ```text
- * publishFlareLockState(state, policyProof)   <- validator signatures
+ * publishFlareLockState(attestation)          <- FDC event, validator-signed
  * authorizeMint(record, tail)                 <- record + continuation to state
  * token.mint(recipient, amount) -> canMint    <- one shot, bound to the record
  * ```
@@ -71,24 +71,32 @@ export class AssetPort extends SmartContract {
   @state(Field) mintAuthorization = State<Field>();
 
   /**
-   * Admin key. Rotates the policy root and co-signs published lock states.
+   * The Flare vault whose events this port accepts, as a 160-bit field.
    *
-   * HACKATHON TRUST ASSUMPTION, and the same one the MINA rail carries: nothing
-   * yet binds a published state to the FDC round root, so this signature stands
-   * in for that check. It cannot mint, choose a recipient or an amount, or skip
-   * a link in the chain.
+   * Pinned so one asset's chain cannot be advanced by an event from another
+   * contract — the attestation proves an event happened, not that it was ours.
+   */
+  @state(Field) vault = State<Field>();
+
+  /**
+   * Admin key. Its only remaining power is rotating the signing-policy root,
+   * which Flare forces every reward epoch. It cannot publish a state, mint,
+   * choose a recipient or an amount, or skip a link: those are all proven.
    */
   @state(PublicKey) admin = State<PublicKey>();
 
   override async deploy(
     args: DeployArgs & {
       admin: PublicKey;
+      /** The Flare vault, as a 160-bit field. */
+      vault: Field;
       signingPolicyRoot?: Field;
       requiredWeight?: UInt64;
     },
   ) {
     await super.deploy(args);
     this.admin.set(args.admin);
+    this.vault.set(args.vault);
     this.signingPolicyRoot.set(args.signingPolicyRoot ?? Field(0));
     this.requiredWeight.set(args.requiredWeight ?? UInt64.zero);
   }
@@ -126,34 +134,43 @@ export class AssetPort extends SmartContract {
   }
 
   /**
-   * Accept a new attested head of the lock chain. Separate from minting because
-   * establishing it costs ECDSA and keccak, identical across a whole batch.
+   * Accept a new head of the lock chain, read out of an attested Flare event.
+   *
+   * Nothing here is asserted by a key. The proof establishes that enough of
+   * Flare's validator set signed an FDC round, that the attestation response
+   * sits under that round's root, and that the state below was read from the
+   * event inside it. The vault address and event signature are pinned so one
+   * asset's chain cannot be advanced by another's event.
+   *
+   * Separate from minting because establishing a head costs ECDSA and keccak,
+   * and is identical across the whole batch it covers.
    */
-  @method async publishFlareLockState(lockState: Field, proof: SigningPolicyProof) {
-    proof.verify();
+  @method async publishFlareLockState(attestation: FdcAttestationProof) {
+    attestation.verify();
+    const attested = attestation.publicOutput;
 
-    proof.publicOutput.policy.assertEquals(
+    attested.policy.assertEquals(
       this.signingPolicyRoot.getAndRequireEquals(),
       'proof is against a different signing policy',
     );
 
     const required = this.requiredWeight.getAndRequireEquals();
-    proof.publicOutput.weight.value.assertGreaterThanOrEqual(
+    attested.weight.value.assertGreaterThanOrEqual(
       required.value,
       'signing weight below the required threshold',
     );
 
-    // The proof now names the round it covers — `SigningPolicyFold` verifies
-    // the relay binding itself, so a digest cannot be lifted from one round and
-    // presented for another. All that is left to check here is that it is an
-    // FDC round, since those are the ones carrying attestation roots.
-    proof.publicOutput.protocolId.value.assertEquals(Field(FDC_PROTOCOL_ID), 'not an FDC round');
+    // FDC rounds are the ones carrying attestation roots.
+    attested.protocolId.value.assertEquals(Field(FDC_PROTOCOL_ID), 'not an FDC round');
 
-    const admin = this.admin.getAndRequireEquals();
-    AccountUpdate.createSigned(admin).body.useFullCommitment = Bool(true);
+    // The event has to come from this asset's vault, and be a lock.
+    attested.emitter.assertEquals(
+      this.vault.getAndRequireEquals(),
+      'the event came from another contract',
+    );
 
     this.flareLockState.getAndRequireEquals();
-    this.flareLockState.set(lockState);
+    this.flareLockState.set(attested.actionState);
   }
 
   /**

@@ -23,10 +23,13 @@ import {
   UInt32,
   UInt64,
 } from 'o1js';
+import { keccak256 } from 'viem';
 import { FungibleToken } from 'mina-fungible-token';
 import { AssetPort, NO_MINT_AUTHORIZED } from '../src/AssetPort.js';
 import { LockChain, LockRecord, applyLock } from '../src/LockChain.js';
 import { Bytes38, RelayMessage } from '../src/RelayMessage.js';
+import { AttestationResponse, FdcAttestation, FdcLeaf } from '../src/FdcAttestation.js';
+import { MerkleInclusion } from '../src/MerkleInclusion.js';
 import {
   Bytes32,
   EcdsaSignature,
@@ -36,6 +39,10 @@ import {
   SigningPolicyFold,
   policyLeaf,
 } from '../src/SigningPolicyFold.js';
+
+/** The vault on Coston2, and the `AssetLocked` signature. */
+const VAULT = Field(BigInt('0xa179E908C3F1156Edda0BD5f1A0B3b3f419f9F90'));
+const TOPIC0 = BigInt('0x078ee1eead8e83dabf8464df5a5e308db068b136607c9f7bef8e86f6fc783add');
 
 it('locks on Flare, mints on Mina', async () => {
   const t = (s: string, ms: number) => console.log(`${s.padEnd(34)} ${(ms / 1000).toFixed(1)}s`);
@@ -49,6 +56,9 @@ it('locks on Flare, mints on Mina', async () => {
   await LockChain.compile();                          t('compile LockChain', Date.now() - m);
   m = Date.now(); await RelayMessage.compile();       t('compile RelayMessage', Date.now() - m);
   m = Date.now(); await SigningPolicyFold.compile();  t('compile SigningPolicyFold', Date.now() - m);
+  m = Date.now(); await MerkleInclusion.compile();    t('compile MerkleInclusion', Date.now() - m);
+  m = Date.now(); await FdcLeaf.compile();            t('compile FdcLeaf', Date.now() - m);
+  m = Date.now(); await FdcAttestation.compile();     t('compile FdcAttestation', Date.now() - m);
   m = Date.now(); await AssetPort.compile();          t('compile AssetPort', Date.now() - m);
   m = Date.now(); await FungibleToken.compile();      t('compile FungibleToken', Date.now() - m);
 
@@ -74,7 +84,7 @@ it('locks on Flare, mints on Mina', async () => {
   m = Date.now();
   let tx = await Mina.transaction(deployer, async () => {
     AccountUpdate.fundNewAccount(deployer);
-    await port.deploy({ admin: deployer, signingPolicyRoot: policyTree.getRoot() });
+    await port.deploy({ admin: deployer, vault: VAULT, signingPolicyRoot: policyTree.getRoot() });
   });
   await tx.prove(); await tx.sign([deployerKey, portKey]).send();
 
@@ -104,10 +114,30 @@ it('locks on Flare, mints on Mina', async () => {
   const l2 = new LockRecord({ claimId: UInt64.from(1n), recipient: user, amount: UInt64.from(250_000n) });
   const s2 = applyLock(s1, l2);
 
-  // A real FDC round envelope: protocol 200, a round id, and a root. The port
-  // checks the signature is over this round rather than over arbitrary bytes.
+  // ---------------------------------------------------------------------
+  // Build the attestation the way Flare would: an event carrying `s2`, hashed
+  // into a leaf, placed in a round tree whose root the validators then sign.
+  // ---------------------------------------------------------------------
+  const response = new Uint8Array(1344);
+  const putWord = (word: number, value: bigint) => {
+    for (let i = 0; i < 32; i++) {
+      response[word * 32 + 31 - i] = Number((value >> BigInt(8 * i)) & 0xffn);
+    }
+  };
+  putWord(28, VAULT.toBigInt());        // emitter
+  putWord(33, TOPIC0);                  // event signature
+  putWord(41, s2.toBigInt());           // newActionState — the last word
+
+  const leafHex = keccak256(`0x${Buffer.from(response).toString('hex')}` as `0x${string}`);
+  // A one-level tree: our leaf and one sibling.
+  const siblingHex = keccak256('0xdeadbeef');
+  const [lo, hi] =
+    leafHex.toLowerCase() < siblingHex.toLowerCase() ? [leafHex, siblingHex] : [siblingHex, leafHex];
+  const rootHex = keccak256(`0x${lo.slice(2)}${hi.slice(2)}` as `0x${string}`);
+
+  // The round message the validators sign carries that root.
   const { proof: relayProof } = await RelayMessage.bind(
-    Bytes38.fromHex('c80015a2b401' + 'ab'.repeat(32)),
+    Bytes38.fromHex('c80015a2b401' + rootHex.slice(2)),
   );
   const msg = Bytes32.from(relayProof.publicOutput.digest.bytes);
 
@@ -122,9 +152,28 @@ it('locks on Flare, mints on Mina', async () => {
   t('prove signing policy (1 ECDSA)', Date.now() - m);
 
   m = Date.now();
-  tx = await Mina.transaction(deployer, async () => { await port.publishFlareLockState(s2, sp); });
+  const { proof: inclusion } = await MerkleInclusion.level(
+    Bytes32.fromHex(leafHex.slice(2)),
+    Bytes32.fromHex(siblingHex.slice(2)),
+  );
+  t('prove merkle inclusion', Date.now() - m);
+
+  m = Date.now();
+  const { proof: leafProof } = await FdcLeaf.read(AttestationResponse.from(response), inclusion);
+  t('prove FDC leaf (10 keccak blocks)', Date.now() - m);
+
+  m = Date.now();
+  const { proof: attestation } = await FdcAttestation.attest(leafProof, sp);
+  t('prove FDC attestation', Date.now() - m);
+
+  m = Date.now();
+  tx = await Mina.transaction(deployer, async () => { await port.publishFlareLockState(attestation); });
   await tx.prove(); await tx.sign([deployerKey]).send();
   t('publishFlareLockState', Date.now() - m);
+
+  // The head the port accepted came out of the attested event, not from an
+  // argument — nothing in this transaction let anyone name it.
+  expect(port.flareLockState.get().toString()).toBe(s2.toString());
 
   // A record Flare never folded has no continuation reaching the attested head,
   // so it cannot be authorised however well-formed it looks.

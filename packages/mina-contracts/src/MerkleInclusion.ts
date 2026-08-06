@@ -1,9 +1,14 @@
-import { Bool, Bytes, Keccak, Provable, SelfProof, Struct, UInt32, ZkProgram } from 'o1js';
+import { Bytes, Field, Keccak, Provable, SelfProof, Struct, UInt32, ZkProgram } from 'o1js';
 
 /**
  * Proves a leaf is in a keccak Merkle tree (an FDC voting round), by merging
  * one-level segments. One keccak is 14,733 rows against Poseidon's 13, so a
  * level per proof is all that fits; merges make them independent and parallel.
+ *
+ * Pairs are **sorted**, which is what Flare's trees do and what OpenZeppelin's
+ * verifier expects. An earlier version carried a left/right flag instead and
+ * would have climbed to a different root from the same path — it passed its own
+ * tests, because they only ever checked it against its own convention.
  */
 
 export class Bytes32 extends Bytes(32) {}
@@ -19,18 +24,38 @@ export class PathSegment extends Struct({
   height: UInt32,
 }) {}
 
-/** The other child at one level, and which side it sits on. */
-export class Sibling extends Struct({
-  value: Bytes32,
-  /** True when the sibling is the left child, i.e. `bottom` is the right one. */
-  isLeft: Bool,
-}) {}
-
 /** Byte by byte: `Bytes` has no equality helper, and comparing structs compares witnesses. */
-function assertSameBytes(a: Bytes32, b: Bytes32, message: string): void {
+export function assertSameBytes(a: Bytes32, b: Bytes32, message: string): void {
   for (let i = 0; i < 32; i++) {
     a.bytes[i]!.value.assertEquals(b.bytes[i]!.value, message);
   }
+}
+
+/**
+ * Big-endian bytes as one field element.
+ *
+ * Sixteen bytes at a time, so the running product cannot approach the modulus:
+ * a full 32-byte value would be 256 bits and wrap silently.
+ */
+function halfToField(bytes: { value: Field }[]): Field {
+  return bytes.reduce((acc, b) => acc.mul(256).add(b.value), Field(0));
+}
+
+/**
+ * True when `a` sorts before `b`, comparing as 256-bit big-endian numbers.
+ *
+ * Done in halves because a whole 32-byte value does not fit in the field. The
+ * high halves decide unless they are equal, in which case the low halves do.
+ */
+function sortsBefore(a: Bytes32, b: Bytes32) {
+  const aHi = halfToField(a.bytes.slice(0, 16));
+  const bHi = halfToField(b.bytes.slice(0, 16));
+  const aLo = halfToField(a.bytes.slice(16, 32));
+  const bLo = halfToField(b.bytes.slice(16, 32));
+
+  return aHi
+    .lessThan(bHi)
+    .or(aHi.equals(bHi).and(aLo.lessThan(bLo)));
 }
 
 export const MerkleInclusion = ZkProgram({
@@ -40,11 +65,14 @@ export const MerkleInclusion = ZkProgram({
   methods: {
     /** One level. Independent of every other, so a whole path proves at once. */
     level: {
-      privateInputs: [Bytes32, Sibling],
-      async method(node: Bytes32, sibling: Sibling) {
-        // Order is part of the commitment: swapping children changes the root.
-        const left = Provable.if(sibling.isLeft, Bytes32, sibling.value, node);
-        const right = Provable.if(sibling.isLeft, Bytes32, node, sibling.value);
+      privateInputs: [Bytes32, Bytes32],
+      async method(node: Bytes32, sibling: Bytes32) {
+        // Sorted, so the path carries no side information — which is also why a
+        // sibling cannot be replayed on the wrong side to reach another root.
+        const nodeFirst = sortsBefore(node, sibling);
+        const left = Provable.if(nodeFirst, Bytes32, node, sibling);
+        const right = Provable.if(nodeFirst, Bytes32, sibling, node);
+
         const parent = Bytes32.from(
           Keccak.ethereum(Bytes64.from([...left.bytes, ...right.bytes])).bytes,
         );

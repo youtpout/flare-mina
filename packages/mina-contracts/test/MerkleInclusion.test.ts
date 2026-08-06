@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { Bool } from 'o1js';
+import { readFileSync } from 'node:fs';
 import { concatHex, keccak256, type Hex } from 'viem';
-import { Bytes32, MerkleInclusion, Sibling } from '../src/MerkleInclusion.js';
+import { Bytes32, MerkleInclusion } from '../src/MerkleInclusion.js';
 
 /**
  * Inclusion in a Flare voting-round tree.
@@ -23,6 +23,14 @@ function shash(a: Hex, b: Hex): Hex {
     : keccak256(concatHex([b, a]));
 }
 
+/** A real attested response, its path, and the round root the Relay stores. */
+const fixture = JSON.parse(
+  readFileSync(
+    new URL('../../shared/test/fixtures/fdc-evm-transaction.json', import.meta.url),
+    'utf8',
+  ),
+) as { response_hex: Hex; proof: Hex[]; relayRoot: Hex };
+
 const toBytes32 = (h: Hex) => Bytes32.fromHex(h.slice(2));
 const toHex = (b: Bytes32): Hex =>
   `0x${b.bytes.map((x) => x.toNumber().toString(16).padStart(2, '0')).join('')}`;
@@ -35,12 +43,17 @@ const nodeA = shash(leaves[0]!, leaves[1]!);
 const nodeB = shash(leaves[2]!, leaves[3]!);
 const root = shash(nodeA, nodeB);
 
-/** A sibling, with the side bit Flare's ordering implies. */
-function siblingOf(node: Hex, other: Hex): Sibling {
-  return new Sibling({
-    value: toBytes32(other),
-    isLeft: Bool(other.toLowerCase() < node.toLowerCase()),
-  });
+/**
+ * A sibling is now just a value.
+ *
+ * It used to carry a side bit that the caller computed. The circuit produced
+ * the right root whenever that bit was right — and every test supplied it
+ * right — so nothing ever failed. But soundness rested on an untrusted input:
+ * a caller passing the wrong bit climbed to a different root. The circuit sorts
+ * for itself now, so there is nothing left to get wrong.
+ */
+function siblingOf(_node: Hex, other: Hex): Bytes32 {
+  return toBytes32(other);
 }
 
 beforeAll(async () => {
@@ -92,14 +105,41 @@ describe('climbing a Flare round tree', () => {
     await expect(MerkleInclusion.merge(lower, elsewhere)).rejects.toThrow(/do not meet/);
   }, 600_000);
 
-  /** Order is part of the commitment: the wrong side bit reaches a different node. */
-  it('reaches a different node when the sibling side is flipped', async () => {
-    const flipped = siblingOf(leaves[0]!, leaves[1]!);
-    const { proof } = await MerkleInclusion.level(
-      toBytes32(leaves[0]!),
-      new Sibling({ value: flipped.value, isLeft: flipped.isLeft.not() }),
-    );
+  /**
+   * Sorting is the circuit's job now, so the same pair climbs to the same
+   * parent whichever way round it is handed in. That is what makes a path
+   * carry no side information — and what makes it match Flare's trees.
+   */
+  it('reaches the same parent whichever side the sibling is given', async () => {
+    const a = await MerkleInclusion.level(toBytes32(leaves[0]!), toBytes32(leaves[1]!));
+    const b = await MerkleInclusion.level(toBytes32(leaves[1]!), toBytes32(leaves[0]!));
 
-    expect(toHex(proof.publicOutput.top)).not.toBe(nodeA);
-  }, 600_000);
+    expect(toHex(a.proof.publicOutput.top)).toBe(nodeA);
+    expect(toHex(b.proof.publicOutput.top)).toBe(nodeA);
+  }, 900_000);
+
+  /**
+   * The one that matters: a real FDC round.
+   *
+   * The leaf, the siblings and the root all come from Coston2 — the response
+   * Flare's attestation providers agreed on for a real `AssetLocked`, and the
+   * root the Relay contract stores for that round. So this checks the circuit
+   * against a value the validator set signed, not against this file's own idea
+   * of how a tree works.
+   */
+  it('climbs a real FDC round to the root the validators signed', async () => {
+    const leaf = keccak256(fixture.response_hex);
+
+    let segment = (await MerkleInclusion.level(toBytes32(leaf), toBytes32(fixture.proof[0]!)))
+      .proof;
+    for (const sibling of fixture.proof.slice(1)) {
+      const next = (
+        await MerkleInclusion.level(segment.publicOutput.top, toBytes32(sibling))
+      ).proof;
+      segment = (await MerkleInclusion.merge(segment, next)).proof;
+    }
+
+    expect(toHex(segment.publicOutput.top).toLowerCase()).toBe(fixture.relayRoot.toLowerCase());
+    expect(Number(segment.publicOutput.height.toBigint())).toBe(fixture.proof.length);
+  }, 1_800_000);
 });

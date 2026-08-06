@@ -80,6 +80,10 @@ async function main() {
   // The policy root and the weight must match whatever the relayer publishes,
   // so they come from the same environment the MINA rail already uses.
   const signingPolicyRoot = Field(process.env.MINA_SIGNING_POLICY_ROOT ?? '0');
+
+  // The vault whose events this port accepts. Pinned in state, so an event from
+  // any other contract cannot advance this asset's chain.
+  const vault = Field(BigInt(required('FLARE_ASSET_VAULT_ADDRESS')));
   const requiredWeight = UInt64.from(BigInt(process.env.MINA_REQUIRED_WEIGHT ?? '0'));
 
   const tokenKey = PrivateKey.random();
@@ -88,6 +92,7 @@ async function main() {
   console.log(`deploying wrapped ${symbol} (${decimals} decimals)`);
   console.log('deployer       :', deployer.toBase58());
   console.log('admin          :', admin.toBase58());
+  console.log('vault          :', required('FLARE_ASSET_VAULT_ADDRESS'));
   console.log('policy root    :', signingPolicyRoot.toString());
   console.log('requiredWeight :', requiredWeight.toString());
   console.log('token          :', tokenKey.toPublicKey().toBase58());
@@ -118,7 +123,7 @@ async function main() {
   console.log('building…');
   const tx = await Mina.transaction({ sender: deployer, fee: FEE }, async () => {
     AccountUpdate.fundNewAccount(deployer, 3);
-    await port.deploy({ admin, signingPolicyRoot, requiredWeight });
+    await port.deploy({ admin, vault, signingPolicyRoot, requiredWeight });
     await token.deploy({
       symbol,
       src: 'https://github.com/youtpout/flare-mina',
