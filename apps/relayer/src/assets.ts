@@ -1,7 +1,6 @@
 import { createPublicClient, http, parseAbi, parseEventLogs } from 'viem';
 import { decodeMinaRecipient, formatMinaAddress } from '@minaport/shared';
 import {
-  markLockFailed,
   markLockMinted,
   markLockMinting,
   markLocksPublished,
@@ -108,12 +107,29 @@ async function portState(port: string): Promise<{ accepted: bigint; processed: b
   }
 }
 
+/**
+ * Where the last scan reached, so a tick costs one window rather than the whole
+ * lookback. The public RPC caps `getLogs` at 30 blocks, so 3000 blocks is 100
+ * requests — every 20 seconds that is rate-limited within a minute, which is
+ * exactly how this first failed.
+ */
+let scannedTo: bigint | undefined;
+
 /** Scan for `AssetLocked` and record what has not been seen. */
 async function watch(): Promise<void> {
   if (VAULT === undefined) return;
 
   const head = await client.getBlockNumber();
-  const from = head > LOOKBACK ? head - LOOKBACK : 0n;
+  // Re-scan a little behind the watermark: recording is idempotent, and a
+  // reorg or a missed block costs a mint nobody can retry by hand.
+  const from =
+    scannedTo === undefined
+      ? head > LOOKBACK
+        ? head - LOOKBACK
+        : 0n
+      : scannedTo > CHUNK
+        ? scannedTo - CHUNK
+        : 0n;
 
   for (let start = from; start <= head; start += CHUNK) {
     const end = start + CHUNK - 1n > head ? head : start + CHUNK - 1n;
@@ -130,8 +146,18 @@ async function watch(): Promise<void> {
         newLockState: newActionState,
       });
     }
+    scannedTo = end;
   }
 }
+
+/**
+ * Heads already sent and awaiting inclusion, per port.
+ *
+ * Devnet takes minutes, and the port still shows the old head for all of them.
+ * Without this the next tick publishes the same head again, and the two fight
+ * over the fee payer's nonce.
+ */
+const publishInFlight = new Map<string, bigint>();
 
 /** Carry each token's chain head to its port, when the port is behind. */
 async function publish(): Promise<void> {
@@ -154,17 +180,25 @@ async function publish(): Promise<void> {
 
     const state = await portState(asset.port);
     if (state === null || state.accepted === onFlare) continue;
+    if (publishInFlight.get(asset.port) === onFlare) continue;
 
     inputs ??= await policyProofInputs();
     if (inputs === null) return;
 
-    const hash = await publishLockState({
-      port: asset.port,
-      lockState: onFlare,
-      calls: inputs.calls,
-      keys: inputs.keys,
-    });
-    console.log(`published ${asset.symbol} lock head ${onFlare} -> ${hash}`);
+    publishInFlight.set(asset.port, onFlare);
+    try {
+      const hash = await publishLockState({
+        port: asset.port,
+        lockState: onFlare,
+        calls: inputs.calls,
+        keys: inputs.keys,
+      });
+      console.log(`published ${asset.symbol} lock head ${onFlare} -> ${hash}`);
+    } catch (e) {
+      // Retry on the next tick: leaving it marked would strand the asset.
+      publishInFlight.delete(asset.port);
+      throw e;
+    }
   }
 }
 
@@ -203,11 +237,11 @@ async function mint(): Promise<void> {
         console.log(`minted ${asset.symbol} claim ${row.claim_id} -> ${row.recipient}`);
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
-        // Left mintable rather than failed: the usual cause is the previous
-        // mint not yet included, which resolves on its own. Only the log says
-        // so, so a genuinely broken claim is visible there.
+        // Left in 'minting' rather than marked failed, and 'minting' is still
+        // picked up by `mintableLocks`: the usual cause is the previous mint
+        // not yet included, which resolves on its own. Marking it failed would
+        // strand the user's tokens in the vault with nothing retrying.
         console.warn(`${asset.symbol} claim ${row.claim_id} not minted: ${reason}`);
-        await markLockFailed(row.id, reason).catch(() => undefined);
         return;
       }
     }

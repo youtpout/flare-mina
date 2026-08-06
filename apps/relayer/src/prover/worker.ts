@@ -204,7 +204,9 @@ const { MinaPortBridge, WithdrawalRecord, flareRecipientField } = await import(
 const { LockChain, LockRecord, applyLock } = await import(
   '@minaport/mina-contracts/dist/src/LockChain.js'
 );
-const { AssetPort } = await import('@minaport/mina-contracts/dist/src/AssetPort.js');
+const { AssetPort, mintCommitment, NO_MINT_AUTHORIZED } = await import(
+  '@minaport/mina-contracts/dist/src/AssetPort.js'
+);
 const { FungibleToken } = await import('mina-fungible-token');
 
 // The token resolves its admin through this, and every wrapped asset in this
@@ -583,24 +585,35 @@ async function handleMint(request: MintRequest) {
     amount,
   });
 
-  const processed = predictedLockCursor.get(request.port) ?? assetPort.processedLockState.get();
-  const next = applyLock(processed as never, record);
-  const tail = await proveLockTail(next, request.tail);
+  // Resume rather than restart. `authorizeMint` and the mint are two
+  // transactions, so a failure between them leaves the claim armed and its
+  // cursor already advanced — re-authorising would then fail forever on a
+  // record the chain has moved past, stranding the user's tokens in the vault.
+  const alreadyArmed = assetPort.mintAuthorization
+    .get()
+    .equals(mintCommitment(recipient, amount))
+    .toBoolean();
 
-  const authorize = await Mina.transaction(
-    { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
-    async () => {
-      await assetPort.authorizeMint(record, tail);
-    },
-  );
-  await authorize.prove();
-  const armed = await authorize.sign([feePayer]).send();
-  predictedLockCursor.set(request.port, next);
+  if (!alreadyArmed) {
+    const processed = predictedLockCursor.get(request.port) ?? assetPort.processedLockState.get();
+    const next = applyLock(processed as never, record);
+    const tail = await proveLockTail(next, request.tail);
 
-  // Waited on: `canMint` reads `mintAuthorization` as a precondition, and an
-  // account still showing the old value would build a mint that cannot apply.
-  await armed.wait();
-  await fetchAccount({ publicKey: assetPort.address });
+    const authorize = await Mina.transaction(
+      { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
+      async () => {
+        await assetPort.authorizeMint(record, tail);
+      },
+    );
+    await authorize.prove();
+    const armed = await authorize.sign([feePayer]).send();
+    predictedLockCursor.set(request.port, next);
+
+    // Waited on: `canMint` reads `mintAuthorization` as a precondition, and an
+    // account still showing the old value would build a mint that cannot apply.
+    await armed.wait();
+    await fetchAccount({ publicKey: assetPort.address });
+  }
 
   // The recipient's token account may not exist. Funding one that already
   // exists is refused, so ask the chain rather than guessing.

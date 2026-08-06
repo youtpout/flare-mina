@@ -276,6 +276,9 @@ nothing to trust.
 | ↳ implementation | `0x261B9C6BA506562C14f9e592166934F25972B081` |
 | `FMINA` | `0x4aFce36d468136eD9d880E28C99373F0C3d3f046` |
 | `BridgeWrapperFactory` | `0xE4BB8D56CdF6C44Cc8878A636f77C352768f1b8b` |
+| `AssetVault` (proxy) | `0xa179E908C3F1156Edda0BD5f1A0B3b3f419f9F90` |
+| ↳ implementation | `0x6448436009439d220Bfc20ADd0353eAB3C4878De` |
+| `bWC2FLR` wrapper | `0x6C790956D728ed82A75d2ec8D5c37F2e2F36b978` |
 | `MockSettlementVerifier` | `0x6960d1119FeC5e7eA18C1CA64f7E614B61ea4506` ⚠️ |
 
 The bridge sits behind a **transparent proxy**: integrate against the proxy
@@ -309,6 +312,22 @@ than from documentation:
 | Contract | Address |
 |----------|---------|
 | Bridge escrow zkApp | [`B62qpRkbjE5wH6nFmZnVUN7yrjfAhpJPP2qXxn6z7KQsL6RojmkaDr6`](https://minascan.io/devnet/account/B62qpRkbjE5wH6nFmZnVUN7yrjfAhpJPP2qXxn6z7KQsL6RojmkaDr6) |
+
+Bridged Flare assets, each a `FungibleToken` whose admin is an `AssetPort`:
+
+| Asset | Decimals | Token | Port |
+|-------|----------|-------|------|
+| bFXRP | 6 | `B62qnmNChAeU6SpLDdze7FvVjoT4LsWCcHntiqmFx1aBvrd52mP3XVN` | `B62qqvnfG24NDLd3Byi6et85MPztrrCbTRKCN8vsoMP19konHEPvZAM` |
+| bUSDT | 6 | `B62qjhVgqAbso6g8wsLNosuUMTyySicoqtgEbGGPYqWJXDCdQEH6Bg3` | `B62qrQ8v16mWqmt5sY8MEDdeLyjPqU1JE2Cg6qcvpxUuMhomZxscMfY` |
+| bC2FLR | 9 | `B62qiVguTBzDp5vaHyTatzaQ2zTyhfU22tTi3VQ9MKfcnbnePukdQHQ` | `B62qk3V13bN1DfkGPRYj8zAuzuCxGitxfHwTuwAswZ4wA3GiEBd5nrc` |
+
+Decimals are never converted: `100000` base units is `0.1 USDT` on both chains,
+so the backing invariant is an integer comparison. FXRP and USD₮0 are 6 on Flare
+and stay 6 here. C2FLR is the exception — at 18 decimals a `UInt64` caps out at
+**18 whole tokens**, so `lockNative` wraps it through `WNat` and down to the
+9-decimal `bWC2FLR` before it crosses, and `releaseNative` unwinds both on the
+way back. A user never handles either wrapper.
+
 
 Deployment parameters, which the return path depends on:
 
