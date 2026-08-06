@@ -81,9 +81,14 @@ CREATE TABLE IF NOT EXISTS withdrawals (
   flare_tx_hash     TEXT        NOT NULL,
   mina_tx_hash      TEXT,
 
-  status            TEXT        NOT NULL DEFAULT 'pending'
-                    CHECK (status IN ('pending','released','failed')),
+  status            TEXT        NOT NULL DEFAULT 'seen'
+                    CHECK (status IN ('seen','published','releasing','released','failed')),
   reason            TEXT,
+
+  -- The chain state this burn produced, from its own event. A withdrawal is
+  -- releasable once Mina has accepted a state at or past this one, which is
+  -- what separates "waiting for the state" from "waiting for a block".
+  new_action_state  NUMERIC(78),
 
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -114,3 +119,13 @@ CREATE TABLE IF NOT EXISTS validator_keys (
   first_seen  TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Withdrawal statuses used to be pending/released/failed, which collapsed three
+-- different waits into one word: waiting for the state to be published, waiting
+-- for the release proof, waiting for Mina to include it. Idempotent.
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS new_action_state NUMERIC(78);
+ALTER TABLE withdrawals DROP CONSTRAINT IF EXISTS withdrawals_status_check;
+UPDATE withdrawals SET status = 'seen' WHERE status = 'pending';
+ALTER TABLE withdrawals ADD CONSTRAINT withdrawals_status_check
+  CHECK (status IN ('seen','published','releasing','released','failed'));
+ALTER TABLE withdrawals ALTER COLUMN status SET DEFAULT 'seen';

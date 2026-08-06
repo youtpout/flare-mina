@@ -36,6 +36,27 @@ type Deposit = {
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8787';
 
+/**
+ * What each stage is waiting on.
+ *
+ * "pending" used to cover three different waits — the state not yet published,
+ * the release proof not yet built, the Mina block not yet mined — so a user
+ * watching a stuck withdrawal had no way to tell which.
+ */
+const WITHDRAWAL_STAGE: Record<string, { tag: string; detail: string }> = {
+  seen: {
+    tag: 'waiting for FDC',
+    detail: 'the burn is on Flare; its chain state reaches Mina at the next publication',
+  },
+  published: {
+    tag: 'proving',
+    detail: 'Mina accepted a state covering this burn — building the release proof',
+  },
+  releasing: { tag: 'releasing', detail: 'release sent, waiting for a Mina block' },
+  released: { tag: 'released', detail: 'MINA delivered to your wallet' },
+  failed: { tag: 'failed', detail: 'the release did not go through' },
+};
+
 const LABEL: Record<DepositStatus, string> = {
   // The row is written before the proof exists, so the relayer can pick a
   // deposit back up if it restarts mid-flight. This label therefore covers two
@@ -498,9 +519,19 @@ export function Bridge({ session }: { session: Session }) {
         {withdrawals !== null &&
           withdrawals.map((w) => (
             <div className="row" key={w.nonce}>
-              <span className="mono small">{Number(w.amountNanomina) / 1e9} MINA</span>
-              <span className={`tag ${w.status === 'released' ? 'ok' : 'warn'}`}>
-                {w.status === 'released' ? 'released' : 'releasing…'}
+              <span>
+                <span className="mono small">{Number(w.amountNanomina) / 1e9} MINA</span>
+                <span className="muted small">
+                  {' · '}
+                  {WITHDRAWAL_STAGE[w.status]?.detail ?? w.status}
+                </span>
+              </span>
+              <span
+                className={`tag ${
+                  w.status === 'released' ? 'ok' : w.status === 'failed' ? 'warn' : ''
+                }`}
+              >
+                {WITHDRAWAL_STAGE[w.status]?.tag ?? w.status}
               </span>
             </div>
           ))}

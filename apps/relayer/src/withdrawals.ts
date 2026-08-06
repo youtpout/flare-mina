@@ -1,6 +1,12 @@
 import { createPublicClient, http, parseAbi, parseEventLogs } from 'viem';
 import { decodeMinaRecipient, formatMinaAddress } from '@minaport/shared';
-import { markWithdrawalReleased, recordWithdrawal, releasableWithdrawals } from './db/index.js';
+import {
+  markWithdrawalReleased,
+  markWithdrawalReleasing,
+  markWithdrawalsPublished,
+  recordWithdrawal,
+  releasableWithdrawals,
+} from './db/index.js';
 import { releaseWithdrawal } from './prover/index.js';
 
 /**
@@ -68,6 +74,27 @@ const bridgeAbi = parseAbi([
 
 const client = createPublicClient({ chain: COSTON2, transport: http(RPC) });
 
+const MINA_GRAPHQL =
+  process.env.MINA_DEVNET_GRAPHQL ?? 'https://api.minascan.io/node/devnet/v1/graphql';
+const ESCROW = process.env.MINA_BRIDGE_ACCOUNT;
+
+/** `zkappState[3]` is `flareActionState` — see the field order in MinaPortBridge.ts. */
+async function acceptedActionState(): Promise<bigint | null> {
+  if (ESCROW === undefined) return null;
+  try {
+    const res = await fetch(MINA_GRAPHQL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: `{ account(publicKey: "${ESCROW}") { zkappState } }` }),
+    });
+    const body = (await res.json()) as { data?: { account?: { zkappState?: string[] } } };
+    const state = body.data?.account?.zkappState?.[3];
+    return state === undefined ? null : BigInt(state);
+  } catch {
+    return null;
+  }
+}
+
 /** Last block scanned, so a restart does not re-read the whole chain. */
 let cursor: bigint | undefined;
 
@@ -89,8 +116,15 @@ async function scan(): Promise<void> {
   const logs = parseEventLogs({ abi: bridgeAbi, eventName: 'WithdrawToMina', logs: raw });
 
   for (const log of logs) {
-    const { nonce, minaRecipient, amount } = log.args;
-    if (nonce === undefined || minaRecipient === undefined || amount === undefined) continue;
+    const { nonce, minaRecipient, amount, newActionState } = log.args;
+    if (
+      nonce === undefined ||
+      minaRecipient === undefined ||
+      amount === undefined ||
+      newActionState === undefined
+    ) {
+      continue;
+    }
 
     // Recording is idempotent on the nonce, which the contract makes unique, so
     // an overlapping scan window costs nothing.
@@ -99,10 +133,25 @@ async function scan(): Promise<void> {
       recipient: formatMinaAddress(decodeMinaRecipient(minaRecipient)),
       amountNanomina: amount,
       flareTxHash: log.transactionHash,
+      newActionState,
     });
   }
 
   cursor = head + 1n;
+}
+
+/**
+ * Promote burns Mina has accepted a covering state for.
+ *
+ * Reading it here rather than trusting the publisher's own report: what matters
+ * is what the escrow accepted, not what was sent, and the two differ for the
+ * minutes an inclusion takes.
+ */
+async function refreshCoverage(): Promise<void> {
+  const accepted = await acceptedActionState();
+  if (accepted === null || accepted === 0n) return;
+  const promoted = await markWithdrawalsPublished(accepted);
+  if (promoted > 0) console.log(`${promoted} withdrawal(s) now covered by an accepted state`);
 }
 
 async function release(): Promise<void> {
@@ -112,6 +161,7 @@ async function release(): Promise<void> {
 
   for (const [index, withdrawal] of pending.entries()) {
     try {
+      await markWithdrawalReleasing(withdrawal.id);
       const hash = await releaseWithdrawal({
         nonce: BigInt(withdrawal.nonce),
         recipient: withdrawal.recipient,
@@ -146,6 +196,7 @@ export function startWithdrawals(): { stop(): void } {
     while (!stopped) {
       try {
         await scan();
+        await refreshCoverage();
         await release();
       } catch (e) {
         console.error('withdrawal tick failed:', e instanceof Error ? e.message : e);

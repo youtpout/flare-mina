@@ -167,26 +167,63 @@ export async function recordWithdrawal(input: {
   recipient: string;
   amountNanomina: bigint;
   flareTxHash: string;
+  newActionState: bigint;
 }): Promise<void> {
   await pool.query(
-    `INSERT INTO withdrawals (nonce, recipient, amount_nanomina, flare_tx_hash)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (nonce) DO NOTHING`,
+    `INSERT INTO withdrawals (nonce, recipient, amount_nanomina, flare_tx_hash, new_action_state)
+     VALUES ($1, $2, $3, $4, $5)
+     -- Backfill rather than DO NOTHING: rows recorded before this column
+     -- existed would otherwise never gain a state, and so never be releasable.
+     ON CONFLICT (nonce) DO UPDATE SET new_action_state = EXCLUDED.new_action_state
+       WHERE withdrawals.new_action_state IS NULL`,
     [
       input.nonce.toString(),
       input.recipient,
       input.amountNanomina.toString(),
       input.flareTxHash,
+      input.newActionState.toString(),
     ],
   );
 }
 
 /** Burns awaiting release, oldest nonce first — the order the zkApp demands. */
+/** Only what Mina has already accepted a covering state for. */
 export async function releasableWithdrawals(): Promise<WithdrawalRow[]> {
   const { rows } = await pool.query<WithdrawalRow>(
-    `SELECT * FROM withdrawals WHERE status = 'pending' ORDER BY nonce ASC LIMIT 20`,
+    `SELECT * FROM withdrawals WHERE status IN ('published','releasing')
+      ORDER BY nonce ASC LIMIT 20`,
   );
   return rows;
+}
+
+/**
+ * Mark every withdrawal covered by an accepted chain state.
+ *
+ * The state is a hash, so it cannot be compared for order — but the row whose
+ * own `new_action_state` equals it is the last one it covers, and nonces are
+ * monotonic, so everything below is covered too.
+ */
+export async function markWithdrawalsPublished(acceptedState: bigint): Promise<number> {
+  const { rows } = await pool.query<{ nonce: string }>(
+    `SELECT nonce FROM withdrawals WHERE new_action_state = $1`,
+    [acceptedState.toString()],
+  );
+  const upTo = rows[0]?.nonce;
+  if (upTo === undefined) return 0;
+
+  const { rowCount } = await pool.query(
+    `UPDATE withdrawals SET status = 'published', updated_at = now()
+      WHERE status = 'seen' AND nonce <= $1`,
+    [upTo],
+  );
+  return rowCount ?? 0;
+}
+
+export async function markWithdrawalReleasing(id: string): Promise<void> {
+  await pool.query(
+    `UPDATE withdrawals SET status = 'releasing', updated_at = now() WHERE id = $1`,
+    [id],
+  );
 }
 
 export async function markWithdrawalReleased(id: string, minaTxHash: string): Promise<void> {
