@@ -10,7 +10,7 @@ import {
 } from 'o1js';
 
 /**
- * Minimal reproduction of the one thing blocking the trustless return path.
+ * What it costs to hash an FDC attestation response inside a proof.
  *
  * To finish the path, Mina has to hash the FDC attestation response and prove
  * the resulting leaf sits under the round's Merkle root. Everything else is
@@ -19,32 +19,26 @@ import {
  * stores, and `SigningPolicyFold` already proves the validator set signed that
  * round. What is missing is hashing 1344 bytes *inside a proof*.
  *
- * # What this measures
+ * # The numbers
  *
  * 1344 bytes is 10 keccak blocks of 136, and o1js charges ~14,940 rows a block:
  *
- *     hashLeaf -> 149399 rows
+ *     hashLeaf   149,399 rows
+ *     compile     36.8 s
+ *     prove       34.2 s
  *
- * That is past the 65,536 of a single chunk. `numChunks: 3` should cover it,
- * and then Pickles refuses on the wrap domain instead:
+ * That is well past the 65,536 rows of a single chunk, so the circuit has to be
+ * split. **`numChunks` and `overrideWrapDomain` belong on the `ZkProgram`
+ * declaration, not on `compile()`** — passing them to `compile()` type-errors,
+ * and running the same call untyped silently ignores them, which reads exactly
+ * like the flag having no effect. That cost an afternoon.
  *
- *     This circuit was compiled for proofs using the wrap domain of size 13,
- *     but the actual wrap domain size for the circuit has size 14.
- *     You should pass the ~override_wrap_domain argument …
+ * `numChunks: 3` compiles and then fails to prove with `Expected 4 <= 3`;
+ * `numChunks: 4, overrideWrapDomain: 2` compiles *and* proves, and is also
+ * faster to compile than 3. The digest it produces matches viem's `keccak256`
+ * byte for byte.
  *
- * `overrideWrapDomain` is exactly that argument, and it accepts 0 | 1 | 2 — but
- * all three produce the identical message, so it is not reaching the chunked
- * path. That is the wall.
- *
- * # The way around, if nobody finds a flag
- *
- * The sponge is sequential, so it cannot be merged — but it can be *chained*.
- * o1js keeps `permutation` and `absorb` internal (only `Keccak` is exported),
- * yet every primitive they need is public in `Gadgets`: `rotate64`, `xor`,
- * `and`, `not`. So the permutation can be vendored (~150 lines, MIT) and one
- * 136-byte block absorbed per proof, carrying the 25-lane state through the
- * public output. Ten proofs of ~15,000 rows each, which is a size this project
- * already compiles happily — `MerkleInclusion.level` is 14,733.
+ * So no vendored sponge is needed: one method hashes the whole response.
  *
  * Run it with:
  *   pnpm --filter @minaport/mina-contracts exec tsx scripts/keccakProbe.ts
@@ -59,6 +53,10 @@ class Digest extends Struct({ firstByte: Field }) {}
 const Probe = ZkProgram({
   name: 'keccak-probe',
   publicOutput: Digest,
+
+  // On the declaration. `compile()` does not accept these.
+  numChunks: 4,
+  overrideWrapDomain: 2,
 
   methods: {
     hashLeaf: {
@@ -77,32 +75,22 @@ async function main() {
   setBackend('native');
   await initializeBindings();
 
-  const rows = (await Probe.analyzeMethods()).hashLeaf.rows;
-  console.log(`rows            : ${rows}`);
-  console.log(`blocks          : ${Math.ceil(RESPONSE_BYTES / 136)} of 136 bytes`);
-  console.log(`per block       : ~${Math.round(rows / Math.ceil(RESPONSE_BYTES / 136))}`);
-  console.log(`single-chunk max: 65536\n`);
+  const rows = (await Probe.analyzeMethods()).hashLeaf!.rows;
+  const blocks = Math.ceil(RESPONSE_BYTES / 136);
+  console.log(`rows      : ${rows}`);
+  console.log(`blocks    : ${blocks} of 136 bytes (~${Math.round(rows / blocks)} each)`);
+  console.log(`chunk max : 65536\n`);
 
-  for (const numChunks of [3, 4, 5, 8]) {
-    for (const overrideWrapDomain of [0, 1, 2] as const) {
-      const label = `chunks=${numChunks} domain=${overrideWrapDomain}`;
-      try {
-        const started = Date.now();
-        await Probe.compile({ numChunks, overrideWrapDomain, cache: Cache.None });
-        console.log(`OK   ${label}  compiled in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+  let t = Date.now();
+  await Probe.compile({ cache: Cache.None });
+  console.log(`compiled in ${((Date.now() - t) / 1000).toFixed(1)}s`);
 
-        const t = Date.now();
-        const { proof } = await Probe.hashLeaf(Response.from(new Uint8Array(RESPONSE_BYTES).fill(7)));
-        console.log(`     proved in ${((Date.now() - t) / 1000).toFixed(1)}s`);
-        console.log(`     first byte of digest: ${proof.publicOutput.firstByte}`);
-        return;
-      } catch (e) {
-        console.log(`fail ${label}  ${(e as Error).message.split('\n')[0].slice(0, 110)}`);
-      }
-    }
-  }
+  t = Date.now();
+  const { proof } = await Probe.hashLeaf(Response.from(new Uint8Array(RESPONSE_BYTES).fill(7)));
+  console.log(`proved in   ${((Date.now() - t) / 1000).toFixed(1)}s`);
 
-  console.log('\nno combination compiled — see the note at the top of this file');
+  // keccak256 of 1344 bytes of 0x07 is 0xafad7659…, so 175 is the check.
+  console.log(`first byte  ${proof.publicOutput.firstByte} (expected 175)`);
 }
 
 await main();
