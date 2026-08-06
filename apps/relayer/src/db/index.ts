@@ -28,7 +28,7 @@ export async function migrate(): Promise<void> {
   await pool.query(sql);
 }
 
-export type DepositStatus = 'built' | 'submitted' | 'attested' | 'claimed' | 'failed';
+export type DepositStatus = 'built' | 'submitted' | 'attested' | 'claimed' | 'failed' | 'aborted';
 
 export type DepositRow = {
   id: string;

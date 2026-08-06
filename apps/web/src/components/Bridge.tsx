@@ -19,7 +19,7 @@ import {
  * can produce the mint alone, so the UI has to show which half is outstanding
  * rather than a single opaque spinner.
  */
-type DepositStatus = 'built' | 'submitted' | 'attested' | 'claimed' | 'failed';
+type DepositStatus = 'built' | 'submitted' | 'attested' | 'claimed' | 'failed' | 'aborted';
 
 type Deposit = {
   id: string;
