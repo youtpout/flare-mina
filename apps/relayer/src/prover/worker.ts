@@ -421,11 +421,27 @@ let predictedCursor: unknown | undefined;
  */
 let predictedNonce: bigint | undefined;
 
-/** Claim the next nonce, seeding from chain the first time. */
+/**
+ * Highest nonce this process has ever handed out.
+ *
+ * Deliberately never cleared, unlike `predictedNonce`. Reseeding from chain
+ * after a failure looked safe and was not: the chain does not count what is
+ * still in the pool, so the reseed handed out a nonce a pending transaction had
+ * already claimed and Mina rejected the pair with `Insufficient_replace_fee`.
+ * A high-water mark cannot go backwards, so a reseed can only ever skip
+ * forward — and a skipped nonce costs one stalled transaction, where a reused
+ * one costs a lost transaction the caller believes was sent.
+ */
+let issuedNonce: bigint | undefined;
+
+/** Claim the next nonce, seeding from chain but never below what was issued. */
 function claimNonce(sender: PublicKey): number {
-  predictedNonce ??= Mina.getAccount(sender).nonce.toBigint();
-  const n = predictedNonce;
+  const onChain = Mina.getAccount(sender).nonce.toBigint();
+  const floor = issuedNonce === undefined ? onChain : issuedNonce + 1n;
+  const n = predictedNonce ?? (onChain > floor ? onChain : floor);
+
   predictedNonce = n + 1n;
+  issuedNonce = n;
   return Number(n);
 }
 
