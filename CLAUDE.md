@@ -353,3 +353,10 @@ IndexedMerkleMap insert ~2.79M. Coston2 block limit is 28M.
   documented migration.
 - The zkApp's 8 state fields are raw — a verification-key upgrade does not
   migrate their meaning.
+- `PoseidonPallas` and `MinaSchnorr` are `public` libraries, so they are
+  deployed once and DELEGATECALLed rather than inlined. Every contract that
+  imports them therefore has different bytecode than before that change, even
+  with an unchanged source — `MinaAuthRegistry` went 14,861 -> 2,811 bytes.
+  Verifying a contract deployed earlier means building from its deployment
+  commit; `git log --follow` on the file, build each candidate in a throwaway
+  worktree, and compare against `cast code`.

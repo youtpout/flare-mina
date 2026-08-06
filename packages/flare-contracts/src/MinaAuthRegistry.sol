@@ -10,6 +10,15 @@ import {SignaturePurpose} from "./libraries/SignaturePurpose.sol";
 /// @notice Lets a Mina key authorise actions on Flare, by verifying its Schnorr
 /// signature directly on-chain.
 ///
+/// @dev **This source no longer compiles to the deployed bytecode**, and the
+/// source itself never changed. `MinaSchnorr` went from `internal` to `public`
+/// to get `MinaPortBridge` under the EIP-170 limit, so its ~12kB is now
+/// DELEGATECALLed rather than inlined here: 14,861 bytes on chain against 2,811
+/// today. Verify the live deployment from commit `ae0f4dd`, where the library
+/// was still internal. Nothing is broken — the deployed contract keeps its
+/// inlined copy — but a redeploy produces a different binary and must link the
+/// library.
+///
 /// @dev **Why this contract exists.** A Mina key is a Pallas key. It cannot
 /// produce an ECDSA secp256k1 signature, so it can never control an EOA on an
 /// EVM chain. This contract is the bridge across that gap.
