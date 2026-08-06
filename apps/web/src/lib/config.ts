@@ -47,6 +47,12 @@ export type TokenConfig = {
   address: Address;
   decimals: number;
   note?: string;
+  /**
+   * The chain's own coin rather than an ERC-20. `address` still holds the
+   * wrapper, because that is what a pool is priced against — the router wraps
+   * and unwraps around the swap itself, so nothing else has to know.
+   */
+  native?: boolean;
 };
 
 /**
@@ -55,16 +61,14 @@ export type TokenConfig = {
  * Swapping is not limited to these — the account executes any call, so any pair
  * on any DEX works. This list only decides what appears without searching.
  */
+const WNAT: Address = '0xC67DCE33D7A8efA5FfEB961899C73fe01bCe9273';
+
 export const TOKENS: TokenConfig[] = [
   { symbol: 'FMINA', address: CONTRACTS.fmina, decimals: 9, note: 'Bridged MINA' },
+  { symbol: 'C2FLR', address: WNAT, decimals: 18, native: true },
   { symbol: 'FXRP', address: '0x0b6A3645c240605887a5532109323A3E12273dc7', decimals: 6 },
   { symbol: 'USD₮0', address: '0xC1A5B41512496B80903D1f32d6dEa3a73212E71F', decimals: 6 },
-  {
-    symbol: 'WC2FLR',
-    address: '0xC67DCE33D7A8efA5FfEB961899C73fe01bCe9273',
-    decimals: 18,
-    note: 'Needs a 9-decimal wrapper to reach Mina',
-  },
+  { symbol: 'WC2FLR', address: WNAT, decimals: 18 },
 ];
 
 /** Mina side. */

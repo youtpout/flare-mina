@@ -62,6 +62,11 @@ export const bridgeAbi = parseAbi([
 export const routerAbi = parseAbi([
   'function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[])',
   'function swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline) returns (uint256[])',
+  // The router wraps and unwraps around the swap, so a native trade needs no
+  // separate deposit or withdraw call — and leaves no wrapped dust behind when
+  // slippage means the output is not exactly what was quoted.
+  'function swapExactNATForTokens(uint256 amountOutMin, address[] path, address to, uint256 deadline) payable returns (uint256[])',
+  'function swapExactTokensForNAT(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline) returns (uint256[])',
 ]);
 
 export type Balance = {
@@ -70,20 +75,33 @@ export type Balance = {
   formatted: string;
 };
 
-/** Read every default-list balance for an address in one multicall. */
+/**
+ * Read every default-list balance for an address in one multicall.
+ *
+ * The native coin is not an ERC-20, so it is read separately and merged back in
+ * at its place in the list.
+ */
 export async function readBalances(owner: Address): Promise<Balance[]> {
-  const results = await publicClient.multicall({
-    contracts: TOKENS.map((t) => ({
-      address: t.address,
-      abi: erc20Abi,
-      functionName: 'balanceOf' as const,
-      args: [owner] as const,
-    })),
-    allowFailure: true,
-  });
+  const erc20s = TOKENS.filter((t) => t.native !== true);
 
-  return TOKENS.map((token, i) => {
-    const r = results[i];
+  const [results, nativeWei] = await Promise.all([
+    publicClient.multicall({
+      contracts: erc20s.map((t) => ({
+        address: t.address,
+        abi: erc20Abi,
+        functionName: 'balanceOf' as const,
+        args: [owner] as const,
+      })),
+      allowFailure: true,
+    }),
+    publicClient.getBalance({ address: owner }),
+  ]);
+
+  return TOKENS.map((token) => {
+    if (token.native === true) {
+      return { token, raw: nativeWei, formatted: formatUnits(nativeWei, token.decimals) };
+    }
+    const r = results[erc20s.indexOf(token)];
     const raw = r?.status === 'success' ? (r.result as bigint) : 0n;
     return { token, raw, formatted: formatUnits(raw, token.decimals) };
   });
@@ -140,7 +158,7 @@ export type Route = {
  * for instance, has pools against WC2FLR and USD₮0 and against nothing else, so
  * every other destination needs a hop.
  */
-const HOPS: Address[] = TOKENS.map((t) => t.address);
+const HOPS: Address[] = [...new Set(TOKENS.map((t) => t.address.toLowerCase()))] as Address[];
 
 /**
  * Best route for a swap, direct or through one intermediate token.

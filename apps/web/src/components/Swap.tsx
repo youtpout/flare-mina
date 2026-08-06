@@ -70,6 +70,7 @@ export function Swap({ session }: { session: Session }) {
     setRoute(null);
     if (amountIn === 0n || from.address === to.address) return;
 
+
     setQuoting(true);
     bestRoute(from.address, to.address, amountIn)
       .then((r) => live && setRoute(r))
@@ -117,30 +118,47 @@ export function Swap({ session }: { session: Session }) {
       setStatus('Building the batch…');
       const deadline = BigInt(Math.floor(Date.now() / 1000)) + DEADLINE_SECONDS;
 
-      // approve then swap, in that order. Batching them means one signature and
-      // one nonce, and no live approval sitting between two transactions.
-      const calls = [
-        {
-          target: from.address,
-          value: 0n,
-          data: encodeFunctionData({
-            abi: erc20Abi,
-            functionName: 'approve',
-            args: [DEX.router, amountIn],
-          }),
-        },
-        {
-          target: DEX.router,
-          value: 0n,
-          data: encodeFunctionData({
-            abi: routerAbi,
-            functionName: 'swapExactTokensForTokens',
-            // The routed path, not a direct pair: the two must be the same
-            // path the quote was priced on, or minOut is against the wrong one.
-            args: [amountIn, minOut, route.path, session.account, deadline],
-          }),
-        },
-      ];
+      // The path is the routed one, not a direct pair: it must be the path the
+      // quote was priced on, or minOut is checked against a route not taken.
+      //
+      // Paying in the native coin needs no approval — there is nothing to
+      // approve — so the batch is one call instead of two. Receiving it needs
+      // one, and the router unwraps on the way out.
+      const calls = from.native
+        ? [
+            {
+              target: DEX.router,
+              value: amountIn,
+              data: encodeFunctionData({
+                abi: routerAbi,
+                functionName: 'swapExactNATForTokens',
+                args: [minOut, route.path, session.account, deadline],
+              }),
+            },
+          ]
+        : [
+            // Approve then swap, in that order. Batching them means one
+            // signature, one nonce, and no live approval between two
+            // transactions.
+            {
+              target: from.address,
+              value: 0n,
+              data: encodeFunctionData({
+                abi: erc20Abi,
+                functionName: 'approve',
+                args: [DEX.router, amountIn],
+              }),
+            },
+            {
+              target: DEX.router,
+              value: 0n,
+              data: encodeFunctionData({
+                abi: routerAbi,
+                functionName: to.native ? 'swapExactTokensForNAT' : 'swapExactTokensForTokens',
+                args: [amountIn, minOut, route.path, session.account, deadline],
+              }),
+            },
+          ];
 
       const nonce = await nextNonce(session.x, session.isOdd);
 

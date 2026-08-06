@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Session } from '@/App';
-import { readBalances, readNativeBalance, type Balance } from '@/lib/flare';
+import { readBalances, type Balance } from '@/lib/flare';
 import { COSTON2, MINA, explorerAddress } from '@/lib/config';
 
 const short = (s: string, head = 10, tail = 8) =>
@@ -16,7 +16,6 @@ export function Portfolio({
   onRefresh: () => Promise<void>;
 }) {
   const [balances, setBalances] = useState<Balance[] | null>(null);
-  const [native, setNative] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deploying, setDeploying] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
@@ -49,13 +48,10 @@ export function Portfolio({
     let live = true;
     (async () => {
       try {
-        const [b, n] = await Promise.all([
-          readBalances(session.account),
-          readNativeBalance(session.account),
-        ]);
+        // readBalances covers the native coin too, now that it is a listed token.
+        const b = await readBalances(session.account);
         if (!live) return;
         setBalances(b);
-        setNative(n);
       } catch (e) {
         if (live) setError(e instanceof Error ? e.message : String(e));
       }
@@ -117,17 +113,13 @@ export function Portfolio({
 
         {balances && (
           <>
-            <div className="row">
-              <span>
-                {COSTON2.nativeSymbol} <span className="muted small">native</span>
-              </span>
-              <span className="mono">{native ?? '—'}</span>
-            </div>
-
+            {/* The native coin is in the token list now, so it needs no row of
+                its own — it would be the same figure twice. */}
             {balances.map(({ token, formatted }) => (
               <div className="row" key={token.symbol}>
                 <span>
                   {token.symbol}
+                  {token.native === true && <span className="muted small"> native</span>}
                   {token.note && <span className="muted small"> · {token.note}</span>}
                 </span>
                 <span className="mono">{formatted}</span>
