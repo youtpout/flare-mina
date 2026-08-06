@@ -71,6 +71,79 @@ export const TOKENS: TokenConfig[] = [
   { symbol: 'WC2FLR', address: WNAT, decimals: 18 },
 ];
 
+/**
+ * What the Flare -> Mina direction can send.
+ *
+ * FMINA goes back through the escrow — it is bridged MINA, so the escrow
+ * releases the original. Everything else is locked in the vault and minted as a
+ * new token on Mina, which is the opposite direction of collateral and a
+ * different contract.
+ *
+ * `minaDecimals` differs from `decimals` only for C2FLR: at 18, a `UInt64` caps
+ * out at 18 whole tokens, so it crosses as the 9-decimal wrapper.
+ */
+export type BridgeAsset = {
+  symbol: string;
+  address: Address;
+  decimals: number;
+  minaDecimals: number;
+  /** Which contract takes it, and therefore which rail it rides. */
+  rail: 'escrow' | 'vault';
+  /** The chain's own coin. Locked with `lockNative`, which wraps it for you. */
+  native?: boolean;
+  /** What it is called once it lands on Mina. */
+  minaSymbol: string;
+};
+
+export const BRIDGE_ASSETS: BridgeAsset[] = [
+  { symbol: 'FMINA', address: CONTRACTS.fmina, decimals: 9, minaDecimals: 9, rail: 'escrow', minaSymbol: 'MINA' },
+  { symbol: 'C2FLR', address: WNAT, decimals: 18, minaDecimals: 9, rail: 'vault', native: true, minaSymbol: 'bC2FLR' },
+  { symbol: 'FXRP', address: '0x0b6A3645c240605887a5532109323A3E12273dc7', decimals: 6, minaDecimals: 6, rail: 'vault', minaSymbol: 'bFXRP' },
+  { symbol: 'USD₮0', address: '0xC1A5B41512496B80903D1f32d6dEa3a73212E71F', decimals: 6, minaDecimals: 6, rail: 'vault', minaSymbol: 'bUSDT' },
+];
+
+/**
+ * What the Mina -> Flare direction can send.
+ *
+ * MINA is escrowed and minted as FMINA. The wrapped assets travel the opposite
+ * way: they were minted here against something locked in the vault on Flare, so
+ * sending one back means burning it and releasing the original. `live` says
+ * which of those two legs the relayer currently drives — see the README.
+ */
+export type InboundAsset = {
+  symbol: string;
+  decimals: number;
+  flareSymbol: string;
+  /** Mina token zkApp. Absent for MINA, which is the chain's own coin. */
+  token?: string;
+  live: boolean;
+};
+
+export const INBOUND_ASSETS: InboundAsset[] = [
+  { symbol: 'MINA', decimals: 9, flareSymbol: 'FMINA', live: true },
+  {
+    symbol: 'bC2FLR',
+    decimals: 9,
+    flareSymbol: 'C2FLR',
+    token: 'B62qiVguTBzDp5vaHyTatzaQ2zTyhfU22tTi3VQ9MKfcnbnePukdQHQ',
+    live: false,
+  },
+  {
+    symbol: 'bFXRP',
+    decimals: 6,
+    flareSymbol: 'FXRP',
+    token: 'B62qnmNChAeU6SpLDdze7FvVjoT4LsWCcHntiqmFx1aBvrd52mP3XVN',
+    live: false,
+  },
+  {
+    symbol: 'bUSDT',
+    decimals: 6,
+    flareSymbol: 'USD₮0',
+    token: 'B62qjhVgqAbso6g8wsLNosuUMTyySicoqtgEbGGPYqWJXDCdQEH6Bg3',
+    live: false,
+  },
+];
+
 /** Mina side. */
 export const MINA = {
   network: 'devnet',

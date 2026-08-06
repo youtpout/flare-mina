@@ -59,6 +59,12 @@ export const bridgeAbi = parseAbi([
   'function escrowAttestor() view returns (address)',
 ]);
 
+export const assetVaultAbi = parseAbi([
+  'function lock(address token, uint256 amount, bytes32 minaRecipient) returns (uint256)',
+  'function lockNative(bytes32 minaRecipient) payable returns (uint256)',
+  'function lockedOf(address) view returns (uint256)',
+]);
+
 export const routerAbi = parseAbi([
   'function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[])',
   'function swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline) returns (uint256[])',

@@ -1,8 +1,16 @@
 import { useEffect, useState } from 'react';
-import { encodeFunctionData, type Hex } from 'viem';
+import { encodeFunctionData, formatUnits, parseUnits, type Hex } from 'viem';
 import type { Session } from '@/App';
-import { CONTRACTS, MINA, explorerTx } from '@/lib/config';
-import { bridgeAbi, erc20Abi, nextNonce, readBalances, submit, type Balance } from '@/lib/flare';
+import { BRIDGE_ASSETS, CONTRACTS, INBOUND_ASSETS, MINA, explorerTx } from '@/lib/config';
+import {
+  assetVaultAbi,
+  bridgeAbi,
+  erc20Abi,
+  nextNonce,
+  readBalances,
+  submit,
+  type Balance,
+} from '@/lib/flare';
 import {
   PURPOSE,
   batchHash,
@@ -84,9 +92,11 @@ export function Bridge({ session }: { session: Session }) {
   const [claiming, setClaiming] = useState<string | null>(null);
   const [claimError, setClaimError] = useState<string | null>(null);
   const [amount, setAmount] = useState('');
+  const [depositSymbol, setDepositSymbol] = useState('MINA');
   const [depositing, setDepositing] = useState<string | null>(null);
   const [depositError, setDepositError] = useState<string | null>(null);
   const [burnAmount, setBurnAmount] = useState('');
+  const [burnSymbol, setBurnSymbol] = useState('FMINA');
   const [burning, setBurning] = useState<string | null>(null);
   const [burnError, setBurnError] = useState<string | null>(null);
   /** FMINA held on Flare — what a withdrawal spends. */
@@ -169,8 +179,9 @@ export function Bridge({ session }: { session: Session }) {
       .then((r) => r.json())
       .then((body: { data?: { account?: { balance?: { total?: string } } } }) => {
         const total = body.data?.account?.balance?.total;
-        // The node reports MINA, not nanomina, and as a decimal string.
-        if (live) setMinaBalance(total === undefined ? null : BigInt(Math.round(Number(total) * 1e9)));
+        // Already nanomina. Scaling it again showed a balance a billion times
+        // too large, and MAX offered an amount no wallet could ever send.
+        if (live) setMinaBalance(total === undefined ? null : BigInt(total));
       })
       .catch(() => live && setMinaBalance(null));
     return () => {
@@ -261,16 +272,40 @@ export function Bridge({ session }: { session: Session }) {
   const formatNano = (v: bigint) =>
     (Number(v) / 1e9).toLocaleString(undefined, { maximumFractionDigits: 9 });
 
-  const fmina = flareBalances?.find((b) => b.token.symbol === 'FMINA') ?? null;
+  const inbound = INBOUND_ASSETS.find((a) => a.symbol === depositSymbol)!;
+  const outbound = BRIDGE_ASSETS.find((a) => a.symbol === burnSymbol)!;
+  const outboundBalance = flareBalances?.find((b) => b.token.symbol === outbound.symbol) ?? null;
+
+  /** Parse in the selected asset's own decimals, not always nine. */
+  const outboundAmount = (() => {
+    try {
+      const v = parseUnits(burnAmount.trim() || '0', outbound.decimals);
+      return v > 0n ? v : null;
+    } catch {
+      return null;
+    }
+  })();
+
+  /**
+   * C2FLR crosses through a 9-decimal wrapper, which refuses anything that is
+   * not an exact multiple of a gwei rather than silently dropping the dust.
+   * Rounding here means the user never sees that error.
+   */
+  const outboundScale = outbound.decimals > outbound.minaDecimals
+    ? 10n ** BigInt(outbound.decimals - outbound.minaDecimals)
+    : 1n;
+  const outboundValue =
+    outboundAmount === null ? null : (outboundAmount / outboundScale) * outboundScale;
+
   const wanted = nanomina(amount);
-  const burnWanted = nanomina(burnAmount);
 
   // Balances are advisory until they load: refusing on `null` would block the
   // form whenever the node is slow, which is worse than letting the wallet say
   // no a moment later.
   const notEnoughMina =
     minaBalance !== null && wanted !== null && wanted + MINA_FEE_BUFFER > minaBalance;
-  const notEnoughFmina = fmina !== null && burnWanted !== null && burnWanted > fmina.raw;
+  const notEnoughOutbound =
+    outboundBalance !== null && outboundValue !== null && outboundValue > outboundBalance.raw;
 
   function nanomina(input: string): bigint | null {
     if (!/^\d+(\.\d{1,9})?$/.test(input.trim())) return null;
@@ -347,8 +382,16 @@ export function Bridge({ session }: { session: Session }) {
    * Nothing else is signed afterwards. The burn *is* the authorisation: the
    * FMINA is gone, and the event carries the recipient and the amount.
    */
+  /**
+   * Send an asset to Mina.
+   *
+   * Two rails, chosen by what is being sent. FMINA is bridged MINA, so it burns
+   * and the escrow releases the original. Everything else is locked in the
+   * vault and minted as a new token — the opposite direction of collateral, and
+   * a different contract.
+   */
   async function burn() {
-    const value = nanomina(burnAmount);
+    const value = outboundValue;
     if (value === null) return;
 
     setBurnError(null);
@@ -357,26 +400,62 @@ export function Bridge({ session }: { session: Session }) {
       const nonce = await nextNonce(session.x, session.isOdd);
       const expiry = BigInt('18446744073709551615');
 
-      const calls = [
-        {
-          target: CONTRACTS.fmina,
-          value: 0n,
-          data: encodeFunctionData({
-            abi: erc20Abi,
-            functionName: 'approve',
-            args: [CONTRACTS.bridge, value],
-          }),
-        },
-        {
-          target: CONTRACTS.bridge,
-          value: 0n,
-          data: encodeFunctionData({
-            abi: bridgeAbi,
-            functionName: 'burnToMina',
-            args: [value, session.packed],
-          }),
-        },
-      ];
+      const calls =
+        outbound.rail === 'escrow'
+          ? [
+              {
+                target: CONTRACTS.fmina,
+                value: 0n,
+                data: encodeFunctionData({
+                  abi: erc20Abi,
+                  functionName: 'approve',
+                  args: [CONTRACTS.bridge, value],
+                }),
+              },
+              {
+                target: CONTRACTS.bridge,
+                value: 0n,
+                data: encodeFunctionData({
+                  abi: bridgeAbi,
+                  functionName: 'burnToMina',
+                  args: [value, session.packed],
+                }),
+              },
+            ]
+          : outbound.native === true
+            ? [
+                {
+                  // The account's own C2FLR pays. `lockNative` wraps it and
+                  // rounds it to nine decimals on the way through.
+                  target: CONTRACTS.assetVault,
+                  value,
+                  data: encodeFunctionData({
+                    abi: assetVaultAbi,
+                    functionName: 'lockNative',
+                    args: [session.packed],
+                  }),
+                },
+              ]
+            : [
+                {
+                  target: outbound.address,
+                  value: 0n,
+                  data: encodeFunctionData({
+                    abi: erc20Abi,
+                    functionName: 'approve',
+                    args: [CONTRACTS.assetVault, value],
+                  }),
+                },
+                {
+                  target: CONTRACTS.assetVault,
+                  value: 0n,
+                  data: encodeFunctionData({
+                    abi: assetVaultAbi,
+                    functionName: 'lock',
+                    args: [outbound.address, value, session.packed],
+                  }),
+                },
+              ];
 
       const signature = await signAuthorization(session.provider, {
         purpose: PURPOSE.accountBatch,
@@ -450,10 +529,11 @@ export function Bridge({ session }: { session: Session }) {
 
         <div className="swapcard" style={{ marginBottom: 14 }}>
           <div className="swapcard-head">
-            <span>You escrow</span>
+            <span>{inbound.live ? 'You escrow' : 'You burn'}</span>
             <span>
-              Balance {minaBalance === null ? '…' : formatNano(minaBalance)}
-              {minaBalance !== null && minaBalance > 0n && (
+              Balance{' '}
+              {!inbound.live ? '—' : minaBalance === null ? '…' : formatNano(minaBalance)}
+              {inbound.live && minaBalance !== null && minaBalance > 0n && (
                 <button
                   className="maxbtn"
                   // A fee has to be left behind, or the wallet cannot broadcast
@@ -477,7 +557,15 @@ export function Bridge({ session }: { session: Session }) {
               placeholder="0"
               onChange={(e) => setAmount(e.target.value)}
             />
-            <span className="tokenfixed">MINA</span>
+            <select
+              className="tokensel"
+              value={depositSymbol}
+              onChange={(e) => setDepositSymbol(e.target.value)}
+            >
+              {INBOUND_ASSETS.map((a) => (
+                <option key={a.symbol}>{a.symbol}</option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -494,11 +582,24 @@ export function Bridge({ session }: { session: Session }) {
         <button
           className="primary"
           style={{ marginTop: 14 }}
-          disabled={depositing !== null || nanomina(amount) === null || notEnoughMina}
+          disabled={
+            !inbound.live || depositing !== null || nanomina(amount) === null || notEnoughMina
+          }
           onClick={startDeposit}
         >
-          {notEnoughMina ? 'Not enough MINA' : (depositing ?? 'Deposit')}
+          {!inbound.live
+            ? `${inbound.symbol} return leg not live`
+            : notEnoughMina
+              ? 'Not enough MINA'
+              : (depositing ?? 'Deposit')}
         </button>
+        {!inbound.live && (
+          <p className="small muted" style={{ marginTop: 10 }}>
+            {inbound.symbol} was minted here against {inbound.flareSymbol} locked in the vault on
+            Flare, so sending it back means burning it and releasing the original. The forward leg
+            is live; this one is the next thing being wired.
+          </p>
+        )}
         {depositError !== null && <p className="status err">{depositError}</p>}
       </div>
 
@@ -557,11 +658,16 @@ export function Bridge({ session }: { session: Session }) {
 
         <div className="swapcard" style={{ marginBottom: 14 }}>
           <div className="swapcard-head">
-            <span>You burn</span>
+            <span>{outbound.rail === 'escrow' ? 'You burn' : 'You lock'}</span>
             <span>
-              Balance {fmina === null ? '…' : fmina.formatted}
-              {fmina !== null && fmina.raw > 0n && (
-                <button className="maxbtn" onClick={() => setBurnAmount(formatNano(fmina.raw))}>
+              Balance {outboundBalance === null ? '…' : outboundBalance.formatted}
+              {outboundBalance !== null && outboundBalance.raw > 0n && (
+                <button
+                  className="maxbtn"
+                  onClick={() =>
+                    setBurnAmount(formatUnits(outboundBalance.raw, outbound.decimals))
+                  }
+                >
                   MAX
                 </button>
               )}
@@ -575,7 +681,15 @@ export function Bridge({ session }: { session: Session }) {
               placeholder="0"
               onChange={(e) => setBurnAmount(e.target.value)}
             />
-            <span className="tokenfixed">FMINA</span>
+            <select
+              className="tokensel"
+              value={burnSymbol}
+              onChange={(e) => setBurnSymbol(e.target.value)}
+            >
+              {BRIDGE_ASSETS.map((a) => (
+                <option key={a.symbol}>{a.symbol}</option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -587,20 +701,14 @@ export function Bridge({ session }: { session: Session }) {
         <button
           className="primary"
           style={{ marginTop: 14 }}
-          disabled={burning !== null || nanomina(burnAmount) === null || notEnoughFmina}
+          disabled={burning !== null || outboundValue === null || notEnoughOutbound}
           onClick={burn}
         >
-          {notEnoughFmina ? 'Not enough FMINA' : (burning ?? 'Withdraw')}
+          {notEnoughOutbound
+            ? `Not enough ${outbound.symbol}`
+            : (burning ?? (outbound.rail === 'escrow' ? 'Withdraw' : 'Bridge'))}
         </button>
         {burnError !== null && <p className="status err">{burnError}</p>}
-
-        <div className="notice">
-          <strong>The relayer cannot invent a withdrawal.</strong> Each release carries a proof
-          that the rest of Flare's withdrawal chain runs from this exact record to the state the
-          escrow has accepted, so recipient, amount and order are all inside a hash it would have
-          to find a collision for. What is still trusted is one step upstream — who publishes that
-          state — and only once per batch rather than once per withdrawal.
-        </div>
       </div>
 
       {/* Its own panel, with an empty state: rendering nothing when the list is
