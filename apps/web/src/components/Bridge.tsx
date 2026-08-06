@@ -46,6 +46,7 @@ const LABEL: Record<DepositStatus, string> = {
   attested: 'Attested — ready to claim',
   claimed: 'Claimed',
   failed: 'Failed',
+  aborted: 'Superseded — from an earlier deployment',
 };
 
 export function Bridge({ session }: { session: Session }) {

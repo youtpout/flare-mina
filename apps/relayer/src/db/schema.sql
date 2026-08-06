@@ -54,8 +54,12 @@ CREATE INDEX IF NOT EXISTS deposits_status_idx ON deposits (status);
 ALTER TABLE deposits ALTER COLUMN mina_tx_hash DROP NOT NULL;
 ALTER TABLE deposits ALTER COLUMN mina_block_height DROP NOT NULL;
 ALTER TABLE deposits DROP CONSTRAINT IF EXISTS deposits_status_check;
+-- 'aborted' is not 'failed': nothing went wrong, the row simply belongs to a
+-- deployment that no longer exists, or to a proof the wallet never signed.
+-- Keeping the two apart matters — 'failed' is worth investigating and this is
+-- not, and a UI that says "Failed" about a superseded deployment is lying.
 ALTER TABLE deposits ADD CONSTRAINT deposits_status_check
-  CHECK (status IN ('built','submitted','attested','claimed','failed'));
+  CHECK (status IN ('built','submitted','attested','claimed','failed','aborted'));
 
 -- The Flare -> Mina return path.
 --

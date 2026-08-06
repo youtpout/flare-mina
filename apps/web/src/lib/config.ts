@@ -28,8 +28,8 @@ export const CONTRACTS = {
    * which caps at ~18.4 whole tokens on Mina.
    */
   wrappedC2flr: '0x6C790956D728ed82A75d2ec8D5c37F2e2F36b978',
-  bridge: '0xdb78DA6dd5eC73b7089799eE85Fc2E43126CBae2',
-  fmina: '0x68189e3a6F0Ef2D1accFd62b6De9abF791B3722e',
+  bridge: '0x871493412EDCcfE0d24f127E6Deb2B20AE5497aB',
+  fmina: '0x4aFce36d468136eD9d880E28C99373F0C3d3f046',
   wrapperFactory: '0x98f0CA385dBe0724b4D9211fA4e515eB4d6848b7',
 } as const satisfies Record<string, Address>;
 
@@ -72,7 +72,7 @@ export const MINA = {
   network: 'devnet',
   explorer: 'https://minascan.io/devnet',
   /** Escrow account. Deposits are plain payments here, with the Flare recipient in the memo. */
-  bridgeAccount: 'B62qrnXemTz7RhG8kKwv7id9eHTAVMafTiDrPMyDTMJUSUfpPQYPuMH',
+  bridgeAccount: 'B62qpRkbjE5wH6nFmZnVUN7yrjfAhpJPP2qXxn6z7KQsL6RojmkaDr6',
 } as const;
 
 export const explorerTx = (hash: string) => `${COSTON2.explorer}/tx/${hash}`;

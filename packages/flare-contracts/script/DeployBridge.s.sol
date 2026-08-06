@@ -64,6 +64,11 @@ contract DeployBridge is Script {
         bridge = MinaPortBridge(address(proxy));
         wrappers = new BridgeWrapperFactory();
 
+        // Without this the signature deposit path reverts with AttestorNotSet,
+        // and only at claim time — long after the deposit has been escrowed.
+        address escrowAttestor = vm.envAddress("ESCROW_ATTESTOR");
+        bridge.setEscrowAttestor(escrowAttestor);
+
         vm.stopBroadcast();
 
         console.log("chain id            :", block.chainid);
@@ -73,6 +78,7 @@ contract DeployBridge is Script {
         console.log("  implementation    :", address(implementation));
         console.log("  ^ upgrades go through the ProxyAdmin the proxy deployed");
         console.log("FMINA               :", address(bridge.TOKEN()));
+        console.log("escrowAttestor      :", escrowAttestor);
         console.log("BridgeWrapperFactory:", address(wrappers));
     }
 }

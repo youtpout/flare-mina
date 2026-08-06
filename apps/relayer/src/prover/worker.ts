@@ -42,11 +42,8 @@ import {
   fetchAccount,
   Field,
 } from 'o1js';
-import {
-  signedMessageHash,
-  type PolicyKey,
-  type RelayCall,
-} from '@minaport/shared';
+// Types only — erased at build, so they cost the worker no resolution.
+import type { PolicyKey, RelayCall } from '@minaport/shared';
 
 /**
  * Builds and proves `MinaPortBridge.deposit` transactions.
@@ -145,6 +142,9 @@ await initializeBindings();
 // which this worker's loader does not rewrite — the contracts package must be
 // built (`pnpm --filter @minaport/mina-contracts build`) before the relayer
 // starts.
+// From dist, like the contracts below: a worker thread has no tsx loader, so a
+// source import would resolve to .ts files whose own .js specifiers do not exist.
+const { signedMessageHash } = await import('@minaport/shared/dist/src/flareRelay.js');
 const { WithdrawalChain, applyWithdrawal } = await import(
   '@minaport/mina-contracts/dist/src/WithdrawalChain.js'
 );
