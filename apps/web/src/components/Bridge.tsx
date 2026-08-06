@@ -53,6 +53,7 @@ export function Bridge({ session }: { session: Session }) {
   const [deposits, setDeposits] = useState<Deposit[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [direction, setDirection] = useState<'toFlare' | 'toMina'>('toFlare');
   const [claiming, setClaiming] = useState<string | null>(null);
   const [claimError, setClaimError] = useState<string | null>(null);
   const [amount, setAmount] = useState('');
@@ -338,6 +339,24 @@ export function Bridge({ session }: { session: Session }) {
 
   return (
     <>
+      {/* The two directions are separate flows with separate state — one waits
+          on a Mina inclusion, the other on a Flare event — so they get separate
+          tabs rather than a scroll that mixes both. */}
+      <div className="tabs">
+        {(['toFlare', 'toMina'] as const).map((d) => (
+          <button
+            key={d}
+            className="tab"
+            data-active={direction === d}
+            onClick={() => setDirection(d)}
+          >
+            {d === 'toFlare' ? 'Mina → Flare' : 'Flare → Mina'}
+          </button>
+        ))}
+      </div>
+
+      {direction === 'toFlare' && (
+      <>
       <div className="panel">
         <h2>Mina → Flare</h2>
         <p className="muted small" style={{ marginTop: 0 }}>
@@ -417,7 +436,11 @@ export function Bridge({ session }: { session: Session }) {
           </div>
         ))}
       </div>
+      </>
+      )}
 
+      {direction === 'toMina' && (
+      <>
       <div className="panel">
         <h2>Flare → Mina</h2>
         <p className="muted small" style={{ marginTop: 0 }}>
@@ -463,11 +486,15 @@ export function Bridge({ session }: { session: Session }) {
           </div>
         )}
         <div className="notice">
-          <strong>Coming soon.</strong> Flare publishes Merkle roots signed by a weighted validator
-          set, so proving a Flare event on Mina is signature verification — measured at 31,810
-          constraints — which makes this direction verifiable end to end.
+          <strong>The relayer cannot invent a withdrawal.</strong> Each release carries a proof
+          that the rest of Flare's withdrawal chain runs from this exact record to the state the
+          escrow has accepted, so recipient, amount and order are all inside a hash it would have
+          to find a collision for. What is still trusted is one step upstream — who publishes that
+          state — and only once per batch rather than once per withdrawal.
         </div>
       </div>
+      </>
+      )}
     </>
   );
 }
