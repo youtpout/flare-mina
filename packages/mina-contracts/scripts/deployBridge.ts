@@ -68,6 +68,19 @@ async function main() {
 
   await fetchAccount({ publicKey: deployer });
 
+  // The attestor co-signs `publishFlareActionState`, and an account update on a
+  // Mina account that does not exist makes the whole transaction fail — included,
+  // rejected, nonce burnt. It is invisible from the sender's side, since `send()`
+  // succeeded, so refuse to deploy rather than ship a bridge whose return path
+  // dies silently hours later.
+  const attestorAccount = await fetchAccount({ publicKey: attestor });
+  if (attestorAccount.account === undefined) {
+    throw new Error(
+      `attestor ${attestor.toBase58()} has no account on Mina — send it at least 1 MINA ` +
+        '(the account-creation fee) before deploying',
+    );
+  }
+
   console.log('compiling…');
   // The contract verifies proofs from both, so their keys must exist first.
   await WithdrawalChain.compile();

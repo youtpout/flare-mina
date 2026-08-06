@@ -353,6 +353,10 @@ IndexedMerkleMap insert ~2.79M. Coston2 block limit is 28M.
   documented migration.
 - The zkApp's 8 state fields are raw — a verification-key upgrade does not
   migrate their meaning.
+- An `AccountUpdate` on a Mina account that does not exist fails the whole
+  transaction: included, rejected, nonce consumed. `send()` still resolves, so
+  the sender sees success and the state simply never changes. Fund every key a
+  method signs with before relying on it.
 - `PoseidonPallas` and `MinaSchnorr` are `public` libraries, so they are
   deployed once and DELEGATECALLed rather than inlined. Every contract that
   imports them therefore has different bytecode than before that change, even
