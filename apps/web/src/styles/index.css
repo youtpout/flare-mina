@@ -148,3 +148,11 @@ a { color: var(--flare); }
 
 .details { margin-top: 14px; font-size: 13px; }
 .details .row { padding: 7px 0; }
+
+/* The bridge's token pill. Same shape as the swap's selector, but the asset is
+   fixed by the direction — there is nothing to choose, so it is not a control.
+   It needs its own border: the base rule only gives one to input and select. */
+.tokenfixed {
+  flex: none; border: 1px solid var(--line); border-radius: 999px;
+  padding: 8px 14px; font-size: 14px; font-weight: 600; background: var(--panel);
+}

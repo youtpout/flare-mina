@@ -77,6 +77,8 @@ export const MINA = {
   explorer: 'https://minascan.io/devnet',
   /** Escrow account. Deposits are plain payments here, with the Flare recipient in the memo. */
   bridgeAccount: 'B62qpRkbjE5wH6nFmZnVUN7yrjfAhpJPP2qXxn6z7KQsL6RojmkaDr6',
+  /** Read-only. Used for balances; the wallet has its own endpoint for sending. */
+  graphql: 'https://api.minascan.io/node/devnet/v1/graphql',
 } as const;
 
 export const explorerTx = (hash: string) => `${COSTON2.explorer}/tx/${hash}`;

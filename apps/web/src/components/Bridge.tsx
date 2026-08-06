@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { encodeFunctionData, type Hex } from 'viem';
 import type { Session } from '@/App';
 import { CONTRACTS, MINA, explorerTx } from '@/lib/config';
-import { bridgeAbi, erc20Abi, nextNonce, submit } from '@/lib/flare';
+import { bridgeAbi, erc20Abi, nextNonce, readBalances, submit, type Balance } from '@/lib/flare';
 import {
   PURPOSE,
   batchHash,
@@ -35,6 +35,12 @@ type Deposit = {
 };
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8787';
+
+/**
+ * Held back from MAX on a deposit. The escrow transaction itself costs a fee,
+ * so offering the whole balance produces a transaction the wallet cannot send.
+ */
+const MINA_FEE_BUFFER = 200_000_000n; // 0.2 MINA
 
 /**
  * What each stage is waiting on.
@@ -83,6 +89,10 @@ export function Bridge({ session }: { session: Session }) {
   const [burnAmount, setBurnAmount] = useState('');
   const [burning, setBurning] = useState<string | null>(null);
   const [burnError, setBurnError] = useState<string | null>(null);
+  /** FMINA held on Flare — what a withdrawal spends. */
+  const [flareBalances, setFlareBalances] = useState<Balance[] | null>(null);
+  /** Native MINA held on devnet — what a deposit escrows. */
+  const [minaBalance, setMinaBalance] = useState<bigint | null>(null);
   const [withdrawals, setWithdrawals] = useState<
     { nonce: string; amountNanomina: string; status: string }[] | null
   >(null);
@@ -129,6 +139,44 @@ export function Bridge({ session }: { session: Session }) {
       clearInterval(timer);
     };
   }, [session.minaAddress]);
+
+  /**
+   * Balances for both sides, refreshed whenever a transfer completes.
+   *
+   * Neither form could tell the user whether they hold the thing they are about
+   * to send: a deposit with no MINA fails in the wallet, and a burn with no
+   * FMINA reverts on Flare. Both only after a signature.
+   */
+  useEffect(() => {
+    let live = true;
+    readBalances(session.account)
+      .then((b) => live && setFlareBalances(b))
+      .catch(() => live && setFlareBalances(null));
+    return () => {
+      live = false;
+    };
+  }, [session.account, deposits, withdrawals]);
+
+  useEffect(() => {
+    let live = true;
+    fetch(MINA.graphql, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        query: `{ account(publicKey: "${session.minaAddress}") { balance { total } } }`,
+      }),
+    })
+      .then((r) => r.json())
+      .then((body: { data?: { account?: { balance?: { total?: string } } } }) => {
+        const total = body.data?.account?.balance?.total;
+        // The node reports MINA, not nanomina, and as a decimal string.
+        if (live) setMinaBalance(total === undefined ? null : BigInt(Math.round(Number(total) * 1e9)));
+      })
+      .catch(() => live && setMinaBalance(null));
+    return () => {
+      live = false;
+    };
+  }, [session.minaAddress, deposits]);
 
   /**
    * Claim an attested deposit.
@@ -209,6 +257,21 @@ export function Bridge({ session }: { session: Session }) {
   }
 
   /** MINA as typed, in nanomina. Null when it is not a usable number. */
+  /** Nine decimals, the unit both sides account in. */
+  const formatNano = (v: bigint) =>
+    (Number(v) / 1e9).toLocaleString(undefined, { maximumFractionDigits: 9 });
+
+  const fmina = flareBalances?.find((b) => b.token.symbol === 'FMINA') ?? null;
+  const wanted = nanomina(amount);
+  const burnWanted = nanomina(burnAmount);
+
+  // Balances are advisory until they load: refusing on `null` would block the
+  // form whenever the node is slow, which is worse than letting the wallet say
+  // no a moment later.
+  const notEnoughMina =
+    minaBalance !== null && wanted !== null && wanted + MINA_FEE_BUFFER > minaBalance;
+  const notEnoughFmina = fmina !== null && burnWanted !== null && burnWanted > fmina.raw;
+
   function nanomina(input: string): bigint | null {
     if (!/^\d+(\.\d{1,9})?$/.test(input.trim())) return null;
     const [whole, fraction = ''] = input.trim().split('.');
@@ -385,14 +448,37 @@ export function Bridge({ session }: { session: Session }) {
           your wallet only signs.
         </p>
 
-        <div className="field">
-          <label>Amount, in MINA</label>
-          <input
-            value={amount}
-            inputMode="decimal"
-            placeholder="1.0"
-            onChange={(e) => setAmount(e.target.value)}
-          />
+        <div className="swapcard" style={{ marginBottom: 14 }}>
+          <div className="swapcard-head">
+            <span>You escrow</span>
+            <span>
+              Balance {minaBalance === null ? '…' : formatNano(minaBalance)}
+              {minaBalance !== null && minaBalance > 0n && (
+                <button
+                  className="maxbtn"
+                  // A fee has to be left behind, or the wallet cannot broadcast
+                  // the very transaction that escrows the rest.
+                  onClick={() =>
+                    setAmount(
+                      formatNano(minaBalance > MINA_FEE_BUFFER ? minaBalance - MINA_FEE_BUFFER : 0n),
+                    )
+                  }
+                >
+                  MAX
+                </button>
+              )}
+            </span>
+          </div>
+          <div className="swapcard-body">
+            <input
+              className="amount"
+              value={amount}
+              inputMode="decimal"
+              placeholder="0"
+              onChange={(e) => setAmount(e.target.value)}
+            />
+            <span className="tokenfixed">MINA</span>
+          </div>
         </div>
 
         <div className="field">
@@ -408,10 +494,10 @@ export function Bridge({ session }: { session: Session }) {
         <button
           className="primary"
           style={{ marginTop: 14 }}
-          disabled={depositing !== null || nanomina(amount) === null}
+          disabled={depositing !== null || nanomina(amount) === null || notEnoughMina}
           onClick={startDeposit}
         >
-          {depositing ?? 'Deposit'}
+          {notEnoughMina ? 'Not enough MINA' : (depositing ?? 'Deposit')}
         </button>
         {depositError !== null && <p className="status err">{depositError}</p>}
       </div>
@@ -469,14 +555,28 @@ export function Bridge({ session }: { session: Session }) {
           the authorisation — there is nothing else to sign.
         </p>
 
-        <div className="field">
-          <label>Amount, in FMINA</label>
-          <input
-            value={burnAmount}
-            inputMode="decimal"
-            placeholder="1.0"
-            onChange={(e) => setBurnAmount(e.target.value)}
-          />
+        <div className="swapcard" style={{ marginBottom: 14 }}>
+          <div className="swapcard-head">
+            <span>You burn</span>
+            <span>
+              Balance {fmina === null ? '…' : fmina.formatted}
+              {fmina !== null && fmina.raw > 0n && (
+                <button className="maxbtn" onClick={() => setBurnAmount(formatNano(fmina.raw))}>
+                  MAX
+                </button>
+              )}
+            </span>
+          </div>
+          <div className="swapcard-body">
+            <input
+              className="amount"
+              value={burnAmount}
+              inputMode="decimal"
+              placeholder="0"
+              onChange={(e) => setBurnAmount(e.target.value)}
+            />
+            <span className="tokenfixed">FMINA</span>
+          </div>
         </div>
 
         <div className="field">
@@ -487,10 +587,10 @@ export function Bridge({ session }: { session: Session }) {
         <button
           className="primary"
           style={{ marginTop: 14 }}
-          disabled={burning !== null || nanomina(burnAmount) === null}
+          disabled={burning !== null || nanomina(burnAmount) === null || notEnoughFmina}
           onClick={burn}
         >
-          {burning ?? 'Withdraw'}
+          {notEnoughFmina ? 'Not enough FMINA' : (burning ?? 'Withdraw')}
         </button>
         {burnError !== null && <p className="status err">{burnError}</p>}
 
