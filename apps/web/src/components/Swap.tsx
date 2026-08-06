@@ -193,7 +193,7 @@ export function Swap({ session }: { session: Session }) {
   }
 
   return (
-    <>
+    <div className="swapwrap">
       <div className="panel">
         <h2>Swap</h2>
 
@@ -312,6 +312,6 @@ export function Swap({ session }: { session: Session }) {
         live between two transactions. The account has no idea what BlazeSwap is — it executes a
         signed list of calls, which is why any DEX works without an adapter.
       </div>
-    </>
+    </div>
   );
 }

@@ -97,6 +97,10 @@ a { color: var(--flare); }
    the point — a swap form that reads differently costs the user attention it
    should be spending on the numbers. */
 
+/* Narrow and centred, like every swap form: full width leaves the amount
+   marooned at one end of the row and the token pill at the other. */
+.swapwrap { max-width: 460px; margin: 0 auto; }
+
 .swapstack { position: relative; display: flex; flex-direction: column; gap: 4px; }
 
 .swapcard {
