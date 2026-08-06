@@ -289,7 +289,7 @@ async function handlePublish(request: PublishRequest) {
       process.env.MINA_ADMIN_PRIVATE_KEY ?? feePayerKey,
     );
     const rotate = await Mina.transaction(
-      { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000) },
+      { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
       async () => {
         await bridge.setSigningPolicyRoot(tree.root);
       },
@@ -297,12 +297,16 @@ async function handlePublish(request: PublishRequest) {
     await rotate.prove();
     const rotated = await rotate.sign([feePayer, admin]).send();
     console.log(`rotated signing policy root -> ${rotated.hash}`);
+    // Waited on, unlike everything else here: the new root becomes a
+    // precondition of the publication below, and o1js builds that precondition
+    // from the account it has read. A rotation happens once per reward epoch,
+    // so the minutes cost nothing.
     await rotated.wait();
     await fetchAccount({ publicKey: bridge.address });
   }
 
   const tx = await Mina.transaction(
-    { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000) },
+    { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
     async () => {
       await bridge.publishFlareActionState(Field(request.actionState), merged!);
     },
@@ -310,6 +314,50 @@ async function handlePublish(request: PublishRequest) {
   await tx.prove();
   const pending = await tx.sign([feePayer, attestor]).send();
   return pending.hash;
+}
+
+/**
+ * Where the escrow's cursor will be once everything already sent is included.
+ *
+ * The same fee payer signs every release, so Mina applies them in nonce order
+ * and each one's state precondition is evaluated after the previous has been
+ * applied — even inside a single block. Reading the cursor from chain instead
+ * would mean one release per block, each waiting minutes for the one before it,
+ * because the account still shows the old value while the previous transaction
+ * is in the pool.
+ *
+ * Cleared on any failure: from that point the on-chain value is the only one
+ * that can be trusted, and a stale prediction would build proofs against a
+ * cursor that never arrives.
+ */
+let predictedCursor: unknown | undefined;
+
+/**
+ * The fee payer's next nonce, predicted rather than read.
+ *
+ * `fetchAccount` returns what the chain has applied, which does not count the
+ * transactions still in the pool. Two sends in a row would therefore both claim
+ * the same nonce and the second would simply replace the first — silently, since
+ * both `send()` calls succeed.
+ *
+ * Publish, rotate and release all come from this one key, so they share the
+ * counter. Cleared with the cursor on any failure, since after that the chain is
+ * the only trustworthy source for both.
+ */
+let predictedNonce: bigint | undefined;
+
+/** Claim the next nonce, seeding from chain the first time. */
+function claimNonce(sender: PublicKey): number {
+  predictedNonce ??= Mina.getAccount(sender).nonce.toBigint();
+  const n = predictedNonce;
+  predictedNonce = n + 1n;
+  return Number(n);
+}
+
+/** Everything predicted is only sound while every send has succeeded. */
+function forgetPredictions(): void {
+  predictedCursor = undefined;
+  predictedNonce = undefined;
 }
 
 async function handleRelease(request: ReleaseRequest) {
@@ -324,14 +372,15 @@ async function handleRelease(request: ReleaseRequest) {
 
   const record = toRecord(request);
 
-  // The cursor is read from chain rather than tracked here: it is the only
-  // value the proof has to start from, and a stale local copy would produce a
-  // tail that silently fails to meet it.
-  const processed = bridge.processedActionState.get();
-  const tail = await proveTail(applyWithdrawal(processed, record), request.tail);
+  const processed = (predictedCursor as Field | undefined) ?? bridge.processedActionState.get();
+  const next = applyWithdrawal(processed, record);
+  const tail = await proveTail(next, request.tail);
 
+  // The balance precondition is a range, `amount .. MAXINT`, not an equality —
+  // which is what lets several releases queue behind one another without the
+  // second's proof being invalidated by the first's payout.
   const tx = await Mina.transaction(
-    { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000) },
+    { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
     async () => {
       await bridge.releaseWithdrawal(record, tail);
     },
@@ -341,6 +390,7 @@ async function handleRelease(request: ReleaseRequest) {
   // Only the fee payer signs now. Authorisation is the tail proof, so a relayer
   // holding this key still cannot release anything Flare did not commit to.
   const pending = await tx.sign([feePayer]).send();
+  predictedCursor = next;
   return pending.hash;
 }
 
@@ -349,6 +399,7 @@ port.on('message', async (request: Request) => {
     try {
       port.postMessage({ type: 'released', id: request.id, hash: await handlePublish(request) });
     } catch (error) {
+      forgetPredictions();
       port.postMessage({
         type: 'failed',
         id: request.id,
@@ -361,6 +412,7 @@ port.on('message', async (request: Request) => {
     try {
       port.postMessage({ type: 'released', id: request.id, hash: await handleRelease(request) });
     } catch (error) {
+      forgetPredictions();
       port.postMessage({
         type: 'failed',
         id: request.id,
