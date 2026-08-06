@@ -2,7 +2,16 @@ import { useEffect, useMemo, useState } from 'react';
 import { encodeFunctionData, formatUnits, parseUnits, type Hex } from 'viem';
 import type { Session } from '@/App';
 import { DEX, TOKENS, explorerTx } from '@/lib/config';
-import { accountAbi, erc20Abi, nextNonce, quote, routerAbi, submit } from '@/lib/flare';
+import {
+  accountAbi,
+  erc20Abi,
+  nextNonce,
+  quote,
+  readBalances,
+  routerAbi,
+  submit,
+  type Balance,
+} from '@/lib/flare';
 import { PURPOSE, batchHash, signAuthorization } from '@/lib/mina';
 
 /** Slippage the user tolerates, in basis points. */
@@ -22,6 +31,27 @@ export function Swap({ session }: { session: Session }) {
   const [status, setStatus] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<Hex | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [balances, setBalances] = useState<Balance[] | null>(null);
+
+  /**
+   * Balances for the account being swapped from, refreshed after every swap.
+   *
+   * A quote says what the pool would give; it says nothing about whether the
+   * account holds the input at all. Without this the first sign of an empty
+   * balance is a revert, after the signature.
+   */
+  useEffect(() => {
+    let live = true;
+    readBalances(session.account)
+      .then((b) => live && setBalances(b))
+      .catch(() => live && setBalances(null));
+    return () => {
+      live = false;
+    };
+  }, [session.account, txHash]);
+
+  const balanceOf = (symbol: string) =>
+    balances?.find((b) => b.token.symbol === symbol) ?? null;
 
   const from = useMemo(() => TOKENS.find((t) => t.symbol === fromSymbol)!, [fromSymbol]);
   const to = useMemo(() => TOKENS.find((t) => t.symbol === toSymbol)!, [toSymbol]);
@@ -50,6 +80,9 @@ export function Swap({ session }: { session: Session }) {
   }, [amountIn, from.address, to.address]);
 
   const minOut = out === null ? null : (out * (10_000n - SLIPPAGE_BPS)) / 10_000n;
+
+  const fromBalance = balanceOf(fromSymbol);
+  const insufficient = fromBalance !== null && amountIn > fromBalance.raw;
 
   async function doSwap() {
     setError(null);
@@ -159,6 +192,9 @@ export function Swap({ session }: { session: Session }) {
                 <option key={t.symbol}>{t.symbol}</option>
               ))}
             </select>
+            <span className="muted small">
+              Balance {balances === null ? '…' : (balanceOf(fromSymbol)?.formatted ?? '0')}
+            </span>
           </div>
           <div className="field">
             <label>To</label>
@@ -167,6 +203,9 @@ export function Swap({ session }: { session: Session }) {
                 <option key={t.symbol}>{t.symbol}</option>
               ))}
             </select>
+            <span className="muted small">
+              Balance {balances === null ? '…' : (balanceOf(toSymbol)?.formatted ?? '0')}
+            </span>
           </div>
         </div>
 
@@ -193,10 +232,10 @@ export function Swap({ session }: { session: Session }) {
         <button
           className="primary"
           style={{ marginTop: 14 }}
-          disabled={out === null || amountIn === 0n}
+          disabled={out === null || amountIn === 0n || insufficient}
           onClick={doSwap}
         >
-          Sign with Mina and swap
+          {insufficient ? `Not enough ${fromSymbol}` : 'Sign with Mina and swap'}
         </button>
 
         {status && <p className="status ok">{status}</p>}
