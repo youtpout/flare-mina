@@ -126,26 +126,71 @@ export async function nextNonce(x: bigint, isOdd: boolean): Promise<bigint> {
   return BigInt(n as bigint);
 }
 
-/** Quote a swap through BlazeSwap. Returns null when the pair has no route. */
-export async function quote(
+export type Route = {
+  /** Token addresses the swap hops through, input first, output last. */
+  path: Address[];
+  amountOut: bigint;
+};
+
+/**
+ * The tokens a two-hop route may pass through.
+ *
+ * Every listed token, in practice: the set is small enough that filtering it
+ * would only risk missing the pair that happens to hold the liquidity. FMINA,
+ * for instance, has pools against WC2FLR and USD₮0 and against nothing else, so
+ * every other destination needs a hop.
+ */
+const HOPS: Address[] = TOKENS.map((t) => t.address);
+
+/**
+ * Best route for a swap, direct or through one intermediate token.
+ *
+ * Candidates are quoted in a single multicall rather than one call each: the
+ * router prices them independently, so asking sequentially would multiply the
+ * latency by the number of candidates for no better answer.
+ *
+ * Two hops is the limit on purpose. Three would roughly square the candidate
+ * count for a gain that this many tokens cannot produce, and every extra hop is
+ * another pool taking a fee and another chance to move against the trade.
+ */
+export async function bestRoute(
   tokenIn: Address,
   tokenOut: Address,
   amountIn: bigint,
-): Promise<bigint | null> {
-  if (amountIn === 0n) return 0n;
-  try {
-    const amounts = (await publicClient.readContract({
+): Promise<Route | null> {
+  if (amountIn === 0n) return { path: [tokenIn, tokenOut], amountOut: 0n };
+  if (tokenIn.toLowerCase() === tokenOut.toLowerCase()) return null;
+
+  const candidates: Address[][] = [[tokenIn, tokenOut]];
+  for (const mid of HOPS) {
+    const m = mid.toLowerCase();
+    if (m === tokenIn.toLowerCase() || m === tokenOut.toLowerCase()) continue;
+    candidates.push([tokenIn, mid, tokenOut]);
+  }
+
+  const results = await publicClient.multicall({
+    contracts: candidates.map((path) => ({
       address: DEX.router,
       abi: routerAbi,
-      functionName: 'getAmountsOut',
-      args: [amountIn, [tokenIn, tokenOut]],
-    })) as bigint[];
-    return amounts[amounts.length - 1] ?? null;
-  } catch {
-    // No pair, or no liquidity. Returning null lets the UI say so plainly
-    // rather than showing a zero that looks like a real quote.
-    return null;
-  }
+      functionName: 'getAmountsOut' as const,
+      args: [amountIn, path] as const,
+    })),
+    // A missing pair reverts, which is an answer rather than a failure.
+    allowFailure: true,
+  });
+
+  let best: Route | null = null;
+  results.forEach((r, i) => {
+    if (r.status !== 'success') return;
+    const amounts = r.result as readonly bigint[];
+    const amountOut = amounts[amounts.length - 1];
+    if (amountOut === undefined || amountOut === 0n) return;
+    if (best === null || amountOut > best.amountOut) {
+      best = { path: candidates[i]!, amountOut };
+    }
+  });
+
+  return best;
 }
 
 /**

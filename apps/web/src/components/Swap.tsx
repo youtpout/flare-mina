@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { encodeFunctionData, formatUnits, parseUnits, type Hex } from 'viem';
 import type { Session } from '@/App';
 import { DEX, TOKENS, explorerTx } from '@/lib/config';
+import type { Route } from '@/lib/flare';
 import {
   accountAbi,
   erc20Abi,
   nextNonce,
-  quote,
+  bestRoute,
   readBalances,
   routerAbi,
   submit,
@@ -26,7 +27,7 @@ export function Swap({ session }: { session: Session }) {
   const [fromSymbol, setFromSymbol] = useState('USD₮0');
   const [toSymbol, setToSymbol] = useState('FXRP');
   const [amount, setAmount] = useState('1');
-  const [out, setOut] = useState<bigint | null>(null);
+  const [route, setRoute] = useState<Route | null>(null);
   const [quoting, setQuoting] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<Hex | null>(null);
@@ -66,18 +67,28 @@ export function Swap({ session }: { session: Session }) {
 
   useEffect(() => {
     let live = true;
-    setOut(null);
+    setRoute(null);
     if (amountIn === 0n || from.address === to.address) return;
 
     setQuoting(true);
-    quote(from.address, to.address, amountIn)
-      .then((q) => live && setOut(q))
+    bestRoute(from.address, to.address, amountIn)
+      .then((r) => live && setRoute(r))
       .finally(() => live && setQuoting(false));
 
     return () => {
       live = false;
     };
   }, [amountIn, from.address, to.address]);
+
+  const out = route?.amountOut ?? null;
+
+  /** Symbols along the route, so the user can see it is not always direct. */
+  const hops =
+    route === null
+      ? null
+      : route.path
+          .map((a) => TOKENS.find((t) => t.address.toLowerCase() === a.toLowerCase())?.symbol ?? '?')
+          .join(' → ');
 
   const minOut = out === null ? null : (out * (10_000n - SLIPPAGE_BPS)) / 10_000n;
 
@@ -101,7 +112,7 @@ export function Swap({ session }: { session: Session }) {
     setError(null);
     setTxHash(null);
     try {
-      if (out === null || minOut === null) throw new Error('no quote available');
+      if (route === null || minOut === null) throw new Error('no quote available');
 
       setStatus('Building the batch…');
       const deadline = BigInt(Math.floor(Date.now() / 1000)) + DEADLINE_SECONDS;
@@ -124,7 +135,9 @@ export function Swap({ session }: { session: Session }) {
           data: encodeFunctionData({
             abi: routerAbi,
             functionName: 'swapExactTokensForTokens',
-            args: [amountIn, minOut, [from.address, to.address], session.account, deadline],
+            // The routed path, not a direct pair: the two must be the same
+            // path the quote was priced on, or minOut is against the wrong one.
+            args: [amountIn, minOut, route.path, session.account, deadline],
           }),
         },
       ];
@@ -282,7 +295,7 @@ export function Swap({ session }: { session: Session }) {
           </div>
           <div className="row">
             <span className="muted small">Route</span>
-            <span className="small">BlazeSwap</span>
+            <span className="small">{hops === null ? 'BlazeSwap' : `${hops} · BlazeSwap`}</span>
           </div>
         </div>
 
