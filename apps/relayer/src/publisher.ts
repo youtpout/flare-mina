@@ -22,8 +22,16 @@ const RPC = process.env.COSTON2_RPC_URL ?? 'https://coston2-api.flare.network/ex
 const BRIDGE = process.env.FLARE_BRIDGE_ADDRESS as `0x${string}` | undefined;
 const REGISTRY = '0xaD67FE66660Fb8dFE9d6b1b4240d8650e30F6019' as const;
 
-/** How often to check whether Flare's chain has moved. */
-const POLL_MS = Number(process.env.PUBLISH_INTERVAL_MS ?? 60_000);
+/**
+ * How often to publish, when there is anything to publish.
+ *
+ * Five minutes. A publication costs an FDC attestation request and several
+ * ECDSA proofs, and it covers every withdrawal accumulated since the last one,
+ * so a shorter cadence buys latency for one user and pays for it in requests
+ * the network serves. Nothing is emitted when the chain has not moved, so a
+ * quiet bridge costs nothing.
+ */
+const POLL_MS = Number(process.env.PUBLISH_INTERVAL_MS ?? 5 * 60_000);
 
 /** The public RPC rejects wider `getLogs` windows. */
 const CHUNK = 30n;
@@ -45,8 +53,42 @@ const relayedAbi = parseAbi([
 const client = createPublicClient({ chain: COSTON2, transport: http(RPC) });
 
 let relayAddress: `0x${string}` | undefined;
-/** Last state pushed, so an unchanged chain costs no proving. */
-let published: bigint | undefined;
+
+const MINA_GRAPHQL =
+  process.env.MINA_DEVNET_GRAPHQL ?? 'https://api.minascan.io/node/devnet/v1/graphql';
+const ESCROW = process.env.MINA_BRIDGE_ACCOUNT;
+
+/**
+ * The state the escrow has actually accepted, read from Mina.
+ *
+ * Tracked on chain rather than in memory: a restart would otherwise forget what
+ * it had published and send a second transaction for the same state, and the
+ * two collide on the fee payer's nonce so one is simply lost.
+ *
+ * `zkappState[3]` is `flareActionState` — see the field order in
+ * MinaPortBridge.ts. Returns null when the account cannot be read, which is
+ * treated as "do not publish" rather than "publish again".
+ */
+async function acceptedActionState(): Promise<bigint | null> {
+  if (ESCROW === undefined) return null;
+  try {
+    const res = await fetch(MINA_GRAPHQL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        query: `{ account(publicKey: "${ESCROW}") { zkappState } }`,
+      }),
+    });
+    const body = (await res.json()) as { data?: { account?: { zkappState?: string[] } } };
+    const state = body.data?.account?.zkappState?.[3];
+    return state === undefined ? null : BigInt(state);
+  } catch {
+    return null;
+  }
+}
+
+/** Last state we sent, so an in-flight publication is not sent twice. */
+let inFlight: bigint | undefined;
 
 async function relay(): Promise<`0x${string}`> {
   relayAddress ??= await client.readContract({
@@ -93,9 +135,14 @@ async function tick(): Promise<void> {
     functionName: 'withdrawalActionState',
   });
 
-  // Nothing burned since the last push; proving again would cost ECDSA for a
-  // value Mina already holds.
-  if (actionState === published || actionState === 0n) return;
+  if (actionState === 0n) return;
+
+  // Already accepted on Mina, or already sent and waiting for inclusion —
+  // devnet takes minutes, and a second send would only fight the first for the
+  // fee payer's nonce.
+  const accepted = await acceptedActionState();
+  if (accepted === null || accepted === actionState) return;
+  if (inFlight === actionState) return;
 
   const calls = await recentRelayCalls();
   if (calls.length === 0) {
@@ -140,9 +187,14 @@ async function tick(): Promise<void> {
     return;
   }
 
-  const hash = await publishActionState({ actionState, calls, keys });
-  published = actionState;
-  console.log(`published Flare action state ${actionState} -> ${hash}`);
+  inFlight = actionState;
+  try {
+    const hash = await publishActionState({ actionState, calls, keys });
+    console.log(`published Flare action state ${actionState} -> ${hash}`);
+  } catch (e) {
+    inFlight = undefined;
+    throw e;
+  }
 }
 
 export function startPublisher(): { stop(): void } {
