@@ -144,10 +144,36 @@ async function tick(): Promise<void> {
   if (accepted === null || accepted === actionState) return;
   if (inFlight === actionState) return;
 
+  const inputs = await policyProofInputs();
+  if (inputs === null) return;
+  const { calls, keys } = inputs;
+
+  inFlight = actionState;
+  try {
+    const hash = await publishActionState({ actionState, calls, keys });
+    console.log(`published Flare action state ${actionState} -> ${hash}`);
+  } catch (e) {
+    inFlight = undefined;
+    throw e;
+  }
+}
+
+/**
+ * Everything a signing-policy proof needs: the relay calls that carry the
+ * signatures, and the validator keys recovered from them.
+ *
+ * Shared with the asset rail, which proves against the same validator set. Null
+ * when the window holds nothing usable or the known keys fall short of the
+ * threshold — refusing beats publishing something weaker than the network
+ * requires.
+ */
+export async function policyProofInputs(): Promise<
+  { calls: RelayCall[]; keys: PolicyKey[] } | null
+> {
   const calls = await recentRelayCalls();
   if (calls.length === 0) {
     console.warn('publisher: no relay transactions in the lookback window');
-    return;
+    return null;
   }
 
   // Newest epoch present, in case the window straddles a boundary.
@@ -165,7 +191,7 @@ async function tick(): Promise<void> {
   });
   if (signingPolicyHash(policy).toLowerCase() !== onChain.toLowerCase()) {
     console.warn(`publisher: policy for epoch ${policy.rewardEpochId} does not match on chain`);
-    return;
+    return null;
   }
 
   // Fresh recoveries from this window, plus everything ever seen. Coverage only
@@ -184,17 +210,10 @@ async function tick(): Promise<void> {
     console.warn(
       `publisher: known keys carry ${knownWeight(keys)} of ${policy.threshold} required`,
     );
-    return;
+    return null;
   }
 
-  inFlight = actionState;
-  try {
-    const hash = await publishActionState({ actionState, calls, keys });
-    console.log(`published Flare action state ${actionState} -> ${hash}`);
-  } catch (e) {
-    inFlight = undefined;
-    throw e;
-  }
+  return { calls, keys };
 }
 
 export function startPublisher(): { stop(): void } {

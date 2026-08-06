@@ -129,3 +129,45 @@ UPDATE withdrawals SET status = 'seen' WHERE status = 'pending';
 ALTER TABLE withdrawals ADD CONSTRAINT withdrawals_status_check
   CHECK (status IN ('seen','published','releasing','released','failed'));
 ALTER TABLE withdrawals ALTER COLUMN status SET DEFAULT 'seen';
+
+-- The Flare -> Mina asset rail.
+--
+-- A lock on Flare has already happened by the time a row appears here: the
+-- user's tokens are in the vault and the event carries the recipient and the
+-- amount. This table only tracks which locks have been minted on Mina.
+--
+-- Keyed by (token, claim_id) rather than a global id: chains are per token, so
+-- claim ids restart at zero for each asset and only the pair is unique.
+CREATE TABLE IF NOT EXISTS locks (
+  id                BIGSERIAL PRIMARY KEY,
+
+  -- Flare token address, lowercase. Names both the chain and the Mina port.
+  token             TEXT        NOT NULL,
+  -- Position in that token's chain. The port requires claims in this order.
+  claim_id          NUMERIC(78) NOT NULL,
+
+  -- Mina account, base58, decoded from the packed form in the event.
+  recipient         TEXT        NOT NULL,
+  -- In the token's own base units. Decimals are never converted, so this is
+  -- the same integer on both chains.
+  amount            NUMERIC(78) NOT NULL CHECK (amount > 0),
+
+  flare_tx_hash     TEXT        NOT NULL,
+  mina_tx_hash      TEXT,
+
+  status            TEXT        NOT NULL DEFAULT 'seen'
+                    CHECK (status IN ('seen','published','minting','minted','failed')),
+  reason            TEXT,
+
+  -- The chain head this lock produced, from its own event. A lock is mintable
+  -- once its port has accepted a head at or past this one.
+  new_lock_state    NUMERIC(78),
+
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  UNIQUE (token, claim_id)
+);
+
+CREATE INDEX IF NOT EXISTS locks_status_idx ON locks (status);
+CREATE INDEX IF NOT EXISTS locks_recipient_idx ON locks (recipient);

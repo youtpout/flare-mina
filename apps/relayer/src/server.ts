@@ -28,6 +28,7 @@ import { networkSnapshot } from './network.js';
 import { startWatcher } from './watcher.js';
 import { startPublisher } from './publisher.js';
 import { startWithdrawals } from './withdrawals.js';
+import { startAssets } from './assets.js';
 
 /**
  * Attestor API.
@@ -276,7 +277,7 @@ app.get('/deposits/:minaSender', async (req, res) => {
  * policy, and a global activity feed. Read-only and cheap enough to poll.
  */
 app.get('/network', async (req, res) => {
-  const limit = Math.min(Number(req.query.limit ?? 25) || 25, 100);
+  const limit = Math.min(Number(req.query.limit ?? 60) || 60, 200);
   try {
     res.json(await networkSnapshot(limit));
   } catch (e) {
@@ -310,6 +311,9 @@ async function main() {
   // Before withdrawals: a release cannot land ahead of the state it proves against.
   const publisher = startPublisher();
   const withdrawals = startWithdrawals();
+  // The asset rail. Silently inert unless FLARE_ASSET_VAULT_ADDRESS and
+  // MINA_ASSET_PORTS are both set, so a MINA-only deployment pays nothing.
+  const assets = startAssets();
 
   const server = app.listen(PORT, () => {
     console.log(`attestor API listening on :${PORT}`);
@@ -320,6 +324,7 @@ async function main() {
     watcher.stop();
     publisher.stop();
     withdrawals.stop();
+    assets.stop();
     server.close();
     await pool.end();
     process.exit(0);

@@ -96,6 +96,10 @@ async function main() {
   console.log('  token :', tokenKey.toBase58());
   console.log('  port  :', portKey.toBase58(), '\n');
 
+  // Set before compiling, as the e2e test does: the token resolves its admin
+  // class through this, and the deploy transaction reads it.
+  FungibleToken.AdminContract = AssetPort as never;
+
   console.log('compiling…');
   // The port verifies both proof systems, so both must be compiled before it.
   await LockChain.compile();
@@ -108,11 +112,9 @@ async function main() {
   const token = new FungibleToken(tokenKey.toPublicKey());
   const port = new AssetPort(portKey.toPublicKey());
 
-  // The token resolves its admin by address, so the port has to be part of the
-  // same transaction — an undeployed account yields an empty PublicKey that is
-  // not a curve point.
-  FungibleToken.AdminContract = AssetPort as never;
-
+  // The token resolves its admin by address, so the port has to be deployed in
+  // the same transaction — an undeployed account yields an empty PublicKey that
+  // is not a curve point.
   console.log('building…');
   const tx = await Mina.transaction({ sender: deployer, fee: FEE }, async () => {
     AccountUpdate.fundNewAccount(deployer, 3);

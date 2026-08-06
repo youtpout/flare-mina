@@ -123,7 +123,51 @@ type PublishRequest = {
   keys: unknown[];
 };
 
-type Request = BuildRequest | ReleaseRequest | PublishRequest;
+/**
+ * Push one token's Flare lock-chain head to its Mina port.
+ *
+ * Same shape as {PublishRequest} and the same proof, against a different
+ * contract: a port holds one asset, so each has its own chain and its own head.
+ */
+type PublishLockRequest = {
+  kind: 'publishLock';
+  id: number;
+  /** The port's zkApp address. */
+  port: string;
+  lockState: string;
+  calls: unknown[];
+  keys: unknown[];
+};
+
+/**
+ * Mint a locked asset on Mina: authorise the claim, then mint it.
+ *
+ * Two transactions, and they cannot be combined — a second account update on
+ * the same zkApp does not observe state an earlier one wrote in the same
+ * transaction, so `canMint` would read an empty authorisation and refuse. See
+ * the note on `AssetPort`.
+ *
+ * `tail` is every lock Flare committed to *after* this one, up to the attested
+ * head. No fabricated record has a continuation that reaches it, which is what
+ * stops the relayer inventing, redirecting or resizing a mint.
+ */
+type MintRequest = {
+  kind: 'mint';
+  id: number;
+  port: string;
+  token: string;
+  claimId: string;
+  recipient: string;
+  amount: string;
+  tail: Array<{ claimId: string; recipient: string; amount: string }>;
+};
+
+type Request =
+  | BuildRequest
+  | ReleaseRequest
+  | PublishRequest
+  | PublishLockRequest
+  | MintRequest;
 
 type Ready = { type: 'ready'; compileMs: number };
 type Built = { type: 'built'; id: number; transaction: string; provingMs: number };
@@ -157,6 +201,15 @@ const { buildPolicyTree, toSecp256k1 } = await import(
 const { MinaPortBridge, WithdrawalRecord, flareRecipientField } = await import(
   '@minaport/mina-contracts/dist/src/MinaPortBridge.js'
 );
+const { LockChain, LockRecord, applyLock } = await import(
+  '@minaport/mina-contracts/dist/src/LockChain.js'
+);
+const { AssetPort } = await import('@minaport/mina-contracts/dist/src/AssetPort.js');
+const { FungibleToken } = await import('mina-fungible-token');
+
+// The token resolves its admin through this, and every wrapped asset in this
+// deployment is administered by an `AssetPort`.
+FungibleToken.AdminContract = AssetPort as never;
 
 const bridgeAddress = process.env.MINA_BRIDGE_ACCOUNT;
 if (!bridgeAddress) throw new Error('MINA_BRIDGE_ACCOUNT is not set');
@@ -181,6 +234,13 @@ const compileStart = Date.now();
 await WithdrawalChain.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 await SigningPolicyFold.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 await MinaPortBridge.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
+// The asset rail. Skipped entirely when no port is configured, because these
+// three add ~30s to a cold start and a MINA-only deployment never uses them.
+if (process.env.MINA_ASSET_PORTS) {
+  await LockChain.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
+  await AssetPort.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
+  await FungibleToken.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
+}
 port.postMessage({ type: 'ready', compileMs: Date.now() - compileStart } satisfies Ready);
 
 const bridge = new MinaPortBridge(PublicKey.fromBase58(bridgeAddress));
@@ -222,27 +282,17 @@ async function proveTail(from: Field, tail: ReleaseRequest['tail']) {
 }
 
 /**
- * Prove enough validator weight signed a Flare round, then publish the state.
+ * Prove that enough validator weight signed a Flare round.
  *
- * The signed digest is not yet bound to `actionState` — that needs the FDC
- * attestation and MerkleInclusion — so the attestor still co-signs. What the
- * proof does establish is that real policy members really signed.
+ * Shared by both rails: the MINA escrow and every asset port accept the same
+ * proof, because "this is the live validator set and it signed" is one question
+ * regardless of which chain state is being carried.
  */
-async function handlePublish(request: PublishRequest) {
-  const attestorKey = process.env.MINA_WITHDRAWAL_ATTESTOR_PRIVATE_KEY;
-  const feePayerKey = process.env.MINA_DEVNET_PRIVATE_KEY;
-  if (!attestorKey || !feePayerKey) {
-    throw new Error('MINA_WITHDRAWAL_ATTESTOR_PRIVATE_KEY and MINA_DEVNET_PRIVATE_KEY are required');
-  }
-
-  const attestor = PrivateKey.fromBase58(attestorKey);
-  const feePayer = PrivateKey.fromBase58(feePayerKey);
-  const sender = feePayer.toPublicKey();
-
-  const calls = request.calls as RelayCall[];
+async function proveSigningPolicy(rawCalls: unknown[], rawKeys: unknown[]) {
+  const calls = rawCalls as RelayCall[];
   // Keys arrive resolved and address-checked; recovery and the database live on
   // the main thread, so this one only proves.
-  const known = request.keys as PolicyKey[];
+  const known = rawKeys as PolicyKey[];
   const tree = buildPolicyTree(known);
 
   // The round with the most usable signatures, so one message carries the most
@@ -277,6 +327,29 @@ async function handlePublish(request: PublishRequest) {
     merged = merged === undefined ? proof : (await SigningPolicyFold.merge(merged, proof)).proof;
   }
 
+  return { merged: merged!, tree };
+}
+
+/**
+ * Prove enough validator weight signed a Flare round, then publish the state.
+ *
+ * The signed digest is not yet bound to `actionState` — that needs the FDC
+ * attestation and MerkleInclusion — so the attestor still co-signs. What the
+ * proof does establish is that real policy members really signed.
+ */
+async function handlePublish(request: PublishRequest) {
+  const attestorKey = process.env.MINA_WITHDRAWAL_ATTESTOR_PRIVATE_KEY;
+  const feePayerKey = process.env.MINA_DEVNET_PRIVATE_KEY;
+  if (!attestorKey || !feePayerKey) {
+    throw new Error('MINA_WITHDRAWAL_ATTESTOR_PRIVATE_KEY and MINA_DEVNET_PRIVATE_KEY are required');
+  }
+
+  const attestor = PrivateKey.fromBase58(attestorKey);
+  const feePayer = PrivateKey.fromBase58(feePayerKey);
+  const sender = feePayer.toPublicKey();
+
+  const { merged, tree } = await proveSigningPolicy(request.calls, request.keys);
+
   await fetchAccount({ publicKey: sender });
   await fetchAccount({ publicKey: bridge.address });
   await fetchAccount({ publicKey: attestor.toPublicKey() });
@@ -308,7 +381,7 @@ async function handlePublish(request: PublishRequest) {
   const tx = await Mina.transaction(
     { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
     async () => {
-      await bridge.publishFlareActionState(Field(request.actionState), merged!);
+      await bridge.publishFlareActionState(Field(request.actionState), merged);
     },
   );
   await tx.prove();
@@ -358,6 +431,7 @@ function claimNonce(sender: PublicKey): number {
 function forgetPredictions(): void {
   predictedCursor = undefined;
   predictedNonce = undefined;
+  predictedLockCursor.clear();
 }
 
 async function handleRelease(request: ReleaseRequest) {
@@ -394,10 +468,191 @@ async function handleRelease(request: ReleaseRequest) {
   return pending.hash;
 }
 
+/**
+ * Prove the stretch of a token's lock chain that follows the claimed lock.
+ *
+ * Same shape as `proveTail`, against a different program. Kept separate rather
+ * than generalised: the two records differ in their fields and their domain, and
+ * a shared helper would have to erase exactly the distinction that stops one
+ * chain's proof settling the other.
+ */
+async function proveLockTail(from: unknown, tail: MintRequest['tail']) {
+  const toLock = (l: MintRequest['tail'][number]) =>
+    new LockRecord({
+      claimId: UInt64.from(BigInt(l.claimId)),
+      recipient: PublicKey.fromBase58(l.recipient),
+      amount: UInt64.from(BigInt(l.amount)),
+    });
+
+  if (tail.length === 0) return (await LockChain.empty(from as never)).proof;
+
+  const states: unknown[] = [from];
+  const records = tail.map(toLock);
+  for (const record of records) {
+    states.push(applyLock(states[states.length - 1] as never, record));
+  }
+
+  const links = await Promise.all(
+    records.map(async (record, i) => (await LockChain.link(states[i] as never, record)).proof),
+  );
+
+  let segment = links[0]!;
+  for (let i = 1; i < links.length; i++) {
+    segment = (await LockChain.merge(segment, links[i]!)).proof;
+  }
+  return segment;
+}
+
+/** Carry one token's Flare lock head to its port, rotating the policy if stale. */
+async function handlePublishLock(request: PublishLockRequest) {
+  const feePayerKey = process.env.MINA_DEVNET_PRIVATE_KEY;
+  if (!feePayerKey) throw new Error('MINA_DEVNET_PRIVATE_KEY is required');
+
+  const feePayer = PrivateKey.fromBase58(feePayerKey);
+  const sender = feePayer.toPublicKey();
+  // The port's admin co-signs, standing in for the FDC binding exactly as the
+  // escrow's attestor does. Defaults to the withdrawal attestor so one key runs
+  // both rails in this deployment.
+  const admin = PrivateKey.fromBase58(
+    process.env.MINA_LOCK_ADMIN_PRIVATE_KEY ??
+      process.env.MINA_WITHDRAWAL_ATTESTOR_PRIVATE_KEY ??
+      feePayerKey,
+  );
+
+  const { merged, tree } = await proveSigningPolicy(request.calls, request.keys);
+  const assetPort = new AssetPort(PublicKey.fromBase58(request.port));
+
+  await fetchAccount({ publicKey: sender });
+  await fetchAccount({ publicKey: assetPort.address });
+  await fetchAccount({ publicKey: admin.toPublicKey() });
+
+  if (assetPort.signingPolicyRoot.get().toString() !== tree.root.toString()) {
+    const rotate = await Mina.transaction(
+      { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
+      async () => {
+        await assetPort.setSigningPolicyRoot(tree.root);
+      },
+    );
+    await rotate.prove();
+    const rotated = await rotate.sign([feePayer, admin]).send();
+    console.log(`rotated ${request.port} policy root -> ${rotated.hash}`);
+    // Waited on: the new root becomes a precondition of the publication below,
+    // and o1js builds that precondition from the account it has read.
+    await rotated.wait();
+    await fetchAccount({ publicKey: assetPort.address });
+  }
+
+  const tx = await Mina.transaction(
+    { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
+    async () => {
+      await assetPort.publishFlareLockState(Field(request.lockState), merged);
+    },
+  );
+  await tx.prove();
+  const pending = await tx.sign([feePayer, admin]).send();
+  return pending.hash;
+}
+
+/**
+ * Where each port's cursor will be once everything already sent is included.
+ *
+ * Per port, unlike the escrow's single cursor: chains are per token, so two
+ * ports advance independently and one prediction would be wrong for the other.
+ */
+const predictedLockCursor = new Map<string, unknown>();
+
+async function handleMint(request: MintRequest) {
+  const feePayerKey = process.env.MINA_DEVNET_PRIVATE_KEY;
+  if (!feePayerKey) throw new Error('MINA_DEVNET_PRIVATE_KEY is required');
+
+  const feePayer = PrivateKey.fromBase58(feePayerKey);
+  const sender = feePayer.toPublicKey();
+
+  const assetPort = new AssetPort(PublicKey.fromBase58(request.port));
+  const token = new FungibleToken(PublicKey.fromBase58(request.token));
+  const recipient = PublicKey.fromBase58(request.recipient);
+  const amount = UInt64.from(BigInt(request.amount));
+
+  await fetchAccount({ publicKey: sender });
+  await fetchAccount({ publicKey: assetPort.address });
+  await fetchAccount({ publicKey: token.address });
+
+  const record = new LockRecord({
+    claimId: UInt64.from(BigInt(request.claimId)),
+    recipient,
+    amount,
+  });
+
+  const processed = predictedLockCursor.get(request.port) ?? assetPort.processedLockState.get();
+  const next = applyLock(processed as never, record);
+  const tail = await proveLockTail(next, request.tail);
+
+  const authorize = await Mina.transaction(
+    { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
+    async () => {
+      await assetPort.authorizeMint(record, tail);
+    },
+  );
+  await authorize.prove();
+  const armed = await authorize.sign([feePayer]).send();
+  predictedLockCursor.set(request.port, next);
+
+  // Waited on: `canMint` reads `mintAuthorization` as a precondition, and an
+  // account still showing the old value would build a mint that cannot apply.
+  await armed.wait();
+  await fetchAccount({ publicKey: assetPort.address });
+
+  // The recipient's token account may not exist. Funding one that already
+  // exists is refused, so ask the chain rather than guessing.
+  const existing = await fetchAccount({ publicKey: recipient, tokenId: token.deriveTokenId() });
+  const isNew = existing.account === undefined;
+
+  const mint = await Mina.transaction(
+    { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
+    async () => {
+      if (isNew) AccountUpdate.fundNewAccount(sender, 1);
+      await token.mint(recipient, amount);
+    },
+  );
+  await mint.prove();
+  const minted = await mint.sign([feePayer]).send();
+  return minted.hash;
+}
+
 port.on('message', async (request: Request) => {
   if (request.kind === 'publish') {
     try {
       port.postMessage({ type: 'released', id: request.id, hash: await handlePublish(request) });
+    } catch (error) {
+      forgetPredictions();
+      port.postMessage({
+        type: 'failed',
+        id: request.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
+  if (request.kind === 'publishLock') {
+    try {
+      port.postMessage({
+        type: 'released',
+        id: request.id,
+        hash: await handlePublishLock(request),
+      });
+    } catch (error) {
+      forgetPredictions();
+      port.postMessage({
+        type: 'failed',
+        id: request.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
+  if (request.kind === 'mint') {
+    try {
+      port.postMessage({ type: 'released', id: request.id, hash: await handleMint(request) });
     } catch (error) {
       forgetPredictions();
       port.postMessage({

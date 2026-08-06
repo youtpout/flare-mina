@@ -200,3 +200,75 @@ export async function releaseWithdrawal(request: {
   queue = result.catch(() => undefined);
   return result;
 }
+
+/**
+ * Push one token's Flare lock-chain head to its Mina port.
+ *
+ * Queued on the same worker as everything else: proving saturates its cores,
+ * and a mint that lands before its head would fail anyway.
+ */
+export async function publishLockState(request: {
+  port: string;
+  lockState: bigint;
+  calls: unknown[];
+  keys: unknown[];
+}): Promise<string> {
+  await start();
+
+  const run = async (): Promise<string> => {
+    const id = nextId++;
+    return new Promise<string>((resolve, reject) => {
+      pending.set(id, { resolve: (built) => resolve(built.transaction), reject });
+      worker?.postMessage({
+        kind: 'publishLock',
+        id,
+        port: request.port,
+        lockState: request.lockState.toString(),
+        calls: request.calls,
+        keys: request.keys,
+      });
+    });
+  };
+
+  const result = queue.then(run, run);
+  queue = result.catch(() => undefined);
+  return result;
+}
+
+/** Mint a locked asset on Mina. Returns the mint transaction's hash. */
+export async function mintLock(request: {
+  port: string;
+  token: string;
+  claimId: bigint;
+  recipient: string;
+  amount: bigint;
+  /** Locks Flare committed to after this one, in order. */
+  tail: Array<{ claimId: bigint; recipient: string; amount: bigint }>;
+}): Promise<string> {
+  await start();
+
+  const run = async (): Promise<string> => {
+    const id = nextId++;
+    return new Promise<string>((resolve, reject) => {
+      pending.set(id, { resolve: (built) => resolve(built.transaction), reject });
+      worker?.postMessage({
+        kind: 'mint',
+        id,
+        port: request.port,
+        token: request.token,
+        claimId: request.claimId.toString(),
+        recipient: request.recipient,
+        amount: request.amount.toString(),
+        tail: request.tail.map((l) => ({
+          claimId: l.claimId.toString(),
+          recipient: l.recipient,
+          amount: l.amount.toString(),
+        })),
+      });
+    });
+  };
+
+  const result = queue.then(run, run);
+  queue = result.catch(() => undefined);
+  return result;
+}

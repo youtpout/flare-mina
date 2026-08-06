@@ -166,11 +166,15 @@ export type ActivityRow = {
  * tab is about whether the bridge is moving, not about one user's funds.
  */
 async function activity(limit: number): Promise<ActivityRow[]> {
+  // 'aborted' rows are excluded: nothing went wrong with them, the user simply
+  // never signed, or they belong to a superseded deployment. Listing them as
+  // bridge activity would misrepresent both the volume and the failure rate.
   const { rows } = await pool.query<ActivityRow>(
     `SELECT 'deposit' AS kind, status, amount_nanomina AS "amountNanomina",
             recipient AS counterparty, flare_tx_hash AS "flareTxHash",
             mina_tx_hash AS "minaTxHash", updated_at AS at
        FROM deposits
+      WHERE status <> 'aborted'
      UNION ALL
      SELECT 'withdrawal' AS kind, status, amount_nanomina AS "amountNanomina",
             recipient AS counterparty, flare_tx_hash AS "flareTxHash",
@@ -183,7 +187,7 @@ async function activity(limit: number): Promise<ActivityRow[]> {
   return rows;
 }
 
-export async function networkSnapshot(limit = 25) {
+export async function networkSnapshot(limit = 60) {
   const [flare, mina, signingPolicy, rows] = await Promise.all([
     attempt(flareState),
     attempt(minaState),

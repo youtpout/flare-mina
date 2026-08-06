@@ -16,6 +16,9 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8787';
 /** Poll, rather than pushing. Both chains move in minutes, not seconds. */
 const REFRESH_MS = 20_000;
 
+/** Rows per page in the activity feed. */
+const PAGE_SIZE = 10;
+
 type Snapshot = {
   flare: {
     bridge: string;
@@ -77,6 +80,7 @@ function ago(iso: string): string {
 export function Network() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
 
   const load = useCallback(async () => {
     try {
@@ -112,6 +116,10 @@ export function Network() {
   if (snapshot === null) return <div className="panel muted small">Loading…</div>;
 
   const { flare, mina, policy, activity, inSync } = snapshot;
+  const pageCount = Math.max(1, Math.ceil(activity.length / PAGE_SIZE));
+  // A refresh can shorten the feed under a page the user is standing on.
+  const current = Math.min(page, pageCount - 1);
+  if (current !== page) setPage(current);
 
   return (
     <>
@@ -235,7 +243,7 @@ export function Network() {
             transaction on each chain.
           </p>
         ) : (
-          activity.map((row, i) => (
+          activity.slice(current * PAGE_SIZE, current * PAGE_SIZE + PAGE_SIZE).map((row, i) => (
             <div className="row" key={`${row.kind}-${row.flareTxHash ?? row.minaTxHash ?? i}`}>
               <span className="small">
                 <span className="tag" style={{ marginRight: 8 }}>
@@ -259,6 +267,29 @@ export function Network() {
               </span>
             </div>
           ))
+        )}
+
+        {pageCount > 1 && (
+          <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+            <span className="small muted" style={{ marginRight: 'auto' }}>
+              {current * PAGE_SIZE + 1}–{Math.min((current + 1) * PAGE_SIZE, activity.length)} of{' '}
+              {activity.length}
+            </span>
+            <button
+              className="ghost"
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={current === 0}
+            >
+              Previous
+            </button>
+            <button
+              className="ghost"
+              onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+              disabled={current >= pageCount - 1}
+            >
+              Next
+            </button>
+          </div>
         )}
       </div>
     </>

@@ -264,3 +264,103 @@ export async function knownValidatorKeys(): Promise<Map<string, string>> {
   );
   return new Map(rows.map((r) => [r.address.toLowerCase(), r.public_key]));
 }
+
+export type LockRow = {
+  id: string;
+  token: string;
+  claim_id: string;
+  recipient: string;
+  amount: string;
+  flare_tx_hash: string;
+  mina_tx_hash: string | null;
+  status: 'seen' | 'published' | 'minting' | 'minted' | 'failed';
+  reason: string | null;
+  new_lock_state: string | null;
+};
+
+/**
+ * Record a lock seen on Flare. Idempotent on (token, claim id), which the vault
+ * makes unique, so overlapping scan windows are free.
+ */
+export async function recordLock(input: {
+  token: string;
+  claimId: bigint;
+  recipient: string;
+  amount: bigint;
+  flareTxHash: string;
+  newLockState: bigint;
+}): Promise<void> {
+  await pool.query(
+    `INSERT INTO locks (token, claim_id, recipient, amount, flare_tx_hash, new_lock_state)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (token, claim_id) DO NOTHING`,
+    [
+      input.token.toLowerCase(),
+      input.claimId.toString(),
+      input.recipient,
+      input.amount.toString(),
+      input.flareTxHash,
+      input.newLockState.toString(),
+    ],
+  );
+}
+
+/**
+ * Mark every lock on one token covered by an accepted head.
+ *
+ * A head is a hash and cannot be compared for order, but the row whose own
+ * `new_lock_state` equals it is the last one it covers, and claim ids are
+ * monotonic within a token, so everything below is covered too.
+ */
+export async function markLocksPublished(token: string, acceptedState: bigint): Promise<number> {
+  const { rows } = await pool.query<{ claim_id: string }>(
+    `SELECT claim_id FROM locks WHERE token = $1 AND new_lock_state = $2`,
+    [token.toLowerCase(), acceptedState.toString()],
+  );
+  const upTo = rows[0]?.claim_id;
+  if (upTo === undefined) return 0;
+
+  const { rowCount } = await pool.query(
+    `UPDATE locks SET status = 'published', updated_at = now()
+      WHERE token = $1 AND status = 'seen' AND claim_id <= $2`,
+    [token.toLowerCase(), upTo],
+  );
+  return rowCount ?? 0;
+}
+
+/** Locks awaiting a mint, oldest claim first — the order the port demands. */
+export async function mintableLocks(token: string): Promise<LockRow[]> {
+  const { rows } = await pool.query<LockRow>(
+    `SELECT * FROM locks WHERE token = $1 AND status IN ('published','minting')
+      ORDER BY claim_id ASC LIMIT 20`,
+    [token.toLowerCase()],
+  );
+  return rows;
+}
+
+export async function markLockMinting(id: string): Promise<void> {
+  await pool.query(`UPDATE locks SET status = 'minting', updated_at = now() WHERE id = $1`, [id]);
+}
+
+export async function markLockMinted(id: string, minaTxHash: string): Promise<void> {
+  await pool.query(
+    `UPDATE locks SET status = 'minted', mina_tx_hash = $2, updated_at = now() WHERE id = $1`,
+    [id, minaTxHash],
+  );
+}
+
+export async function markLockFailed(id: string, reason: string): Promise<void> {
+  await pool.query(
+    `UPDATE locks SET status = 'failed', reason = $2, updated_at = now() WHERE id = $1`,
+    [id, reason],
+  );
+}
+
+/** Locks headed for one Mina account, for the UI. */
+export async function locksFor(recipient: string): Promise<LockRow[]> {
+  const { rows } = await pool.query<LockRow>(
+    `SELECT * FROM locks WHERE recipient = $1 ORDER BY id DESC LIMIT 50`,
+    [recipient],
+  );
+  return rows;
+}
