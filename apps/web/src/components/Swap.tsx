@@ -84,6 +84,19 @@ export function Swap({ session }: { session: Session }) {
   const fromBalance = balanceOf(fromSymbol);
   const insufficient = fromBalance !== null && amountIn > fromBalance.raw;
 
+  /** Swap the two sides. The amount stays put: it is denominated in whatever
+   *  sits on top, and re-quoting is cheap. */
+  function flip() {
+    setFromSymbol(toSymbol);
+    setToSymbol(fromSymbol);
+  }
+
+  /** Unit price, which is what tells a user whether the quote is sane. */
+  const rate =
+    out === null || amountIn === 0n
+      ? null
+      : formatUnits((out * 10n ** BigInt(from.decimals)) / amountIn, to.decimals);
+
   async function doSwap() {
     setError(null);
     setTxHash(null);
@@ -184,54 +197,98 @@ export function Swap({ session }: { session: Session }) {
       <div className="panel">
         <h2>Swap</h2>
 
-        <div className="grid2">
-          <div className="field">
-            <label>From</label>
-            <select value={fromSymbol} onChange={(e) => setFromSymbol(e.target.value)}>
-              {TOKENS.map((t) => (
-                <option key={t.symbol}>{t.symbol}</option>
-              ))}
-            </select>
-            <span className="muted small">
-              Balance {balances === null ? '…' : (balanceOf(fromSymbol)?.formatted ?? '0')}
-            </span>
+        <div className="swapstack">
+          <div className="swapcard">
+            <div className="swapcard-head">
+              <span>You pay</span>
+              <span>
+                Balance {balances === null ? '…' : (fromBalance?.formatted ?? '0')}
+                {fromBalance !== null && fromBalance.raw > 0n && (
+                  <button
+                    className="maxbtn"
+                    onClick={() => setAmount(formatUnits(fromBalance.raw, from.decimals))}
+                  >
+                    MAX
+                  </button>
+                )}
+              </span>
+            </div>
+            <div className="swapcard-body">
+              <input
+                className="amount"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                inputMode="decimal"
+                placeholder="0"
+              />
+              <select
+                className="tokensel"
+                value={fromSymbol}
+                onChange={(e) => setFromSymbol(e.target.value)}
+              >
+                {TOKENS.map((t) => (
+                  <option key={t.symbol}>{t.symbol}</option>
+                ))}
+              </select>
+            </div>
           </div>
-          <div className="field">
-            <label>To</label>
-            <select value={toSymbol} onChange={(e) => setToSymbol(e.target.value)}>
-              {TOKENS.map((t) => (
-                <option key={t.symbol}>{t.symbol}</option>
-              ))}
-            </select>
-            <span className="muted small">
-              Balance {balances === null ? '…' : (balanceOf(toSymbol)?.formatted ?? '0')}
-            </span>
+
+          <button className="flip" onClick={flip} title="Swap direction">
+            ↓
+          </button>
+
+          <div className="swapcard">
+            <div className="swapcard-head">
+              <span>You receive</span>
+              <span>
+                Balance {balances === null ? '…' : (balanceOf(toSymbol)?.formatted ?? '0')}
+              </span>
+            </div>
+            <div className="swapcard-body">
+              {/* readOnly, not disabled: the pool's answer is not editable, but
+                  it is the number the user came for and must not read as greyed
+                  out. */}
+              <input
+                className="amount"
+                value={quoting ? '…' : out === null ? '' : formatUnits(out, to.decimals)}
+                placeholder="0"
+                readOnly
+              />
+              <select
+                className="tokensel"
+                value={toSymbol}
+                onChange={(e) => setToSymbol(e.target.value)}
+              >
+                {TOKENS.map((t) => (
+                  <option key={t.symbol}>{t.symbol}</option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
 
-        <div className="field">
-          <label>Amount</label>
-          <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" />
-        </div>
-
-        <div className="row">
-          <span className="muted small">Expected out</span>
-          <span className="mono">
-            {quoting ? '…' : out === null ? 'no route' : formatUnits(out, to.decimals)}
-          </span>
-        </div>
-        <div className="row">
-          <span className="muted small">Minimum received · {Number(SLIPPAGE_BPS) / 100}% slippage</span>
-          <span className="mono">{minOut === null ? '—' : formatUnits(minOut, to.decimals)}</span>
-        </div>
-        <div className="row">
-          <span className="muted small">Route</span>
-          <span className="small">BlazeSwap</span>
+        <div className="details">
+          <div className="row">
+            <span className="muted small">Rate</span>
+            <span className="mono">
+              {rate === null ? '—' : `1 ${fromSymbol} ≈ ${rate} ${toSymbol}`}
+            </span>
+          </div>
+          <div className="row">
+            <span className="muted small">
+              Minimum received · {Number(SLIPPAGE_BPS) / 100}% slippage
+            </span>
+            <span className="mono">{minOut === null ? '—' : formatUnits(minOut, to.decimals)}</span>
+          </div>
+          <div className="row">
+            <span className="muted small">Route</span>
+            <span className="small">BlazeSwap</span>
+          </div>
         </div>
 
         <button
           className="primary"
-          style={{ marginTop: 14 }}
+          style={{ marginTop: 16, width: '100%' }}
           disabled={out === null || amountIn === 0n || insufficient}
           onClick={doSwap}
         >

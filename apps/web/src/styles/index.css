@@ -91,3 +91,56 @@ a { color: var(--flare); }
 .status.ok { color: var(--ok); }
 
 @media (max-width: 620px) { .grid2 { grid-template-columns: 1fr; } }
+
+/* Swap, laid out the way every DEX lays it out: two stacked cards, the amount
+   as the largest thing on screen, the token a pill beside it. Familiarity is
+   the point — a swap form that reads differently costs the user attention it
+   should be spending on the numbers. */
+
+.swapstack { position: relative; display: flex; flex-direction: column; gap: 4px; }
+
+.swapcard {
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 14px; padding: 14px 16px;
+}
+.swapcard:focus-within { border-color: color-mix(in srgb, var(--flare) 45%, var(--line)); }
+
+.swapcard-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 12px; color: var(--muted); margin-bottom: 6px;
+}
+
+.swapcard-body { display: flex; align-items: center; gap: 12px; }
+
+/* Borderless so the number reads as content rather than as a form field. */
+.amount {
+  flex: 1; min-width: 0; background: none; border: 0; padding: 0;
+  font-size: 30px; font-weight: 600; letter-spacing: -0.02em; color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.amount:focus { outline: none; }
+.amount[readonly] { cursor: default; }
+
+.tokensel {
+  width: auto; flex: none; border-radius: 999px; padding: 8px 12px;
+  font-size: 14px; font-weight: 600; background: var(--panel); cursor: pointer;
+}
+
+.maxbtn {
+  background: none; border: 0; padding: 0 0 0 8px; cursor: pointer;
+  color: var(--flare); font-size: 12px; font-weight: 600;
+}
+
+/* Sits between the two cards, overlapping both, as the direction control. */
+.flip {
+  position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 34px; height: 34px; border-radius: 10px;
+  background: var(--panel-2); border: 3px solid var(--panel);
+  color: var(--text); font-size: 15px; line-height: 1; cursor: pointer;
+  display: grid; place-items: center; padding: 0; z-index: 1;
+}
+.flip:hover { border-color: var(--panel); background: var(--panel); }
+
+.details { margin-top: 14px; font-size: 13px; }
+.details .row { padding: 7px 0; }
