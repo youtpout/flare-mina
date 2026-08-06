@@ -473,18 +473,6 @@ export function Bridge({ session }: { session: Session }) {
         </button>
         {burnError !== null && <p className="status err">{burnError}</p>}
 
-        {withdrawals !== null && withdrawals.length > 0 && (
-          <div style={{ marginTop: 14 }}>
-            {withdrawals.map((w) => (
-              <div className="row" key={w.nonce}>
-                <span className="mono small">{Number(w.amountNanomina) / 1e9} MINA</span>
-                <span className={`tag ${w.status === 'released' ? 'ok' : 'warn'}`}>
-                  {w.status === 'released' ? 'released' : 'releasing…'}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
         <div className="notice">
           <strong>The relayer cannot invent a withdrawal.</strong> Each release carries a proof
           that the rest of Flare's withdrawal chain runs from this exact record to the state the
@@ -492,6 +480,30 @@ export function Bridge({ session }: { session: Session }) {
           to find a collision for. What is still trusted is one step upstream — who publishes that
           state — and only once per batch rather than once per withdrawal.
         </div>
+      </div>
+
+      {/* Its own panel, with an empty state: rendering nothing when the list is
+          empty leaves no way to tell "none yet" from "the API is down". */}
+      <div className="panel">
+        <h2>Your withdrawals</h2>
+
+        {withdrawals === null && <p className="muted small">Reading…</p>}
+
+        {withdrawals !== null && withdrawals.length === 0 && (
+          <p className="muted small">
+            Nothing yet. A burn appears here once the relayer has seen the event on Flare.
+          </p>
+        )}
+
+        {withdrawals !== null &&
+          withdrawals.map((w) => (
+            <div className="row" key={w.nonce}>
+              <span className="mono small">{Number(w.amountNanomina) / 1e9} MINA</span>
+              <span className={`tag ${w.status === 'released' ? 'ok' : 'warn'}`}>
+                {w.status === 'released' ? 'released' : 'releasing…'}
+              </span>
+            </div>
+          ))}
       </div>
       </>
       )}
