@@ -321,6 +321,10 @@ Bridged Flare assets, each a `FungibleToken` whose admin is an `AssetPort`:
 | bUSDT | 6 | `B62qjhVgqAbso6g8wsLNosuUMTyySicoqtgEbGGPYqWJXDCdQEH6Bg3` | `B62qrQ8v16mWqmt5sY8MEDdeLyjPqU1JE2Cg6qcvpxUuMhomZxscMfY` |
 | bC2FLR | 9 | `B62qiVguTBzDp5vaHyTatzaQ2zTyhfU22tTi3VQ9MKfcnbnePukdQHQ` | `B62qk3V13bN1DfkGPRYj8zAuzuCxGitxfHwTuwAswZ4wA3GiEBd5nrc` |
 
+Every port shares one verification key —
+`4490781742443744861191195492751573265573206685544608170805360167687638271662` —
+because they run the same circuit against different tokens.
+
 Decimals are never converted: `100000` base units is `0.1 USDT` on both chains,
 so the backing invariant is an integer comparison. FXRP and USD₮0 are 6 on Flare
 and stay 6 here. C2FLR is the exception — at 18 decimals a `UInt64` caps out at
@@ -333,7 +337,7 @@ Deployment parameters, which the return path depends on:
 
 | | |
 |---|---|
-| verification key hash | `1042487954473656537757452599880528136974818437316913921107387070707106011170` |
+| verification key hash | `26270422460089681377030212368415291460920486259765762471572767472922467625868` |
 | `signingPolicyRoot` | `9573309213728131632191235555805511915574463302731318985515435894312670369468` |
 | `requiredWeight` | `32767` — Coston2's real threshold, half of 65,534 |
 
