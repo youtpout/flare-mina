@@ -57,6 +57,28 @@ const MINA_FEE_BUFFER = 200_000_000n; // 0.2 MINA
  * the release proof not yet built, the Mina block not yet mined — so a user
  * watching a stuck withdrawal had no way to tell which.
  */
+/**
+ * What each stage of a locked asset is waiting on.
+ *
+ * Its own vocabulary, not the withdrawal one: a lock is minting a new wrapped
+ * token against collateral in the vault, where a withdrawal is releasing MINA
+ * the escrow already holds. Reusing "released" for a mint would name the wrong
+ * machine.
+ */
+const LOCK_STAGE: Record<string, { tag: string; detail: string }> = {
+  seen: {
+    tag: 'waiting for FDC',
+    detail: 'locked on Flare; its chain head reaches Mina at the next publication',
+  },
+  published: {
+    tag: 'proving',
+    detail: 'the head is on Mina; the mint proof replays the chain up to this lock',
+  },
+  minting: { tag: 'minting', detail: 'authorised, waiting for the mint to be included' },
+  minted: { tag: 'minted', detail: 'the wrapped token is in your Mina account' },
+  failed: { tag: 'failed', detail: 'see the reason below' },
+};
+
 const WITHDRAWAL_STAGE: Record<string, { tag: string; detail: string }> = {
   seen: {
     tag: 'waiting for FDC',
@@ -103,6 +125,17 @@ export function Bridge({ session }: { session: Session }) {
   const [flareBalances, setFlareBalances] = useState<Balance[] | null>(null);
   /** Native MINA held on devnet — what a deposit escrows. */
   const [minaBalance, setMinaBalance] = useState<bigint | null>(null);
+  const [locks, setLocks] = useState<
+    | {
+        token: string;
+        claimId: string;
+        amount: string;
+        status: string;
+        flareTxHash: string;
+        minaTxHash: string | null;
+      }[]
+    | null
+  >(null);
   const [withdrawals, setWithdrawals] = useState<
     { nonce: string; amountNanomina: string; status: string }[] | null
   >(null);
@@ -134,10 +167,18 @@ export function Bridge({ session }: { session: Session }) {
     let live = true;
     const poll = async () => {
       try {
-        const res = await fetch(`${API}/withdrawals/${session.minaAddress}`);
-        if (!res.ok) return;
-        const body = (await res.json()) as { withdrawals: typeof withdrawals };
-        if (live) setWithdrawals(body.withdrawals);
+        const [w, l] = await Promise.all([
+          fetch(`${API}/withdrawals/${session.minaAddress}`),
+          fetch(`${API}/locks/${session.minaAddress}`),
+        ]);
+        if (w.ok) {
+          const body = (await w.json()) as { withdrawals: typeof withdrawals };
+          if (live) setWithdrawals(body.withdrawals);
+        }
+        if (l.ok) {
+          const body = (await l.json()) as { locks: typeof locks };
+          if (live) setLocks(body.locks);
+        }
       } catch {
         // The deposit poll already surfaces an unreachable API.
       }
@@ -714,15 +755,46 @@ export function Bridge({ session }: { session: Session }) {
       {/* Its own panel, with an empty state: rendering nothing when the list is
           empty leaves no way to tell "none yet" from "the API is down". */}
       <div className="panel">
-        <h2>Your withdrawals</h2>
+        <h2>Your transfers to Mina</h2>
 
-        {withdrawals === null && <p className="muted small">Reading…</p>}
+        {withdrawals === null && locks === null && <p className="muted small">Reading…</p>}
 
-        {withdrawals !== null && withdrawals.length === 0 && (
+        {withdrawals?.length === 0 && locks?.length === 0 && (
           <p className="muted small">
-            Nothing yet. A burn appears here once the relayer has seen the event on Flare.
+            Nothing yet. A burn or a lock appears here once the relayer has seen the event on
+            Flare.
           </p>
         )}
+
+        {/* Locked assets, which mint a wrapped token rather than releasing MINA. */}
+        {locks?.map((l) => {
+          const asset = BRIDGE_ASSETS.find(
+            (a) => a.address.toLowerCase() === l.token.toLowerCase(),
+          );
+          // The vault keys C2FLR's chain by its wrapper, so the address in the
+          // event is the wrapper's, not the one the asset list carries.
+          const label = asset ?? BRIDGE_ASSETS.find((a) => a.native === true)!;
+          return (
+            <div className="row" key={`${l.token}-${l.claimId}`}>
+              <span>
+                <span className="mono small">
+                  {formatUnits(BigInt(l.amount), label.minaDecimals)} {label.minaSymbol}
+                </span>
+                <span className="muted small">
+                  {' · '}
+                  {LOCK_STAGE[l.status]?.detail ?? l.status}
+                </span>
+              </span>
+              <span
+                className={`tag ${
+                  l.status === 'minted' ? 'ok' : l.status === 'failed' ? 'warn' : ''
+                }`}
+              >
+                {LOCK_STAGE[l.status]?.tag ?? l.status}
+              </span>
+            </div>
+          );
+        })}
 
         {withdrawals !== null &&
           withdrawals.map((w) => (

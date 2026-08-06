@@ -13,6 +13,7 @@ import {
   markSubmitted,
   migrate,
   nextNonceFor,
+  locksFor,
   pool,
   recordBuilt,
   withdrawalsFor,
@@ -280,6 +281,33 @@ app.get('/network', async (req, res) => {
   const limit = Math.min(Number(req.query.limit ?? 60) || 60, 200);
   try {
     res.json(await networkSnapshot(limit));
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/**
+ * Assets locked on Flare and headed for one Mina account, base58.
+ *
+ * Separate from `/withdrawals` because they are separate rails: a withdrawal
+ * releases MINA the escrow already holds, a lock mints a new wrapped token
+ * against collateral in the vault. Merging them would need one status vocabulary
+ * for two different machines.
+ */
+app.get('/locks/:recipient', async (req, res) => {
+  try {
+    const rows = await locksFor(req.params.recipient);
+    res.json({
+      locks: rows.map((r) => ({
+        token: r.token,
+        claimId: r.claim_id,
+        amount: r.amount,
+        status: r.status,
+        flareTxHash: r.flare_tx_hash,
+        minaTxHash: r.mina_tx_hash,
+        reason: r.reason,
+      })),
+    });
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
