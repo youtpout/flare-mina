@@ -201,7 +201,7 @@ const { buildPolicyTree, toSecp256k1 } = await import(
 const { MinaPortBridge, WithdrawalRecord, flareRecipientField } = await import(
   '@minaport/mina-contracts/dist/src/MinaPortBridge.js'
 );
-const { RelayMessage, Bytes38 } = await import(
+const { RelayMessage, Bytes38, FDC_PROTOCOL_ID } = await import(
   '@minaport/mina-contracts/dist/src/RelayMessage.js'
 );
 const { LockChain, LockRecord, applyLock } = await import(
@@ -301,9 +301,11 @@ async function proveSigningPolicy(rawCalls: unknown[], rawKeys: unknown[]) {
   const known = rawKeys as PolicyKey[];
   const tree = buildPolicyTree(known);
 
-  // The round with the most usable signatures, so one message carries the most
-  // weight and the merge stays shallow.
+  // FDC rounds only. The contracts require protocol 200 — those are the ones
+  // carrying attestation roots — and Coston2 relays FTSO rounds just as often,
+  // so picking purely by signature count lands on a round the chain will refuse.
   const usable = calls
+    .filter((call) => call.message.protocolId === FDC_PROTOCOL_ID)
     .map((call) => ({
       call,
       signatures: call.signatures
@@ -313,7 +315,7 @@ async function proveSigningPolicy(rawCalls: unknown[], rawKeys: unknown[]) {
     .sort((a, b) => b.signatures.length - a.signatures.length)[0];
 
   if (usable === undefined || usable.signatures.length === 0) {
-    throw new Error('no relay signature matches a known policy key');
+    throw new Error('no FDC round in the window carries a signature from a known policy key');
   }
 
   // The round the validators signed, proven rather than asserted. The fold
