@@ -25,13 +25,13 @@ const REGISTRY = '0xaD67FE66660Fb8dFE9d6b1b4240d8650e30F6019' as const;
 /**
  * How often to publish, when there is anything to publish.
  *
- * Five minutes. A publication costs an FDC attestation request and several
- * ECDSA proofs, and it covers every withdrawal accumulated since the last one,
- * so a shorter cadence buys latency for one user and pays for it in requests
- * the network serves. Nothing is emitted when the chain has not moved, so a
- * quiet bridge costs nothing.
+ * Ten minutes. A publication covers every transfer accumulated since the last
+ * one, so a shorter cadence buys latency for one user and pays for it in
+ * proving — and the FDC round it depends on takes a minute or two to finalise
+ * anyway, so polling faster than that mostly finds nothing new. Nothing is
+ * emitted when the chain has not moved, so a quiet bridge costs nothing.
  */
-const POLL_MS = Number(process.env.PUBLISH_INTERVAL_MS ?? 5 * 60_000);
+const POLL_MS = Number(process.env.PUBLISH_INTERVAL_MS ?? 10 * 60_000);
 
 /** The public RPC rejects wider `getLogs` windows. */
 const CHUNK = 30n;

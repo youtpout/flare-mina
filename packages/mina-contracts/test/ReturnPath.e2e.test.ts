@@ -14,6 +14,7 @@ import { expect, it } from 'vitest';
 import { AccountUpdate, Field, MerkleTree, Mina, PrivateKey, UInt32, UInt64 } from 'o1js';
 import { MinaPortBridge, WithdrawalRecord, flareRecipientField } from '../src/MinaPortBridge.js';
 import { WithdrawalChain, applyWithdrawal } from '../src/WithdrawalChain.js';
+import { Bytes38, RelayMessage } from '../src/RelayMessage.js';
 import {
   Bytes32,
   EcdsaSignature,
@@ -30,6 +31,7 @@ it('end to end with real proofs', async () => {
   let m = Date.now();
 
   await WithdrawalChain.compile();                       t('compile WithdrawalChain', Date.now() - m);
+  m = Date.now(); await RelayMessage.compile();           t('compile RelayMessage', Date.now() - m);
   m = Date.now(); await SigningPolicyFold.compile();     t('compile SigningPolicyFold', Date.now() - m);
   m = Date.now(); await MinaPortBridge.compile();        t('compile MinaPortBridge', Date.now() - m);
 
@@ -73,9 +75,18 @@ it('end to end with real proofs', async () => {
   const w2 = new WithdrawalRecord({ nonce: UInt64.from(2n), recipient: user, amount: UInt64.from(2n * MINA) });
   const s2 = applyWithdrawal(s1, w2);
 
+  // A real FDC round envelope: protocol 200, a round id, and a root. The
+  // validators sign the digest this program derives, so the escrow can check
+  // that the signature is over this round rather than over arbitrary bytes.
   m = Date.now();
-  const msg = Bytes32.random();
-  const { proof: sp } = await SigningPolicyFold.single(msg, policyTree.getRoot(), {
+  const { proof: relayProof } = await RelayMessage.bind(
+    Bytes38.fromHex('c80015a2b401' + 'ab'.repeat(32)),
+  );
+  t('prove relay message binding', Date.now() - m);
+  const msg = Bytes32.from(relayProof.publicOutput.digest.bytes);
+
+  m = Date.now();
+  const { proof: sp } = await SigningPolicyFold.single(relayProof, policyTree.getRoot(), {
     publicKey: validator,
     signature: EcdsaSignature.signHash(msg, validatorKey),
     index: UInt32.from(0),

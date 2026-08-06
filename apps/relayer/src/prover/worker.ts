@@ -201,6 +201,9 @@ const { buildPolicyTree, toSecp256k1 } = await import(
 const { MinaPortBridge, WithdrawalRecord, flareRecipientField } = await import(
   '@minaport/mina-contracts/dist/src/MinaPortBridge.js'
 );
+const { RelayMessage, Bytes38 } = await import(
+  '@minaport/mina-contracts/dist/src/RelayMessage.js'
+);
 const { LockChain, LockRecord, applyLock } = await import(
   '@minaport/mina-contracts/dist/src/LockChain.js'
 );
@@ -234,6 +237,7 @@ const compileStart = Date.now();
 // The chain program first: the contract verifies its proofs, so its
 // verification key has to exist before the contract compiles.
 await WithdrawalChain.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
+await RelayMessage.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 await SigningPolicyFold.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 await MinaPortBridge.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 // The asset rail. Skipped entirely when no port is configured, because these
@@ -312,14 +316,23 @@ async function proveSigningPolicy(rawCalls: unknown[], rawKeys: unknown[]) {
     throw new Error('no relay signature matches a known policy key');
   }
 
+  // The round the validators signed, proven rather than asserted. The fold
+  // verifies this and derives the digest from it, so a signature can no longer
+  // be pointed at a round — or a state — it never covered.
   // Cast: the static helpers survive the build but not the emitted .d.ts.
+  const { proof: relay } = await RelayMessage.bind(
+    (Bytes38 as unknown as { fromHex(hex: string): unknown }).fromHex(
+      usable.call.message.encoded.slice(2),
+    ) as never,
+  );
+
   const digest = (Bytes32 as unknown as { fromHex(hex: string): unknown }).fromHex(
     signedMessageHash(usable.call.message).slice(2),
   );
   let merged;
   for (const signature of usable.signatures) {
     const voter = known.find((k) => k.index === signature.index)!;
-    const { proof } = await SigningPolicyFold.single(digest as never, tree.root, {
+    const { proof } = await SigningPolicyFold.single(relay as never, tree.root, {
       publicKey: toSecp256k1(voter.publicKey),
       signature: EcdsaSignature.from({ r: BigInt(signature.r), s: BigInt(signature.s) }),
       index: UInt32.from(voter.index),

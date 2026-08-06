@@ -1,3 +1,4 @@
+import { Bytes38, RelayMessage } from '../src/RelayMessage.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -41,6 +42,7 @@ let calls: RelayCall[];
 let known: PolicyKey[];
 
 beforeAll(async () => {
+  await RelayMessage.compile({ proofsEnabled: false });
   await SigningPolicyFold.compile({ proofsEnabled: false });
   calls = Object.values(fixtures).map((f) => parseRelayCalldata(f.calldata));
   known = (await harvestPolicyKeys(calls[0]!.policy, calls)).known;
@@ -81,8 +83,16 @@ describe('the policy tree', () => {
     const signature = call.signatures.find((s) => known.some((k) => k.index === s.index))!;
     const voter = known.find((k) => k.index === signature.index)!;
 
+    // The digest comes from the circuit, not from the helper: this is where
+    // the two must agree, because a real validator signature is about to be
+    // verified against it.
+    const { proof: round } = await RelayMessage.bind(
+      Bytes38.fromHex(call.message.encoded.slice(2)),
+    );
+    expect(round.publicOutput.digest.toHex()).toBe(digest.slice(2));
+
     const { proof } = await SigningPolicyFold.single(
-      Bytes32.fromHex(digest.slice(2)),
+      round,
       tree.root,
       new SignerInput({
         publicKey: toSecp256k1(voter.publicKey),
@@ -105,7 +115,9 @@ describe('the policy tree', () => {
   it('merges real signatures up to Flare\'s threshold', async () => {
     const call = calls[0]!;
     const tree = buildPolicyTree(known);
-    const digest = Bytes32.fromHex(signedMessageHash(call.message).slice(2));
+    const { proof: round } = await RelayMessage.bind(
+      Bytes38.fromHex(call.message.encoded.slice(2)),
+    );
 
     const usable = call.signatures
       .filter((s) => known.some((k) => k.index === s.index))
@@ -115,7 +127,7 @@ describe('the policy tree', () => {
     for (const signature of usable) {
       const voter = known.find((k) => k.index === signature.index)!;
       const { proof } = await SigningPolicyFold.single(
-        digest,
+        round,
         tree.root,
         new SignerInput({
           publicKey: toSecp256k1(voter.publicKey),

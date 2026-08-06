@@ -21,6 +21,7 @@ import {
   applyWithdrawal,
 } from './WithdrawalChain.js';
 import { SigningPolicyProof } from './SigningPolicyFold.js';
+import { FDC_PROTOCOL_ID } from './RelayMessage.js';
 
 /** Re-exported so callers of this contract get the record from one place. */
 export { WithdrawalRecord };
@@ -286,6 +287,12 @@ export class MinaPortBridge extends SmartContract {
    */
   @method async publishFlareActionState(actionState: Field, proof: SigningPolicyProof) {
     proof.verify();
+
+    // The proof now names the round it covers — `SigningPolicyFold` verifies
+    // the relay binding itself, so a digest cannot be lifted from one round and
+    // presented for another. All that is left to check here is that it is an
+    // FDC round, since those are the ones carrying attestation roots.
+    proof.publicOutput.protocolId.value.assertEquals(Field(FDC_PROTOCOL_ID), 'not an FDC round');
 
     // The signers must belong to the policy this bridge knows about, or the
     // weight below is a number the prover chose.

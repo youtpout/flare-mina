@@ -26,6 +26,7 @@ import {
 import { FungibleToken } from 'mina-fungible-token';
 import { AssetPort, NO_MINT_AUTHORIZED } from '../src/AssetPort.js';
 import { LockChain, LockRecord, applyLock } from '../src/LockChain.js';
+import { Bytes38, RelayMessage } from '../src/RelayMessage.js';
 import {
   Bytes32,
   EcdsaSignature,
@@ -46,6 +47,7 @@ it('locks on Flare, mints on Mina', async () => {
   FungibleToken.AdminContract = AssetPort as never;
 
   await LockChain.compile();                          t('compile LockChain', Date.now() - m);
+  m = Date.now(); await RelayMessage.compile();       t('compile RelayMessage', Date.now() - m);
   m = Date.now(); await SigningPolicyFold.compile();  t('compile SigningPolicyFold', Date.now() - m);
   m = Date.now(); await AssetPort.compile();          t('compile AssetPort', Date.now() - m);
   m = Date.now(); await FungibleToken.compile();      t('compile FungibleToken', Date.now() - m);
@@ -102,9 +104,15 @@ it('locks on Flare, mints on Mina', async () => {
   const l2 = new LockRecord({ claimId: UInt64.from(1n), recipient: user, amount: UInt64.from(250_000n) });
   const s2 = applyLock(s1, l2);
 
+  // A real FDC round envelope: protocol 200, a round id, and a root. The port
+  // checks the signature is over this round rather than over arbitrary bytes.
+  const { proof: relayProof } = await RelayMessage.bind(
+    Bytes38.fromHex('c80015a2b401' + 'ab'.repeat(32)),
+  );
+  const msg = Bytes32.from(relayProof.publicOutput.digest.bytes);
+
   m = Date.now();
-  const msg = Bytes32.random();
-  const { proof: sp } = await SigningPolicyFold.single(msg, policyTree.getRoot(), {
+  const { proof: sp } = await SigningPolicyFold.single(relayProof, policyTree.getRoot(), {
     publicKey: validator,
     signature: EcdsaSignature.signHash(msg, validatorKey),
     index: UInt32.from(0),

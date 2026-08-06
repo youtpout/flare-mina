@@ -1,3 +1,4 @@
+import { Bytes38, RelayMessage, type RelayMessageProof } from '../src/RelayMessage.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Field, MerkleTree, UInt32 } from 'o1js';
 import {
@@ -24,15 +25,20 @@ import {
 type Voter = { key: bigint; publicKey: Secp256k1; index: number; weight: number };
 
 let message: Bytes32;
+let round: RelayMessageProof;
 let voters: Voter[];
 /** The policy tree, built exactly as the circuit expects it. */
 let policyTree: MerkleTree;
 let POLICY: Field;
 
 beforeAll(async () => {
+  await RelayMessage.compile({ proofsEnabled: false });
   await SigningPolicyFold.compile({ proofsEnabled: false });
 
-  message = Bytes32.random();
+  // A real FDC round envelope. The fold derives the digest from it, so a bare
+  // random digest is no longer something a signature can be built against.
+  round = (await RelayMessage.bind(Bytes38.fromHex('c80015a2b401' + 'ab'.repeat(32)))).proof;
+  message = Bytes32.from(round.publicOutput.digest.bytes);
   // Eight, as Coston2's signing policy has today. Nothing below depends on
   // that number — the fold is generic in depth, which is what keeps a
   // testnet-sized threshold from becoming a mainnet-sized bug.
@@ -62,7 +68,7 @@ function signerFor(voter: Voter, over: Bytes32 = message): SignerInput {
 }
 
 async function single(voter: Voter, over: Bytes32 = message) {
-  const { proof } = await SigningPolicyFold.single(message, POLICY, signerFor(voter, over));
+  const { proof } = await SigningPolicyFold.single(round, POLICY, signerFor(voter, over));
   return proof;
 }
 
@@ -118,7 +124,7 @@ describe('merging validator signatures', () => {
       weight: 100,
     };
     await expect(
-      SigningPolicyFold.single(message, POLICY, signerFor(outsider)),
+      SigningPolicyFold.single(round, POLICY, signerFor(outsider)),
     ).rejects.toThrow(/not in the signing policy/);
   }, 300_000);
 
@@ -126,7 +132,7 @@ describe('merging validator signatures', () => {
   it('refuses an inflated weight', async () => {
     const greedy = { ...voters[0]!, weight: 100_000 };
     await expect(
-      SigningPolicyFold.single(message, POLICY, signerFor(greedy)),
+      SigningPolicyFold.single(round, POLICY, signerFor(greedy)),
     ).rejects.toThrow(/not in the signing policy/);
   }, 300_000);
 
@@ -137,8 +143,7 @@ describe('merging validator signatures', () => {
   it('refuses a witness for a different index', async () => {
     const signer = signerFor(voters[2]!);
     await expect(
-      SigningPolicyFold.single(
-        message,
+      SigningPolicyFold.single(round,
         POLICY,
         new SignerInput({ ...signer, index: UInt32.from(5) }),
       ),
@@ -148,21 +153,24 @@ describe('merging validator signatures', () => {
   it('refuses a signature over a different message', async () => {
     const other = Bytes32.random();
     await expect(
-      SigningPolicyFold.single(message, POLICY, signerFor(voters[0]!, other)),
+      SigningPolicyFold.single(round, POLICY, signerFor(voters[0]!, other)),
     ).rejects.toThrow();
   }, 300_000);
 
   /**
-   * Each leaf carries the root it verified, and a merge checks both sides
-   * agree. Otherwise a valid signature over one root could be counted towards
-   * the threshold for another.
+   * Each leaf carries the round it verified, and a merge checks both sides
+   * agree. Otherwise half a threshold gathered from one round and half from
+   * another would add up to a threshold that never existed.
    */
-  it('refuses to merge proofs about different roots', async () => {
+  it('refuses to merge proofs about different rounds', async () => {
     const here = await single(voters[0]!);
 
-    const elsewhere = Bytes32.random();
+    const { proof: otherRound } = await RelayMessage.bind(
+      Bytes38.fromHex('c80015a2b401' + 'cd'.repeat(32)),
+    );
+    const elsewhere = Bytes32.from(otherRound.publicOutput.digest.bytes);
     const { proof: there } = await SigningPolicyFold.single(
-      elsewhere,
+      otherRound,
       POLICY,
       signerFor(voters[1]!, elsewhere),
     );

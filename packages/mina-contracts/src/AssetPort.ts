@@ -15,6 +15,7 @@ import {
 } from 'o1js';
 import { LockChainProof, LockRecord, applyLock } from './LockChain.js';
 import { SigningPolicyProof } from './SigningPolicyFold.js';
+import { FDC_PROTOCOL_ID } from './RelayMessage.js';
 
 /**
  * Mina side of the asset bridge: one port per wrapped Flare asset.
@@ -141,6 +142,12 @@ export class AssetPort extends SmartContract {
       required.value,
       'signing weight below the required threshold',
     );
+
+    // The proof now names the round it covers — `SigningPolicyFold` verifies
+    // the relay binding itself, so a digest cannot be lifted from one round and
+    // presented for another. All that is left to check here is that it is an
+    // FDC round, since those are the ones carrying attestation roots.
+    proof.publicOutput.protocolId.value.assertEquals(Field(FDC_PROTOCOL_ID), 'not an FDC round');
 
     const admin = this.admin.getAndRequireEquals();
     AccountUpdate.createSigned(admin).body.useFullCommitment = Bool(true);

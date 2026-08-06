@@ -11,6 +11,7 @@ import {
   createEcdsa,
   createForeignCurve,
 } from 'o1js';
+import { RelayMessageProof } from './RelayMessage.js';
 
 /**
  * Proves enough of Flare's validators signed a root, by merging. One ECDSA is
@@ -22,10 +23,20 @@ export class Secp256k1 extends createForeignCurve(Crypto.CurveParams.Secp256k1) 
 export class EcdsaSignature extends createEcdsa(Secp256k1) {}
 export class Bytes32 extends Bytes(32) {}
 
-/** What a subtree establishes. `message` and `policy` are checked equal on every merge. */
+/**
+ * What a subtree establishes. Everything describing the round, plus the policy,
+ * is checked equal on every merge.
+ *
+ * The round is named rather than hashed: an earlier version carried the opaque
+ * 32-byte digest, and a consumer had no way to tell which round it belonged to.
+ * That was the gap an admin co-signature was standing in for.
+ */
 export class SignatureSet extends Struct({
-  /** The Merkle root the validators signed. */
-  message: Bytes32,
+  /** Merkle root of the round the validators signed. */
+  merkleRoot: Bytes32,
+  /** Which protocol's round. FDC is 200; see `FDC_PROTOCOL_ID`. */
+  protocolId: UInt32,
+  votingRoundId: UInt32,
   /** Commitment to the signing policy the signers must belong to. */
   policy: Field,
   /** Distinct signatures verified beneath this proof. */
@@ -70,10 +81,25 @@ export const SigningPolicyFold = ZkProgram({
   publicOutput: SignatureSet,
 
   methods: {
-    /** One signature, independent of every other. */
+    /**
+     * One signature, independent of every other.
+     *
+     * Takes the relay proof rather than a bare digest, and verifies it here
+     * rather than in the consuming contract. Two reasons. It makes the binding
+     * unskippable: no caller can name a digest that is not a real round's.
+     * And it keeps the contract verifying a single proof type — adding a second
+     * one pushed `AssetPort` past a Pickles wrap-domain boundary and it would
+     * not compile at all.
+     */
     single: {
-      privateInputs: [Bytes32, Field, SignerInput],
-      async method(message: Bytes32, policy: Field, signer: SignerInput) {
+      privateInputs: [RelayMessageProof, Field, SignerInput],
+      async method(relay: RelayMessageProof, policy: Field, signer: SignerInput) {
+        relay.verify();
+
+        // What a Flare validator actually signs: the EIP-191 digest over the
+        // round's message, recomputed inside `RelayMessage` from the bytes.
+        const message = Bytes32.from(relay.publicOutput.digest.bytes);
+
         signer.signature
           .verifySignedHash(message, signer.publicKey)
           .assertTrue('invalid validator signature');
@@ -92,7 +118,9 @@ export const SigningPolicyFold = ZkProgram({
 
         return {
           publicOutput: new SignatureSet({
-            message,
+            merkleRoot: relay.publicOutput.merkleRoot,
+            protocolId: relay.publicOutput.protocolId,
+            votingRoundId: relay.publicOutput.votingRoundId,
             policy,
             count: UInt32.one,
             weight: signer.weight,
@@ -116,14 +144,23 @@ export const SigningPolicyFold = ZkProgram({
         const a = left.publicOutput;
         const b = right.publicOutput;
 
-        // Same root, or the sum means nothing. Byte by byte: comparing the
-        // struct would compare witnesses rather than values.
+        // Same round, or the sum means nothing — two halves of a threshold
+        // gathered from different rounds is not a threshold. Byte by byte:
+        // comparing the struct would compare witnesses rather than values.
         for (let i = 0; i < 32; i++) {
-          a.message.bytes[i]!.value.assertEquals(
-            b.message.bytes[i]!.value,
+          a.merkleRoot.bytes[i]!.value.assertEquals(
+            b.merkleRoot.bytes[i]!.value,
             'merged proofs disagree on the signed root',
           );
         }
+        a.protocolId.value.assertEquals(
+          b.protocolId.value,
+          'merged proofs disagree on the protocol',
+        );
+        a.votingRoundId.value.assertEquals(
+          b.votingRoundId.value,
+          'merged proofs disagree on the round',
+        );
         a.policy.assertEquals(b.policy, 'merged proofs disagree on the signing policy');
 
         // Strictly ascending, therefore disjoint: else a proof merges with itself.
@@ -131,7 +168,9 @@ export const SigningPolicyFold = ZkProgram({
 
         return {
           publicOutput: new SignatureSet({
-            message: a.message,
+            merkleRoot: a.merkleRoot,
+            protocolId: a.protocolId,
+            votingRoundId: a.votingRoundId,
             policy: a.policy,
             count: a.count.add(b.count),
             weight: a.weight.add(b.weight),

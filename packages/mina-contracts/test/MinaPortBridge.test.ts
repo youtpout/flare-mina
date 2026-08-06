@@ -14,6 +14,7 @@ import {
   type WithdrawalChainProof,
   applyWithdrawal,
 } from '../src/WithdrawalChain.js';
+import { Bytes38, RelayMessage } from '../src/RelayMessage.js';
 import {
   Bytes32,
   EcdsaSignature,
@@ -260,6 +261,7 @@ describe('withdrawal release', () => {
 
   beforeAll(async () => {
     await WithdrawalChain.compile({ proofsEnabled: false });
+    await RelayMessage.compile({ proofsEnabled: false });
     await SigningPolicyFold.compile({ proofsEnabled: false });
 
     // Built here, not at describe scope: `user` is only assigned in the outer
@@ -280,25 +282,88 @@ describe('withdrawal release', () => {
 
   /** A proof from the one validator the deployed policy contains. */
   async function signingProof() {
-    const message = Bytes32.random();
-    const { proof } = await SigningPolicyFold.single(message, policyTree.getRoot(), {
+    // A real FDC round envelope. The bridge now requires the signature to be
+    // over a relay message rather than over arbitrary bytes, so the digest has
+    // to come from one.
+    const { proof: relay } = await RelayMessage.bind(
+      Bytes38.fromHex('c80015a2b401' + 'ab'.repeat(32)),
+    );
+    const { proof } = await SigningPolicyFold.single(relay, policyTree.getRoot(), {
       publicKey: Secp256k1.generator.scale(validatorKey),
-      signature: EcdsaSignature.signHash(message, validatorKey),
+      signature: EcdsaSignature.signHash(
+        Bytes32.from(relay.publicOutput.digest.bytes),
+        validatorKey,
+      ),
       index: UInt32.from(0),
       weight: UInt32.from(1),
       witness: new PolicyWitness(policyTree.getWitness(0n)),
     } as never);
-    return proof;
+    return { proof, relay };
   }
 
   async function publish(actionState: Field) {
-    const proof = await signingProof();
+    const { proof, relay } = await signingProof();
     const tx = await Mina.transaction(deployer, async () => {
       await bridge.publishFlareActionState(actionState, proof);
     });
     await tx.prove();
     return tx.sign([deployerKey, attestorKey]).send();
   }
+
+  /**
+   * The property the co-signature used to stand in for.
+   *
+   * A signature over one relay round must not pass as a signature over another.
+   * The binding now lives inside `SigningPolicyFold`, which derives the digest
+   * from the round rather than accepting one — so the substitution fails while
+   * the proof is being built, not later.
+   */
+  it('refuses a signature that is not over the round it names', async () => {
+    const { proof: signed } = await RelayMessage.bind(
+      Bytes38.fromHex('c80015a2b401' + 'ab'.repeat(32)),
+    );
+    // A genuine, well-formed FDC round — just not the one that was signed.
+    const { proof: other } = await RelayMessage.bind(
+      Bytes38.fromHex('c80015a2b401' + 'cd'.repeat(32)),
+    );
+
+    await expect(
+      SigningPolicyFold.single(other, policyTree.getRoot(), {
+        publicKey: Secp256k1.generator.scale(validatorKey),
+        signature: EcdsaSignature.signHash(
+          Bytes32.from(signed.publicOutput.digest.bytes),
+          validatorKey,
+        ),
+        index: UInt32.from(0),
+        weight: UInt32.from(1),
+        witness: new PolicyWitness(policyTree.getWitness(0n)),
+      } as never),
+    ).rejects.toThrow(/invalid validator signature/);
+  }, 300_000);
+
+  /** FDC rounds carry attestation roots; other protocols carry other things. */
+  it('refuses a round that is not FDC', async () => {
+    const { proof: relay } = await RelayMessage.bind(
+      // Protocol 100 rather than 200.
+      Bytes38.fromHex('640015a2b401' + 'ab'.repeat(32)),
+    );
+    const { proof } = await SigningPolicyFold.single(relay, policyTree.getRoot(), {
+      publicKey: Secp256k1.generator.scale(validatorKey),
+      signature: EcdsaSignature.signHash(
+        Bytes32.from(relay.publicOutput.digest.bytes),
+        validatorKey,
+      ),
+      index: UInt32.from(0),
+      weight: UInt32.from(1),
+      witness: new PolicyWitness(policyTree.getWitness(0n)),
+    } as never);
+
+    await expect(
+      Mina.transaction(deployer, async () => {
+        await bridge.publishFlareActionState(s2, proof);
+      }),
+    ).rejects.toThrow(/not an FDC round/);
+  }, 300_000);
 
   async function release(record: WithdrawalRecord, tail: WithdrawalChainProof) {
     const tx = await Mina.transaction(deployer, async () => {
