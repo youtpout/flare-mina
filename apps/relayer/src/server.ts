@@ -24,6 +24,7 @@ import {
   submitClaim,
   submitterConfigured,
 } from './submitter.js';
+import { networkSnapshot } from './network.js';
 import { startWatcher } from './watcher.js';
 import { startPublisher } from './publisher.js';
 import { startWithdrawals } from './withdrawals.js';
@@ -265,6 +266,19 @@ app.get('/deposits/:minaSender', async (req, res) => {
         reason: r.reason,
       })),
     });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/**
+ * The machinery, for the Network tab: both chains' cursors, the live signing
+ * policy, and a global activity feed. Read-only and cheap enough to poll.
+ */
+app.get('/network', async (req, res) => {
+  const limit = Math.min(Number(req.query.limit ?? 25) || 25, 100);
+  try {
+    res.json(await networkSnapshot(limit));
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }

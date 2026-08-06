@@ -6,6 +6,7 @@ import { deriveAccount } from '@/lib/flare';
 import { Portfolio } from '@/components/Portfolio';
 import { Swap } from '@/components/Swap';
 import { Bridge } from '@/components/Bridge';
+import { Network } from '@/components/Network';
 
 export type Session = {
   provider: MinaProvider;
@@ -27,7 +28,7 @@ export type Session = {
   deployed: boolean;
 };
 
-const TABS = ['portfolio', 'swap', 'bridge'] as const;
+const TABS = ['portfolio', 'swap', 'bridge', 'network'] as const;
 type Tab = (typeof TABS)[number];
 
 export function App() {
@@ -36,6 +37,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [hasWallet, setHasWallet] = useState(true);
+  const [showNetwork, setShowNetwork] = useState(false);
 
   useEffect(() => {
     // Wallets inject asynchronously; checking once on mount misses slow ones.
@@ -173,6 +175,7 @@ export function App() {
       </p>
 
       {!session ? (
+        <>
         <div className="panel">
           <h2>Connect your Mina wallet</h2>
           <p className="muted small" style={{ marginTop: 0 }}>
@@ -197,7 +200,17 @@ export function App() {
             </p>
           )}
           {error && <p className="status err">{error}</p>}
+          {/* Visible without a wallet on purpose: the bridge's state is public,
+              and someone evaluating it should not have to install an extension
+              to see whether it is running. */}
+          <p className="small" style={{ marginTop: 18 }}>
+            <button className="tab" style={{ padding: 0 }} onClick={() => setShowNetwork((v) => !v)}>
+              {showNetwork ? 'Hide network status' : 'Or look at the network status →'}
+            </button>
+          </p>
         </div>
+        {showNetwork && <Network />}
+        </>
       ) : (
         <>
           <div className="tabs">
@@ -211,6 +224,7 @@ export function App() {
           {tab === 'portfolio' && <Portfolio session={session} onRefresh={refresh} />}
           {tab === 'swap' && <Swap session={session} />}
           {tab === 'bridge' && <Bridge session={session} />}
+          {tab === 'network' && <Network />}
         </>
       )}
     </>

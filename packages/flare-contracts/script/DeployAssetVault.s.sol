@@ -2,7 +2,10 @@
 pragma solidity ^0.8.28;
 
 import {Script, console} from "forge-std/Script.sol";
-import {AssetVault} from "../src/AssetVault.sol";
+import {TransparentUpgradeableProxy} from
+    "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+import {AssetVault, IWNat} from "../src/AssetVault.sol";
+import {BridgeWrapper} from "../src/BridgeWrapper.sol";
 
 /// @notice Deploys the vault that locks Flare assets for minting on Mina.
 ///
@@ -32,6 +35,11 @@ contract DeployAssetVault is Script {
     /// `WNat` directly would look like it worked and overflow at scale.
     address internal constant WRAPPED_C2FLR = 0x6C790956D728ed82A75d2ec8D5c37F2e2F36b978;
 
+    /// @dev WNat, the ERC-20 form of C2FLR, resolved from the Flare contract
+    /// registry. `lockNative` routes native value through it and then through
+    /// the wrapper above, so a user never handles either.
+    address internal constant WNAT = 0xC67DCE33D7A8efA5FfEB961899C73fe01bCe9273;
+
     uint256 internal constant COSTON2 = 114;
 
     function run() external returns (AssetVault vault) {
@@ -39,15 +47,26 @@ contract DeployAssetVault is Script {
 
         vm.startBroadcast();
 
-        vault = new AssetVault(msg.sender);
+        // The proxy is the permanent address. Each Mina port pins the vault it
+        // replays, so moving the vault would strand every wrapped asset.
+        AssetVault implementation = new AssetVault();
+        TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(
+            address(implementation),
+            msg.sender,
+            abi.encodeCall(AssetVault.initialize, (msg.sender))
+        );
+        vault = AssetVault(payable(proxy));
+
         vault.setAccepted(FXRP, true);
         vault.setAccepted(USDT0, true);
         vault.setAccepted(WRAPPED_C2FLR, true);
+        vault.setNativeRoute(IWNat(WNAT), BridgeWrapper(WRAPPED_C2FLR));
 
         vm.stopBroadcast();
 
-        console.log("AssetVault :", address(vault));
-        console.log("owner      :", msg.sender);
-        console.log("accepted   : FXRP, USDT0, bWC2FLR");
+        console.log("AssetVault (proxy) :", address(vault));
+        console.log("implementation     :", address(implementation));
+        console.log("owner              :", msg.sender);
+        console.log("accepted           : FXRP, USDT0, bWC2FLR (native routed)");
     }
 }
