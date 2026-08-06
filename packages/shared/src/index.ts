@@ -10,3 +10,4 @@ export * from './tokens.js';
 export * from './pallas.js';
 export * from './minaSignature.js';
 export * from './flareRelay.js';
+export * from './fdcResponse.js';
