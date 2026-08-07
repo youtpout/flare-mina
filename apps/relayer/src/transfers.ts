@@ -1,6 +1,6 @@
 import { createPublicClient, http, parseAbi, parseEventLogs } from 'viem';
 import { decodeMinaRecipient, formatMinaAddress } from '@minaport/shared';
-import { recordTransfer, transferTxFor } from './db/index.js';
+import { recordLock, recordTransfer, recordWithdrawal, transferTxFor } from './db/index.js';
 import { publishActionState, publishLockState } from './prover/index.js';
 import { fetchAttestation, requestAttestationFor, type Attestation } from './fdc.js';
 import { policyProofInputs } from './publisher.js';
@@ -57,6 +57,8 @@ const chainAbi = parseAbi([
 const TRANSFER_TOPIC0 =
   '0x4f7b66d0ae11d82ea99fc8240e659baae1aa3b6b8a9710a907e81a0cfb3c533f' as const;
 
+const FMINA = process.env.FLARE_FMINA_ADDRESS?.toLowerCase();
+
 const MINA_GRAPHQL =
   process.env.MINA_DEVNET_GRAPHQL ?? 'https://api.minascan.io/node/devnet/v1/graphql';
 const ESCROW = process.env.MINA_BRIDGE_ACCOUNT;
@@ -64,7 +66,16 @@ const ESCROW = process.env.MINA_BRIDGE_ACCOUNT;
 /** Last block scanned, so a restart does not re-read the whole chain. */
 let scannedTo: bigint | undefined;
 
-/** Fill the ledger. Recording is idempotent on the index, so windows may overlap. */
+/**
+ * Fill the ledger, and the per-rail table that renders it.
+ *
+ * One scan, not three. The `Transfer` event carries the index, the asset, the
+ * recipient and the amount — everything `withdrawals` and `locks` hold — so
+ * scanning the bridges' own events as well bought nothing and cost three times
+ * the `getLogs` calls, which the public RPC answers with 429.
+ *
+ * Recording is idempotent on the index, so windows may overlap.
+ */
 async function watch(): Promise<void> {
   if (CHAIN === undefined) return;
 
@@ -87,15 +98,38 @@ async function watch(): Promise<void> {
 
     for (const log of parseEventLogs({ abi: chainAbi, logs, eventName: 'Transfer' })) {
       const { index, token, minaRecipient, amount, previousHead, newHead } = log.args;
+      const recipient = formatMinaAddress(decodeMinaRecipient(minaRecipient));
       await recordTransfer({
         index,
         token,
-        recipient: formatMinaAddress(decodeMinaRecipient(minaRecipient)),
+        recipient,
         amount,
         previousHead,
         newHead,
         flareTxHash: log.transactionHash,
       });
+
+      // The same record, in the table that tracks how far it has got. Which one
+      // it lands in is the asset: FMINA is the escrow's, everything else is a
+      // port's.
+      if (token.toLowerCase() === FMINA) {
+        await recordWithdrawal({
+          nonce: index,
+          recipient,
+          amountNanomina: amount,
+          flareTxHash: log.transactionHash,
+          newActionState: newHead,
+        });
+      } else {
+        await recordLock({
+          token,
+          claimId: index,
+          recipient,
+          amount,
+          flareTxHash: log.transactionHash,
+          newLockState: newHead,
+        });
+      }
     }
     scannedTo = end;
   }

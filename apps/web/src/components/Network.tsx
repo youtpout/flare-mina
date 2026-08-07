@@ -43,9 +43,12 @@ type Snapshot = {
     knownValidatorKeys: number;
   } | null;
   activity: {
-    kind: 'deposit' | 'withdrawal';
+    kind: 'deposit' | 'withdrawal' | 'lock';
     status: string;
-    amountNanomina: string;
+    /** In the asset's own base units — not nanomina for a lock. */
+    amount: string;
+    asset: string;
+    decimals: number;
     counterparty: string;
     flareTxHash: string | null;
     minaTxHash: string | null;
@@ -68,6 +71,12 @@ function shortHash(value: string): string {
 function nanomina(value: string | null): string {
   if (value === null) return '—';
   return `${(Number(value) / 1e9).toLocaleString(undefined, { maximumFractionDigits: 4 })} MINA`;
+}
+
+/** Bridged decimals are never converted, so each asset is quoted in its own. */
+function amount(value: string, decimals: number, asset: string): string {
+  const scaled = Number(value) / 10 ** decimals;
+  return `${scaled.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${asset}`;
 }
 
 function ago(iso: string): string {
@@ -239,8 +248,8 @@ export function Network() {
         <h2>Recent bridge transactions</h2>
         {activity.length === 0 ? (
           <p className="small muted" style={{ margin: 0 }}>
-            Nothing has crossed yet. Deposits and withdrawals both appear here, with the
-            transaction on each chain.
+            Nothing has crossed yet. Every rail appears here — MINA both ways, and each
+            bridged asset — with the transaction on each chain.
           </p>
         ) : (
           activity.slice(current * PAGE_SIZE, current * PAGE_SIZE + PAGE_SIZE).map((row, i) => (
@@ -249,7 +258,7 @@ export function Network() {
                 <span className="tag" style={{ marginRight: 8 }}>
                   {row.kind === 'deposit' ? 'Mina → Flare' : 'Flare → Mina'}
                 </span>
-                {nanomina(row.amountNanomina)}
+                {amount(row.amount, row.decimals, row.asset)}
                 <span className="muted"> · {row.status}</span>
               </span>
               <span className="small" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>

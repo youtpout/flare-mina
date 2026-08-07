@@ -203,3 +203,22 @@ CREATE TABLE IF NOT EXISTS transfers (
 );
 
 CREATE INDEX IF NOT EXISTS transfers_token_idx ON transfers (token);
+
+-- Both rails are named by their position in the shared chain now, and that
+-- chain restarted at zero when it was deployed. A new burn therefore arrives as
+-- nonce 0, which the pre-migration row for nonce 0 already occupies — the insert
+-- conflicted and was dropped, so the withdrawal simply never appeared.
+--
+-- The chain address is what disambiguates them. NULL marks a row from a
+-- superseded deployment, and NULLs never collide in a unique index, so history
+-- is kept without standing in the way.
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS chain TEXT;
+ALTER TABLE locks       ADD COLUMN IF NOT EXISTS chain TEXT;
+
+ALTER TABLE withdrawals DROP CONSTRAINT IF EXISTS withdrawals_nonce_key;
+ALTER TABLE locks       DROP CONSTRAINT IF EXISTS locks_token_claim_id_key;
+
+CREATE UNIQUE INDEX IF NOT EXISTS withdrawals_chain_nonce_idx
+  ON withdrawals (chain, nonce);
+CREATE UNIQUE INDEX IF NOT EXISTS locks_chain_token_claim_idx
+  ON locks (chain, token, claim_id);

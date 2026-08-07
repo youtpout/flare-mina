@@ -105,51 +105,6 @@ async function escrowState(): Promise<{ accepted: bigint; cursor: bigint } | nul
   }
 }
 
-/** Last block scanned, so a restart does not re-read the whole chain. */
-let cursor: bigint | undefined;
-
-async function scan(): Promise<void> {
-  if (BRIDGE === undefined) return;
-
-  const head = await client.getBlockNumber();
-  const from = cursor ?? (head > LOOKBACK ? head - LOOKBACK : 0n);
-  if (from > head) return;
-
-  const raw = [];
-  for (let start = from; start <= head; start += CHUNK) {
-    const end = start + CHUNK - 1n > head ? head : start + CHUNK - 1n;
-    raw.push(...(await client.getLogs({ address: BRIDGE, fromBlock: start, toBlock: end })));
-  }
-
-  // `parseEventLogs` keeps only what matches and drops the rest, so an
-  // unrelated event from the same contract is ignored rather than mis-decoded.
-  const logs = parseEventLogs({ abi: bridgeAbi, eventName: 'WithdrawToMina', logs: raw });
-
-  for (const log of logs) {
-    const { nonce, minaRecipient, amount, newActionState } = log.args;
-    if (
-      nonce === undefined ||
-      minaRecipient === undefined ||
-      amount === undefined ||
-      newActionState === undefined
-    ) {
-      continue;
-    }
-
-    // Recording is idempotent on the nonce, which the contract makes unique, so
-    // an overlapping scan window costs nothing.
-    await recordWithdrawal({
-      nonce,
-      recipient: formatMinaAddress(decodeMinaRecipient(minaRecipient)),
-      amountNanomina: amount,
-      flareTxHash: log.transactionHash,
-      newActionState,
-    });
-  }
-
-  cursor = head + 1n;
-}
-
 /**
  * Promote burns Mina has accepted a covering state for.
  *
@@ -220,7 +175,6 @@ export function startWithdrawals(): { stop(): void } {
   const loop = async () => {
     while (!stopped) {
       try {
-        await scan();
         await refreshCoverage();
         await release();
       } catch (e) {

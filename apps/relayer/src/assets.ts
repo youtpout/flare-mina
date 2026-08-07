@@ -105,49 +105,6 @@ async function portState(port: string): Promise<{ accepted: bigint; processed: b
 }
 
 /**
- * Where the last scan reached, so a tick costs one window rather than the whole
- * lookback. The public RPC caps `getLogs` at 30 blocks, so 3000 blocks is 100
- * requests — every 20 seconds that is rate-limited within a minute, which is
- * exactly how this first failed.
- */
-let scannedTo: bigint | undefined;
-
-/** Scan for `AssetLocked` and record what has not been seen. */
-async function watch(): Promise<void> {
-  if (VAULT === undefined) return;
-
-  const head = await client.getBlockNumber();
-  // Re-scan a little behind the watermark: recording is idempotent, and a
-  // reorg or a missed block costs a mint nobody can retry by hand.
-  const from =
-    scannedTo === undefined
-      ? head > LOOKBACK
-        ? head - LOOKBACK
-        : 0n
-      : scannedTo > CHUNK
-        ? scannedTo - CHUNK
-        : 0n;
-
-  for (let start = from; start <= head; start += CHUNK) {
-    const end = start + CHUNK - 1n > head ? head : start + CHUNK - 1n;
-    const logs = await client.getLogs({ address: VAULT, fromBlock: start, toBlock: end });
-
-    for (const log of parseEventLogs({ abi: vaultAbi, logs, eventName: 'AssetLocked' })) {
-      const { claimId, token, minaRecipient, amount, newActionState } = log.args;
-      await recordLock({
-        token,
-        claimId,
-        recipient: formatMinaAddress(decodeMinaRecipient(minaRecipient)),
-        amount,
-        flareTxHash: log.transactionHash,
-        newLockState: newActionState,
-      });
-    }
-    scannedTo = end;
-  }
-}
-
-/**
  * Mint everything a port has accepted a head for, oldest claim first.
  *
  * The range comes from the shared ledger, not from this table: a segment has to
@@ -233,6 +190,8 @@ export function startAssets(): { stop(): void } {
 
   // Publishing lives in transfers.ts: one attestation covers every asset now,
   // so a per-asset publisher would pay for the same round four times.
-  const loops = [loop('lock watcher', WATCH_MS, watch), loop('minter', WATCH_MS, mint)];
+  // Watching lives in transfers.ts: one scan of the shared chain fills both
+  // rails' tables, where three scanners only bought rate-limit errors.
+  const loops = [loop('minter', WATCH_MS, mint)];
   return { stop: () => loops.forEach((l) => l.stop()) };
 }

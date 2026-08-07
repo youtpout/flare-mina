@@ -162,6 +162,9 @@ export type WithdrawalRow = {
  * Idempotent on the nonce, which the bridge contract makes unique, so
  * overlapping scan windows are free.
  */
+/** The shared chain a row belongs to. Rows from before it are left NULL. */
+const CHAIN = (process.env.FLARE_TRANSFER_CHAIN_ADDRESS ?? '').toLowerCase() || null;
+
 export async function recordWithdrawal(input: {
   nonce: bigint;
   recipient: string;
@@ -170,13 +173,15 @@ export async function recordWithdrawal(input: {
   newActionState: bigint;
 }): Promise<void> {
   await pool.query(
-    `INSERT INTO withdrawals (nonce, recipient, amount_nanomina, flare_tx_hash, new_action_state)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO withdrawals
+       (chain, nonce, recipient, amount_nanomina, flare_tx_hash, new_action_state)
+     VALUES ($1, $2, $3, $4, $5, $6)
      -- Backfill rather than DO NOTHING: rows recorded before this column
      -- existed would otherwise never gain a state, and so never be releasable.
-     ON CONFLICT (nonce) DO UPDATE SET new_action_state = EXCLUDED.new_action_state
+     ON CONFLICT (chain, nonce) DO UPDATE SET new_action_state = EXCLUDED.new_action_state
        WHERE withdrawals.new_action_state IS NULL`,
     [
+      CHAIN,
       input.nonce.toString(),
       input.recipient,
       input.amountNanomina.toString(),
@@ -291,10 +296,12 @@ export async function recordLock(input: {
   newLockState: bigint;
 }): Promise<void> {
   await pool.query(
-    `INSERT INTO locks (token, claim_id, recipient, amount, flare_tx_hash, new_lock_state)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (token, claim_id) DO NOTHING`,
+    `INSERT INTO locks
+       (chain, token, claim_id, recipient, amount, flare_tx_hash, new_lock_state)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (chain, token, claim_id) DO NOTHING`,
     [
+      CHAIN,
       input.token.toLowerCase(),
       input.claimId.toString(),
       input.recipient,

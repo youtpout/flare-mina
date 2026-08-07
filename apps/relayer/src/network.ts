@@ -1,5 +1,6 @@
 import { createPublicClient, http, parseAbi } from 'viem';
 import { pool } from './db/index.js';
+import { assets } from './assets.js';
 
 /**
  * A read-only view of the machinery, for the frontend's Network tab.
@@ -159,9 +160,13 @@ async function flareState() {
 }
 
 export type ActivityRow = {
-  kind: 'deposit' | 'withdrawal';
+  kind: 'deposit' | 'withdrawal' | 'lock';
   status: string;
-  amountNanomina: string;
+  /** In the asset's own base units, which is not nanomina for a lock. */
+  amount: string;
+  /** Ticker to render it with, and the decimals it is quoted in. */
+  asset: string;
+  decimals: number;
   counterparty: string;
   flareTxHash: string | null;
   minaTxHash: string | null;
@@ -169,29 +174,49 @@ export type ActivityRow = {
 };
 
 /**
- * The two rails interleaved, newest first. Global rather than per-account: this
- * tab is about whether the bridge is moving, not about one user's funds.
+ * Every rail interleaved, newest first. Global rather than per-account: this tab
+ * is about whether the bridge is moving, not about one user's funds.
+ *
+ * Locks belong here as much as the MINA rail does — they are the direction the
+ * product exists for, and leaving them out made a working FXRP bridge look like
+ * nothing had happened.
  */
 async function activity(limit: number): Promise<ActivityRow[]> {
   // 'aborted' rows are excluded: nothing went wrong with them, the user simply
   // never signed, or they belong to a superseded deployment. Listing them as
   // bridge activity would misrepresent both the volume and the failure rate.
-  const { rows } = await pool.query<ActivityRow>(
-    `SELECT 'deposit' AS kind, status, amount_nanomina AS "amountNanomina",
+  const { rows } = await pool.query<ActivityRow & { token: string | null }>(
+    `SELECT 'deposit' AS kind, status, amount_nanomina AS amount, NULL AS token,
             recipient AS counterparty, flare_tx_hash AS "flareTxHash",
             mina_tx_hash AS "minaTxHash", updated_at AS at
        FROM deposits
       WHERE status <> 'aborted'
      UNION ALL
-     SELECT 'withdrawal' AS kind, status, amount_nanomina AS "amountNanomina",
+     SELECT 'withdrawal' AS kind, status, amount_nanomina AS amount, NULL AS token,
             recipient AS counterparty, flare_tx_hash AS "flareTxHash",
             mina_tx_hash AS "minaTxHash", updated_at AS at
        FROM withdrawals
+     UNION ALL
+     SELECT 'lock' AS kind, status, amount, token,
+            recipient AS counterparty, flare_tx_hash AS "flareTxHash",
+            mina_tx_hash AS "minaTxHash", updated_at AS at
+       FROM locks
      ORDER BY at DESC
      LIMIT $1`,
     [limit],
   );
-  return rows;
+
+  // Decimals are never converted on the way across, so a lock is quoted in its
+  // own units. Rendering one as nanomina would be off by orders of magnitude.
+  const byToken = new Map(assets().map((a) => [a.flareToken.toLowerCase(), a]));
+  return rows.map(({ token, ...row }) => {
+    const asset = token === null ? undefined : byToken.get(token.toLowerCase());
+    return {
+      ...row,
+      asset: asset?.symbol ?? 'MINA',
+      decimals: asset?.decimals ?? 9,
+    };
+  });
 }
 
 export async function networkSnapshot(limit = 60) {
