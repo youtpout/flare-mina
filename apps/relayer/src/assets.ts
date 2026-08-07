@@ -1,7 +1,6 @@
 import { createPublicClient, http, parseAbi, parseEventLogs } from 'viem';
 import { decodeMinaRecipient, formatMinaAddress } from '@minaport/shared';
 import {
-  lockTxFor,
   markLockMinted,
   markLockMinting,
   markLocksPublished,
@@ -29,8 +28,6 @@ import { mintLock } from './prover/index.js';
 const RPC = process.env.COSTON2_RPC_URL ?? 'https://coston2-api.flare.network/ext/C/rpc';
 const VAULT = process.env.FLARE_ASSET_VAULT_ADDRESS as `0x${string}` | undefined;
 
-/** Same cadence as the withdrawal publisher, and for the same reason. */
-const PUBLISH_MS = Number(process.env.PUBLISH_INTERVAL_MS ?? 15 * 60_000);
 const WATCH_MS = Number(process.env.LOCK_INTERVAL_MS ?? 20_000);
 
 const LOOKBACK = BigInt(process.env.LOCK_LOOKBACK_BLOCKS ?? 3_000);
