@@ -35,6 +35,23 @@ const GRAPHQL =
   process.env.MINA_DEVNET_GRAPHQL ?? 'https://api.minascan.io/node/devnet/v1/graphql';
 const FEE = 200_000_000;
 
+/**
+ * The Flare token a port administers, from `MINA_ASSET_PORTS`.
+ *
+ * Read from the port list rather than its own variable: that list already pairs
+ * every symbol with its Flare address, and a second copy is a second thing to
+ * get wrong — a mismatch here would point a port at the wrong asset's transfers.
+ */
+function flareTokenOf(symbol: string): string {
+  const ports = JSON.parse(required('MINA_ASSET_PORTS')) as Array<{
+    symbol: string;
+    flareToken: string;
+  }>;
+  const found = ports.find((p) => p.symbol.toLowerCase() === symbol.toLowerCase());
+  if (found === undefined) throw new Error(`${symbol} is not in MINA_ASSET_PORTS`);
+  return found.flareToken;
+}
+
 function required(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is not set — source .env first`);
@@ -136,13 +153,12 @@ async function main() {
     // a hash: a `PublicKey` costs two of the eight fields, and the eighth is
     // spent on `asset` — which is what separates this port's locks from the
     // other three now that they share a chain.
-    const symbolKey = symbol!.toUpperCase();
     after = [
       before[0]!,
       Field(0),
       Field(0),
       before[3]!,
-      Field(BigInt(required(`FLARE_${symbolKey}_ADDRESS`))),
+      Field(BigInt(flareTokenOf(symbol!))),
       before[4]!,
       Field(BigInt(required('FLARE_TRANSFER_CHAIN_ADDRESS'))),
       adminCommitment(PublicKey.from({ x: before[5]!, isOdd: before[6]!.equals(Field(1)) })),
