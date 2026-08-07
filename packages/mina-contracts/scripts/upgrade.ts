@@ -1,7 +1,9 @@
 import { AccountUpdate, Mina, PrivateKey, PublicKey, fetchAccount } from 'o1js';
 import { FungibleToken } from 'mina-fungible-token';
 import { AssetPort } from '../src/AssetPort.js';
+import { FdcAttestation, FdcLeaf } from '../src/FdcAttestation.js';
 import { LockChain } from '../src/LockChain.js';
+import { MerkleInclusion } from '../src/MerkleInclusion.js';
 import { MinaPortBridge } from '../src/MinaPortBridge.js';
 import { RelayMessage } from '../src/RelayMessage.js';
 import { SigningPolicyFold } from '../src/SigningPolicyFold.js';
@@ -61,6 +63,9 @@ async function main() {
     await WithdrawalChain.compile();
     await RelayMessage.compile();
     await SigningPolicyFold.compile();
+    await MerkleInclusion.compile();
+    await FdcLeaf.compile();
+    await FdcAttestation.compile();
     ({ verificationKey } = await MinaPortBridge.compile());
     address = PublicKey.fromBase58(required('MINA_BRIDGE_ACCOUNT'));
     zkAppKey = PrivateKey.fromBase58(required('BRIDGE_KEY'));
@@ -71,6 +76,9 @@ async function main() {
     await LockChain.compile();
     await RelayMessage.compile();
     await SigningPolicyFold.compile();
+    await MerkleInclusion.compile();
+    await FdcLeaf.compile();
+    await FdcAttestation.compile();
     ({ verificationKey } = await AssetPort.compile());
     address = PublicKey.fromBase58(required(`MINA_${upper}_PORT`));
     zkAppKey = PrivateKey.fromBase58(required(`MINA_${upper}_PORT_KEY`));

@@ -322,7 +322,7 @@ Bridged Flare assets, each a `FungibleToken` whose admin is an `AssetPort`:
 | bC2FLR | 9 | `B62qiVguTBzDp5vaHyTatzaQ2zTyhfU22tTi3VQ9MKfcnbnePukdQHQ` | `B62qk3V13bN1DfkGPRYj8zAuzuCxGitxfHwTuwAswZ4wA3GiEBd5nrc` |
 
 Every port shares one verification key —
-`4490781742443744861191195492751573265573206685544608170805360167687638271662` —
+`4521156475796503052894684743334034318326128329903794096474956123702318054773` —
 because they run the same circuit against different tokens.
 
 Decimals are never converted: `100000` base units is `0.1 USDT` on both chains,
@@ -337,7 +337,7 @@ Deployment parameters, which the return path depends on:
 
 | | |
 |---|---|
-| verification key hash | `26270422460089681377030212368415291460920486259765762471572767472922467625868` |
+| verification key hash | `5591623431868824314820851447908992564533139088677005722643394657802396877484` |
 | `signingPolicyRoot` | `9573309213728131632191235555805511915574463302731318985515435894312670369468` |
 | `requiredWeight` | `32767` — Coston2's real threshold, half of 65,534 |
 
