@@ -2,6 +2,9 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { AccountUpdate, Field, Mina, PrivateKey, PublicKey, UInt64, VerificationKey } from 'o1js';
 import { MinaPortBridge, flareRecipientField } from '../src/MinaPortBridge.js';
 import { SigningPolicyFold } from '../src/SigningPolicyFold.js';
+import { FdcAttestation, FdcLeaf } from '../src/FdcAttestation.js';
+import { MerkleInclusion } from '../src/MerkleInclusion.js';
+import { RelayMessage } from '../src/RelayMessage.js';
 import { WithdrawalChain } from '../src/WithdrawalChain.js';
 
 /**
@@ -44,7 +47,11 @@ beforeAll(async () => {
   // contract verifies proofs from both programs, so their keys must exist
   // before its own can be built.
   await WithdrawalChain.compile();
+  await RelayMessage.compile();
   await SigningPolicyFold.compile();
+  await MerkleInclusion.compile();
+  await FdcLeaf.compile();
+  await FdcAttestation.compile();
   ({ verificationKey: vk } = await MinaPortBridge.compile());
 
   zkAppKey = PrivateKey.random();
