@@ -67,9 +67,10 @@ const ESCROW = process.env.MINA_BRIDGE_ACCOUNT;
  * it had published and send a second transaction for the same state, and the
  * two collide on the fee payer's nonce so one is simply lost.
  *
- * `zkappState[3]` is `flareActionState` — see the field order in
- * MinaPortBridge.ts. Returns null when the account cannot be read, which is
- * treated as "do not publish" rather than "publish again".
+ * `zkappState[2]` is `flareActionState`. The slots moved when the attestor was
+ * removed — see the note in withdrawals.ts. Returns null when the account
+ * cannot be read, which is treated as "do not publish" rather than "publish
+ * again".
  */
 async function acceptedActionState(): Promise<bigint | null> {
   if (ESCROW === undefined) return null;
@@ -82,7 +83,7 @@ async function acceptedActionState(): Promise<bigint | null> {
       }),
     });
     const body = (await res.json()) as { data?: { account?: { zkappState?: string[] } } };
-    const state = body.data?.account?.zkappState?.[3];
+    const state = body.data?.account?.zkappState?.[2];
     return state === undefined ? null : BigInt(state);
   } catch {
     return null;

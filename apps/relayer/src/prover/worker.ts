@@ -276,11 +276,12 @@ const toRecord = (w: { nonce: string; recipient: string; amountNanomina: string 
 /**
  * Prove the stretch of Flare's chain that follows the released withdrawal.
  *
- * Links are proven first and merged afterwards rather than chained, so they are
- * independent — every intermediate state is known in advance, so a batch can
- * prove in parallel instead of waiting on its predecessor. Merging is folded
- * left because a release tail is short; a balanced tree would only pay off at
- * depths this will not reach.
+ * Links are proven first and merged afterwards rather than chained: every
+ * intermediate state is known in advance, so no link waits on its predecessor's
+ * proof. They are still proven one at a time — o1js has a single global proving
+ * context — but the independence is what lets a future worker pool parallelise
+ * them without changing the shape. Merging is folded left because a release
+ * tail is short.
  */
 async function proveTail(from: Field, tail: ReleaseRequest['tail']) {
   if (tail.length === 0) return (await WithdrawalChain.empty(from)).proof;
@@ -291,9 +292,14 @@ async function proveTail(from: Field, tail: ReleaseRequest['tail']) {
     states.push(applyWithdrawal(states[states.length - 1]!, record));
   }
 
-  const links = await Promise.all(
-    records.map(async (record, i) => (await WithdrawalChain.link(states[i]!, record)).proof),
-  );
+  // Sequential, despite the links being mathematically independent. o1js proves
+  // inside a global context that cannot be entered twice, so `Promise.all` over
+  // two links corrupts it and the error names a missing `await` rather than the
+  // real cause. It never showed until a tail held more than one link.
+  const links = [];
+  for (let i = 0; i < records.length; i++) {
+    links.push((await WithdrawalChain.link(states[i]!, records[i]!)).proof);
+  }
 
   let segment = links[0]!;
   for (let i = 1; i < links.length; i++) {
@@ -612,9 +618,12 @@ async function proveLockTail(from: unknown, tail: MintRequest['tail']) {
     states.push(applyLock(states[states.length - 1] as never, record));
   }
 
-  const links = await Promise.all(
-    records.map(async (record, i) => (await LockChain.link(states[i] as never, record)).proof),
-  );
+  // Sequential, for the reason given in `proveTail`: o1js cannot prove two
+  // things at once in one process.
+  const links = [];
+  for (let i = 0; i < records.length; i++) {
+    links.push((await LockChain.link(states[i] as never, records[i]!)).proof);
+  }
 
   let segment = links[0]!;
   for (let i = 1; i < links.length; i++) {

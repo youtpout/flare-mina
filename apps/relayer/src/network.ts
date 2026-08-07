@@ -55,8 +55,8 @@ async function attempt<T>(f: () => Promise<T>): Promise<T | null> {
 
 /**
  * The escrow's zkApp state, by field order in MinaPortBridge.ts:
- * 0 signingPolicyRoot, 1-2 withdrawalAttestor, 3 flareActionState,
- * 4 processedActionState, 5 requiredWeight.
+ * 0 signingPolicyRoot, 1 flareBridge, 2 flareActionState,
+ * 3 processedActionState, 4 requiredWeight, 5-6 admin.
  */
 async function minaState() {
   if (ESCROW === undefined) return null;
@@ -76,9 +76,9 @@ async function minaState() {
     address: ESCROW,
     balance: account.balance?.total ?? null,
     signingPolicyRoot: account.zkappState[0],
-    flareActionState: account.zkappState[3],
-    processedActionState: account.zkappState[4],
-    requiredWeight: account.zkappState[5],
+    flareActionState: account.zkappState[2],
+    processedActionState: account.zkappState[3],
+    requiredWeight: account.zkappState[4],
   };
 }
 

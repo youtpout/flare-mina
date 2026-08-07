@@ -78,7 +78,15 @@ const MINA_GRAPHQL =
   process.env.MINA_DEVNET_GRAPHQL ?? 'https://api.minascan.io/node/devnet/v1/graphql';
 const ESCROW = process.env.MINA_BRIDGE_ACCOUNT;
 
-/** `zkappState[3]` is `flareActionState` — see the field order in MinaPortBridge.ts. */
+/**
+ * `zkappState[2]` is `flareActionState`.
+ *
+ * The slots moved when the attestor was removed: 0 signingPolicyRoot,
+ * 1 flareBridge, 2 flareActionState, 3 processedActionState, 4 requiredWeight,
+ * 5-6 admin. Reading the old index returned `processedActionState`, which is
+ * always a state the escrow has already covered — so nothing was ever promoted
+ * and every withdrawal sat at "waiting for FDC" while the publisher worked.
+ */
 async function acceptedActionState(): Promise<bigint | null> {
   if (ESCROW === undefined) return null;
   try {
@@ -88,7 +96,7 @@ async function acceptedActionState(): Promise<bigint | null> {
       body: JSON.stringify({ query: `{ account(publicKey: "${ESCROW}") { zkappState } }` }),
     });
     const body = (await res.json()) as { data?: { account?: { zkappState?: string[] } } };
-    const state = body.data?.account?.zkappState?.[3];
+    const state = body.data?.account?.zkappState?.[2];
     return state === undefined ? null : BigInt(state);
   } catch {
     return null;
