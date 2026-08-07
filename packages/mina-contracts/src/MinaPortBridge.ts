@@ -15,16 +15,9 @@ import {
   state,
 } from 'o1js';
 import { DEPOSIT_DOMAIN, EVM_ADDRESS_BITS } from './constants.js';
-import {
-  WithdrawalChainProof,
-  WithdrawalRecord,
-  applyWithdrawal,
-} from './WithdrawalChain.js';
+import { TransferChainProof } from './TransferChain.js';
 import { FdcAttestationProof } from './FdcAttestation.js';
 import { FDC_PROTOCOL_ID } from './RelayMessage.js';
-
-/** Re-exported so callers of this contract get the record from one place. */
-export { WithdrawalRecord };
 
 /**
  * MinaPort bridge zkApp — the Mina side of the MINA <-> wMINA bridge.
@@ -84,7 +77,6 @@ export class DepositEvent extends Struct({
 
 /** A release, same purpose. */
 export class WithdrawalEvent extends Struct({
-  nonce: UInt64,
   recipient: PublicKey,
   amount: UInt64,
 }) {}
@@ -103,13 +95,14 @@ export class MinaPortBridge extends SmartContract {
   @state(Field) signingPolicyRoot = State<Field>();
 
   /**
-   * The Flare bridge whose events this escrow accepts, as a 160-bit field.
+   * The Flare `TransferChain` whose events this escrow accepts, as a 160-bit
+   * field.
    *
    * Pinned because an attestation proves an event happened, not that it was
-   * ours. Occupies one of the two fields the withdrawal attestor used to hold —
-   * that key is gone, and `publishFlareActionState` now proves what it asserted.
+   * ours. It is the chain contract rather than the bridge now: every asset folds
+   * into one chain, so one emitter and one event signature cover every rail.
    */
-  @state(Field) flareBridge = State<Field>();
+  @state(Field) flareChain = State<Field>();
 
   /**
    * Newest attested state of Flare's withdrawal chain. Append-only, so a newer
@@ -123,7 +116,14 @@ export class MinaPortBridge extends SmartContract {
   /** Signing weight a root must carry. Deployment state, since the number belongs to the network. */
   @state(UInt64) requiredWeight = State<UInt64>();
 
-  /** Admin key. Only privilege is rotating `withdrawalAttestor`; it cannot move funds. */
+  /**
+   * FMINA on Flare, as a 160-bit field. The shared chain carries every asset, so
+   * this is what tells a record of ours from one belonging to a wrapped-asset
+   * port — the escrow must never pay out against an FXRP lock.
+   */
+  @state(Field) token = State<Field>();
+
+  /** Admin key. Only privilege is rotating the signing policy; it cannot move funds. */
   @state(PublicKey) admin = State<PublicKey>();
 
   reducer = Reducer({ actionType: DepositAction });
@@ -137,8 +137,10 @@ export class MinaPortBridge extends SmartContract {
   override async deploy(
     args: DeployArgs & {
       admin: PublicKey;
-      /** The Flare bridge, as a 160-bit field. */
-      flareBridge: Field;
+      /** The Flare `TransferChain`, as a 160-bit field. */
+      flareChain: Field;
+      /** FMINA on Flare, as a 160-bit field. */
+      token: Field;
       /** Poseidon root over Flare's validator set. Zero accepts no proof. */
       signingPolicyRoot?: Field;
       /** Signing weight a Flare root must carry. Zero accepts any. */
@@ -147,14 +149,15 @@ export class MinaPortBridge extends SmartContract {
   ) {
     await super.deploy(args);
     this.admin.set(args.admin);
-    this.flareBridge.set(args.flareBridge);
+    this.flareChain.set(args.flareChain);
+    this.token.set(args.token);
     this.requiredWeight.set(args.requiredWeight ?? UInt64.zero);
     this.signingPolicyRoot.set(args.signingPolicyRoot ?? Field(0));
   }
 
   override init() {
     super.init();
-    // Zero is the empty chain on both sides: Flare's `withdrawalActionState`
+    // Zero is the empty chain on both sides: Flare's `TransferChain.head`
     // starts there too, so a fresh bridge is already in agreement.
     this.flareActionState.set(Field(0));
     this.processedActionState.set(Field(0));
@@ -267,7 +270,7 @@ export class MinaPortBridge extends SmartContract {
    * Nothing here is asserted by a key. The proof establishes that enough of
    * Flare's validator set signed an FDC round, that the attestation response
    * sits under that round's root, and that the state below was read from the
-   * `WithdrawToMina` event inside it.
+   * `Transfer` event inside it.
    *
    * Separate from releasing because establishing a state costs ECDSA and
    * keccak, and is identical across the whole batch it covers.
@@ -292,7 +295,7 @@ export class MinaPortBridge extends SmartContract {
 
     // And the event has to have come from our bridge.
     attested.emitter.assertEquals(
-      this.flareBridge.getAndRequireEquals(),
+      this.flareChain.getAndRequireEquals(),
       'the event came from another contract',
     );
 
@@ -301,42 +304,49 @@ export class MinaPortBridge extends SmartContract {
   }
 
   /**
-   * Release the next withdrawal. The record is untrusted; `tail` constrains it,
-   * since no fabricated record has a continuation reaching the attested state.
-   * Serialised: it advances a cursor, so two releases in one block conflict.
+   * Release the next withdrawal.
+   *
+   * Nothing is passed in but the segment: recipient and amount come out of the
+   * proof, which spans the cursor to the attested head and names the first FMINA
+   * record in that range. Records of other assets in between are stepped over,
+   * proven foreign in circuit — the caller does not get to choose what to skip.
+   *
+   * Serialised: it advances the cursor, so two releases in one block conflict.
    */
-  @method async releaseWithdrawal(record: WithdrawalRecord, tail: WithdrawalChainProof) {
-    record.amount.assertGreaterThan(UInt64.zero, 'withdrawal amount must be non-zero');
+  @method async releaseWithdrawal(segment: TransferChainProof) {
+    segment.verify();
+    const found = segment.publicOutput;
+
+    found.token.assertEquals(
+      this.token.getAndRequireEquals(),
+      'segment was examined for another asset',
+    );
+    found.from.assertEquals(
+      this.processedActionState.getAndRequireEquals(),
+      'segment does not start at the cursor',
+    );
+    found.to.assertEquals(
+      this.flareActionState.getAndRequireEquals(),
+      'segment does not reach the attested Flare state',
+    );
+    found.found.assertTrue('no withdrawal to release');
+    found.firstAmount.assertGreaterThan(UInt64.zero, 'withdrawal amount must be non-zero');
 
     // Collateral check, against the account balance rather than a number we
     // maintain. With `receive: proof()` the balance moves only through these
     // methods, so it *is* the escrowed total — and a precondition on a range
     // rather than an exact value means a concurrent deposit does not
     // invalidate an in-flight release.
-    this.account.balance.requireBetween(record.amount, UInt64.MAXINT());
+    this.account.balance.requireBetween(found.firstAmount, UInt64.MAXINT());
 
-    tail.verify();
+    this.processedActionState.set(found.stateAfterFirst);
 
-    // This record's own link is computed here, not taken from the proof: it is
-    // what binds the recipient and amount being paid to the chain.
-    const processed = this.processedActionState.getAndRequireEquals();
-    const next = applyWithdrawal(processed, record);
-
-    tail.publicOutput.from.assertEquals(next, 'tail does not continue from this withdrawal');
-    tail.publicOutput.to.assertEquals(
-      this.flareActionState.getAndRequireEquals(),
-      'tail does not reach the attested Flare state',
-    );
-
-    this.processedActionState.set(next);
-
-    this.send({ to: record.recipient, amount: record.amount });
+    this.send({ to: found.firstRecipient, amount: found.firstAmount });
     this.emitEvent(
       'withdrawal',
       new WithdrawalEvent({
-        nonce: record.nonce,
-        recipient: record.recipient,
-        amount: record.amount,
+        recipient: found.firstRecipient,
+        amount: found.firstAmount,
       }),
     );
   }

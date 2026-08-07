@@ -15,8 +15,8 @@ import {PausableUpgradeable} from
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import {MinaAddressLib} from "./libraries/MinaAddress.sol";
-import {PoseidonPallas} from "./libraries/PoseidonPallas.sol";
 import {BridgeWrapper} from "./BridgeWrapper.sol";
+import {TransferChain} from "./TransferChain.sol";
 
 interface IWNat {
     function deposit() external payable;
@@ -36,12 +36,12 @@ interface IWNat {
 /// code — fee-on-transfer, rebasing, reentrant callbacks. Keeping that away from
 /// an unbounded mint authority is the whole reason for a separate address.
 ///
-/// **The Poseidon lock chain, one per token.** Every lock folds its record into
-/// `lockActionStateOf[token]`, exactly as `burnToMina` folds withdrawals. Mina
-/// replays the chain in a ZkProgram and mints against a state the Flare
-/// validator set has signed, so no attestor sits between the lock and the mint.
-/// Per token rather than global so each wrapped asset advances independently and
-/// its Mina port never has to replay links belonging to another asset.
+/// **The lock chain lives in {TransferChain}.** Every lock folds into the one
+/// Poseidon chain shared with the FMINA rail, so a single FDC attestation covers
+/// every asset that moved. Mina replays that chain in a ZkProgram and mints
+/// against a state the Flare validator set has signed, so no attestor sits
+/// between the lock and the mint. It used to be one chain per token, which meant
+/// one attestation and one full proving pass per asset that moved.
 ///
 /// **The invariant**, per token: `balanceOf(token) >= lockedOf(token)`, and
 /// `lockedOf(token)` equals the supply minted on Mina once every claim has
@@ -55,9 +55,9 @@ contract AssetVault is Ownable2StepUpgradeable, PausableUpgradeable, ReentrancyG
     /// represent must cross through `BridgeWrapper` first.
     mapping(address => uint256) public lockedOf;
 
-    /// @notice Next claim id, per token. It is the position in that token's
-    /// chain, so the Mina side derives it by counting links rather than trusting
-    /// a number.
+    /// @notice Locks recorded per token. Bookkeeping only since the chain moved
+    /// to {TransferChain}: a lock is named by its global chain index, not by
+    /// this, so the two never have to agree.
     mapping(address => uint256) public nextClaimIdOf;
 
     /// @notice Tokens this vault accepts.
@@ -66,8 +66,9 @@ contract AssetVault is Ownable2StepUpgradeable, PausableUpgradeable, ReentrancyG
     /// token would be a supply bug rather than a bad trade.
     mapping(address => bool) public accepted;
 
-    /// @notice Head of each token's Poseidon lock chain. The value Mina proves
-    /// against; it starts at zero and only ever moves forward.
+    /// @notice DEPRECATED. Head of each token's own lock chain, before every
+    /// asset was folded into {TransferChain}. Kept so the proxy's storage layout
+    /// does not shift; frozen at whatever it held at the upgrade.
     mapping(address => uint256) public lockActionStateOf;
 
     /// @notice Claim ids already released back to Flare, per token.
@@ -78,15 +79,15 @@ contract AssetVault is Ownable2StepUpgradeable, PausableUpgradeable, ReentrancyG
     IWNat public WNAT;
     BridgeWrapper public NATIVE_WRAPPER;
 
-    /// @dev Domain separator, matching `LOCK_PREFIX` in the Mina LockChain.
-    /// "MinaPortLockV1" read as little-endian bytes, o1js `prefixToField`.
-    uint256 internal constant LOCK_PREFIX_FIELD = 1000684927660458632616681252219213;
+    /// @notice The shared chain every lock is folded into.
+    TransferChain public transferChain;
 
     /// @dev Reserved so future versions can add state behind the proxy.
-    uint256[44] private __gap;
+    uint256[43] private __gap;
 
-    /// @notice The canonical lock. Field order is protocol: it mirrors the fold
-    /// below and the `LockRecord` the Mina side replays.
+    /// @notice A lock, as this vault saw it. Informational: what Mina proves
+    /// against is {TransferChain-Transfer}, and `claimId` here is that chain's
+    /// global index so the two can be lined up.
     event AssetLocked(
         uint256 indexed claimId,
         address indexed token,
@@ -102,6 +103,7 @@ contract AssetVault is Ownable2StepUpgradeable, PausableUpgradeable, ReentrancyG
     );
     event TokenAccepted(address indexed token, bool accepted);
     event NativeRouteSet(address wnat, address wrapper);
+    event TransferChainSet(address indexed chain);
 
     error ZeroAmount();
     error ZeroAddress();
@@ -112,6 +114,7 @@ contract AssetVault is Ownable2StepUpgradeable, PausableUpgradeable, ReentrancyG
     error ClaimAlreadyReleased(address token, uint256 claimId);
     error NativeRouteNotSet();
     error NativeTransferFailed();
+    error TransferChainNotSet();
 
     constructor() {
         _disableInitializers();
@@ -132,6 +135,15 @@ contract AssetVault is Ownable2StepUpgradeable, PausableUpgradeable, ReentrancyG
         emit NativeRouteSet(address(wnat), address(wrapper));
     }
 
+    /// @notice Point locks at the shared chain.
+    /// @dev The chain must also grant this vault `mayAppend` for every accepted
+    /// token; setting it here is only half the handshake.
+    function setTransferChain(TransferChain chain) external onlyOwner {
+        if (address(chain) == address(0)) revert ZeroAddress();
+        transferChain = chain;
+        emit TransferChainSet(address(chain));
+    }
+
     /// @notice Accept or refuse a token.
     function setAccepted(address token, bool value) external onlyOwner {
         if (token == address(0)) revert ZeroAddress();
@@ -141,6 +153,7 @@ contract AssetVault is Ownable2StepUpgradeable, PausableUpgradeable, ReentrancyG
 
     /// @notice Lock `amount` of `token` and name the Mina account entitled to it.
     /// @param minaRecipient Mina account, packed as `x | isOdd << 255`.
+    /// @return claimId Position in the shared chain — how Mina names this lock.
     function lock(address token, uint256 amount, bytes32 minaRecipient)
         external
         whenNotPaused
@@ -190,32 +203,29 @@ contract AssetVault is Ownable2StepUpgradeable, PausableUpgradeable, ReentrancyG
     /// emit. The recipient is checked as a Pallas field element here because a
     /// malformed key names no Mina account, so accepting it would lock funds
     /// against a mint nobody can claim.
+    ///
+    /// The fold is the chain's, and it happens last: `append` is what makes the
+    /// lock claimable on Mina, so nothing may revert after it.
     function _record(address token, uint256 received, bytes32 minaRecipient, address sender)
         internal
-        returns (uint256 claimId)
+        returns (uint256 index)
     {
         if (received == 0) revert NothingReceived();
         if (received > type(uint64).max) revert AmountExceedsUint64();
+        TransferChain chain = transferChain;
+        if (address(chain) == address(0)) revert TransferChainNotSet();
         (uint256 recipientX, bool recipientIsOdd) =
             MinaAddressLib.unpack(MinaAddressLib.fromBytes32(minaRecipient));
 
-        claimId = nextClaimIdOf[token];
-        nextClaimIdOf[token] = claimId + 1;
+        nextClaimIdOf[token] += 1;
         lockedOf[token] += received;
 
-        uint256 previousActionState = lockActionStateOf[token];
-        uint256[] memory fields = new uint256[](5);
-        fields[0] = previousActionState;
-        fields[1] = claimId;
-        fields[2] = recipientX;
-        fields[3] = recipientIsOdd ? 1 : 0;
-        fields[4] = received;
-        uint256 newActionState = PoseidonPallas.hashWithPrefix(LOCK_PREFIX_FIELD, fields);
-        lockActionStateOf[token] = newActionState;
+        uint256 previousHead = chain.head();
+        uint256 newHead;
+        (index, newHead) =
+            chain.append(token, sender, minaRecipient, recipientX, recipientIsOdd, received);
 
-        emit AssetLocked(
-            claimId, token, sender, minaRecipient, received, previousActionState, newActionState
-        );
+        emit AssetLocked(index, token, sender, minaRecipient, received, previousHead, newHead);
     }
 
     /// @notice Release tokens whose Mina-side wrapper has been burned.

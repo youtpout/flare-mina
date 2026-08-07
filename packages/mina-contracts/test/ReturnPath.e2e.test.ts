@@ -12,8 +12,8 @@
  */
 import { expect, it } from 'vitest';
 import { AccountUpdate, Field, MerkleTree, Mina, PrivateKey, UInt32, UInt64 } from 'o1js';
-import { MinaPortBridge, WithdrawalRecord, flareRecipientField } from '../src/MinaPortBridge.js';
-import { WithdrawalChain, applyWithdrawal } from '../src/WithdrawalChain.js';
+import { MinaPortBridge, flareRecipientField } from '../src/MinaPortBridge.js';
+import { TransferChain, TransferRecord, applyTransfer } from '../src/TransferChain.js';
 import { keccak256 } from 'viem';
 import { Bytes38, RelayMessage } from '../src/RelayMessage.js';
 import { AttestationResponse, FdcAttestation, FdcLeaf } from '../src/FdcAttestation.js';
@@ -29,6 +29,7 @@ import {
 } from '../src/SigningPolicyFold.js';
 
 const FLARE_BRIDGE = Field(BigInt('0x871493412EDCcfE0d24f127E6Deb2B20AE5497aB'));
+const FMINA = Field(BigInt('0x1234567890AbcdEF1234567890aBcdef12345678'));
 const TOPIC0 = BigInt('0x1e0b6b1f6b2a3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5');
 
 it('end to end with real proofs', async () => {
@@ -36,7 +37,7 @@ it('end to end with real proofs', async () => {
   const MINA = 1_000_000_000n;
   let m = Date.now();
 
-  await WithdrawalChain.compile();                       t('compile WithdrawalChain', Date.now() - m);
+  await TransferChain.compile();                         t('compile TransferChain', Date.now() - m);
   m = Date.now(); await RelayMessage.compile();           t('compile RelayMessage', Date.now() - m);
   m = Date.now(); await SigningPolicyFold.compile();     t('compile SigningPolicyFold', Date.now() - m);
   m = Date.now(); await MerkleInclusion.compile();       t('compile MerkleInclusion', Date.now() - m);
@@ -64,7 +65,8 @@ it('end to end with real proofs', async () => {
     AccountUpdate.fundNewAccount(deployer);
     await bridge.deploy({
       admin: deployer,
-      flareBridge: FLARE_BRIDGE,
+      flareChain: FLARE_BRIDGE,
+      token: FMINA,
       signingPolicyRoot: policyTree.getRoot(),
     });
   });
@@ -79,10 +81,10 @@ it('end to end with real proofs', async () => {
   t('deposit (5 MINA escrowed)', Date.now() - m);
 
   // Flare's chain: two withdrawals.
-  const w1 = new WithdrawalRecord({ nonce: UInt64.from(1n), recipient: user, amount: UInt64.from(MINA) });
-  const s1 = applyWithdrawal(Field(0), w1);
-  const w2 = new WithdrawalRecord({ nonce: UInt64.from(2n), recipient: user, amount: UInt64.from(2n * MINA) });
-  const s2 = applyWithdrawal(s1, w2);
+  const w1 = new TransferRecord({ index: UInt64.from(1n), token: FMINA, recipient: user, amount: UInt64.from(MINA) });
+  const s1 = applyTransfer(Field(0), w1);
+  const w2 = new TransferRecord({ index: UInt64.from(2n), token: FMINA, recipient: user, amount: UInt64.from(2n * MINA) });
+  const s2 = applyTransfer(s1, w2);
 
   // The attestation Flare would produce for a `WithdrawToMina` carrying `s2`.
   const response = new Uint8Array(1344);
@@ -139,20 +141,25 @@ it('end to end with real proofs', async () => {
   expect(bridge.flareActionState.get().toString()).toBe(s2.toString());
 
   m = Date.now();
-  const { proof: tail1 } = await WithdrawalChain.link(s1, w2);
-  t('prove tail (1 link)', Date.now() - m);
+  const { proof: e0 } = await TransferChain.empty(Field(0), FMINA);
+  const { proof: l1 } = await TransferChain.link(Field(0), FMINA, w1);
+  const { proof: l2 } = await TransferChain.link(s1, FMINA, w2);
+  const { proof: half } = await TransferChain.merge(e0, l1);
+  const { proof: seg1 } = await TransferChain.merge(half, l2);
+  t('prove segment (2 links)', Date.now() - m);
 
   const before = Mina.getBalance(user).toBigInt();
   m = Date.now();
-  tx = await Mina.transaction(deployer, async () => { await bridge.releaseWithdrawal(w1, tail1); });
+  tx = await Mina.transaction(deployer, async () => { await bridge.releaseWithdrawal(seg1); });
   await tx.prove(); await tx.sign([deployerKey]).send();
   t('releaseWithdrawal #1', Date.now() - m);
 
   m = Date.now();
-  const { proof: tail2 } = await WithdrawalChain.empty(s2);
-  t('prove tail (empty)', Date.now() - m);
+  const { proof: e1 } = await TransferChain.empty(s1, FMINA);
+  const { proof: seg2 } = await TransferChain.merge(e1, l2);
+  t('prove segment (1 link)', Date.now() - m);
   m = Date.now();
-  tx = await Mina.transaction(deployer, async () => { await bridge.releaseWithdrawal(w2, tail2); });
+  tx = await Mina.transaction(deployer, async () => { await bridge.releaseWithdrawal(seg2); });
   await tx.prove(); await tx.sign([deployerKey]).send();
   t('releaseWithdrawal #2', Date.now() - m);
 

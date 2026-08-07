@@ -8,6 +8,7 @@ import {TransparentUpgradeableProxy} from
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AssetVault, IWNat} from "../src/AssetVault.sol";
 import {BridgeWrapper} from "../src/BridgeWrapper.sol";
+import {TransferChain} from "../src/TransferChain.sol";
 
 contract MockToken is ERC20 {
     constructor() ERC20("Mock", "MOCK") {}
@@ -54,6 +55,7 @@ contract MockWNat is ERC20 {
 
 contract AssetVaultTest is Test {
     AssetVault internal vault;
+    TransferChain internal chain;
     MockToken internal token;
 
     address internal owner = address(0xA11CE);
@@ -76,14 +78,25 @@ contract AssetVaultTest is Test {
                 )
             )
         );
+        chain = new TransferChain(owner);
+        vm.prank(owner);
+        vault.setTransferChain(chain);
+
         token = new MockToken();
         token.mint(user, 1_000e6);
-
-        vm.prank(owner);
-        vault.setAccepted(address(token), true);
+        _accept(address(token));
 
         vm.prank(user);
         token.approve(address(vault), type(uint256).max);
+    }
+
+    /// @dev Both halves of the handshake: the vault takes the token, and the
+    /// chain lets this vault record that token. Neither implies the other.
+    function _accept(address token_) internal {
+        vm.startPrank(owner);
+        vault.setAccepted(token_, true);
+        chain.setAppender(address(vault), token_, true);
+        vm.stopPrank();
     }
 
     function test_locksAndAssignsAClaimId() public {
@@ -96,55 +109,76 @@ contract AssetVaultTest is Test {
         assertTrue(vault.isSolvent(address(token)));
     }
 
-    /// @dev Per token, not global. Each asset's Mina port replays only its own
-    /// chain, so a claim id has to be that chain's position or the port would
-    /// have to know about assets it does not administer.
-    function test_claimIdsAreCountedPerToken() public {
+    /// @dev One chain for every asset, so an id names a transfer outright. The
+    /// record carries its token, which is how a Mina port tells its own entries
+    /// from the ones it must step over.
+    function test_claimIdsAreGlobalAcrossAssets() public {
         MockToken other = new MockToken();
         other.mint(user, 10e6);
-        vm.prank(owner);
-        vault.setAccepted(address(other), true);
+        _accept(address(other));
         vm.prank(user);
         other.approve(address(vault), type(uint256).max);
 
         vm.prank(user);
         assertEq(vault.lock(address(token), 1e6, MINA_RECIPIENT), 0);
         vm.prank(user);
-        assertEq(vault.lock(address(other), 1e6, MINA_RECIPIENT), 0);
+        assertEq(vault.lock(address(other), 1e6, MINA_RECIPIENT), 1);
         vm.prank(user);
-        assertEq(vault.lock(address(token), 1e6, MINA_RECIPIENT), 1);
+        assertEq(vault.lock(address(token), 1e6, MINA_RECIPIENT), 2);
     }
 
     /// @dev The chain is what Mina replays, so its head must move on every lock
     /// and the event must carry both ends of the link.
     function test_lockAdvancesThePoseidonChain() public {
-        assertEq(vault.lockActionStateOf(address(token)), 0, "an empty chain starts at zero");
+        assertEq(chain.head(), 0, "an empty chain starts at zero");
 
         vm.prank(user);
         vault.lock(address(token), 1e6, MINA_RECIPIENT);
-        uint256 first = vault.lockActionStateOf(address(token));
+        uint256 first = chain.head();
         assertTrue(first != 0);
 
         vm.prank(user);
         vault.lock(address(token), 1e6, MINA_RECIPIENT);
-        uint256 second = vault.lockActionStateOf(address(token));
+        uint256 second = chain.head();
         assertTrue(second != first, "each lock must extend the chain");
     }
 
-    /// @dev Chains are independent, so activity on one asset must not move
-    /// another's head — a Mina port would otherwise stall on a link it cannot
-    /// replay.
-    function test_chainsDoNotInterfere() public {
+    /// @dev The point of the shared chain: every asset moves the same head, so
+    /// one FDC attestation covers them all.
+    function test_everyAssetSharesOneChain() public {
         MockToken other = new MockToken();
         other.mint(user, 10e6);
-        vm.prank(owner);
-        vault.setAccepted(address(other), true);
+        _accept(address(other));
         vm.prank(user);
         other.approve(address(vault), type(uint256).max);
 
         vm.prank(user);
         vault.lock(address(token), 1e6, MINA_RECIPIENT);
-        assertEq(vault.lockActionStateOf(address(other)), 0);
+        uint256 afterFirst = chain.head();
+
+        vm.prank(user);
+        vault.lock(address(other), 1e6, MINA_RECIPIENT);
+        assertTrue(chain.head() != afterFirst, "the other asset extends the same chain");
+    }
+
+    /// @dev Accepting a token here is not permission to record it there. A
+    /// vault that could append anything could forge a transfer of an asset it
+    /// does not custody, and Mina would verify that forgery faithfully.
+    function test_lockFailsWithoutPermissionOnTheChain() public {
+        MockToken rogue = new MockToken();
+        rogue.mint(user, 10e6);
+        vm.prank(owner);
+        vault.setAccepted(address(rogue), true);
+        vm.prank(user);
+        rogue.approve(address(vault), type(uint256).max);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TransferChain.NotAnAppender.selector, address(vault), address(rogue)
+            )
+        );
+        vm.prank(user);
+        vault.lock(address(rogue), 1e6, MINA_RECIPIENT);
     }
 
     /// @dev Mina accounts in `UInt64`. A larger amount would be locked here and
@@ -178,8 +212,7 @@ contract AssetVaultTest is Test {
     function test_creditsTheReceivedAmountNotTheRequestedOne() public {
         FeeToken fee = new FeeToken();
         fee.mint(user, 1_000e6);
-        vm.prank(owner);
-        vault.setAccepted(address(fee), true);
+        _accept(address(fee));
         vm.prank(user);
         fee.approve(address(vault), type(uint256).max);
 
@@ -273,10 +306,9 @@ contract AssetVaultTest is Test {
         MockWNat wnat = new MockWNat();
         BridgeWrapper wrapper = new BridgeWrapper(IERC20(address(wnat)));
 
-        vm.startPrank(owner);
+        vm.prank(owner);
         vault.setNativeRoute(IWNat(address(wnat)), wrapper);
-        vault.setAccepted(address(wrapper), true);
-        vm.stopPrank();
+        _accept(address(wrapper));
 
         vm.deal(user, 5 ether);
         vm.prank(user);
@@ -286,7 +318,7 @@ contract AssetVaultTest is Test {
         // mints, and the one `UInt64` can hold.
         assertEq(claimId, 0);
         assertEq(vault.lockedOf(address(wrapper)), 2e9);
-        assertTrue(vault.lockActionStateOf(address(wrapper)) != 0);
+        assertTrue(chain.head() != 0);
         assertTrue(vault.isSolvent(address(wrapper)));
 
         vm.prank(owner);

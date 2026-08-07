@@ -170,6 +170,28 @@ other paths do carry the network.
 
 ## Key design decisions
 
+### One chain for every asset (`TransferChain`)
+
+Every Flare -> Mina transfer — MINA burns and asset locks alike — folds into a
+single Poseidon chain in `TransferChain.sol`. Per-asset chains cost one FDC
+attestation and one full proving pass *per asset that moved*: request, wait for
+a round, hash 1344 bytes in-circuit, climb a Merkle path. Four assets meant four
+of those per cycle, and the relayer never caught up.
+
+- `mayAppend[appender][token]` — authorisation is per (contract, token), not per
+  contract. A caller able to append anything could forge a transfer of an asset
+  it does not custody, and Mina would verify the forgery faithfully.
+- The token is inside the fold, so the same transfer of a different asset is a
+  different link.
+- `ChainSegment` carries `found / firstRecipient / firstAmount / stateAfterFirst`:
+  the circuit picks the first record of the consumer's asset and says where the
+  cursor lands. Consumers pass **only** the segment — no record, no recipient,
+  no amount. Two proofs in one method (prefix + tail) blows the wrap domain.
+- Foreign records must be in the range being proven. Leaving them out produces a
+  segment that does not meet.
+- The relayer indexes it into `transfers`, the ordered ledger both rails read.
+  `locks` and `withdrawals` remain, for user-facing status only.
+
 ### Decimals
 FMINA has **9 decimals**, not 18. One nanomina locked on Mina equals one FMINA
 base unit. The collateral invariant `totalSupply(FMINA) == escrowedNanomina` is
@@ -298,7 +320,7 @@ Mina circuit rows (65,536-row domain, so >21k forces recursion):
 |---|---|
 | Poseidon, 2 fields | 13 |
 | Mina Schnorr verify | 349 |
-| `WithdrawalChain.link` | 48 |
+| `TransferChain.link` | 55 |
 | policy membership, 128 leaves | 132 |
 | `IndexedMerkleMap` h=21, get | 340 |
 | `releaseWithdrawal` | 795 |

@@ -10,10 +10,11 @@ import {
   UInt64,
 } from 'o1js';
 import {
-  WithdrawalChain,
-  type WithdrawalChainProof,
-  applyWithdrawal,
-} from '../src/WithdrawalChain.js';
+  TransferChain,
+  type TransferChainProof,
+  TransferRecord,
+  applyTransfer,
+} from '../src/TransferChain.js';
 import { keccak256 } from 'viem';
 import { Bytes38, RelayMessage } from '../src/RelayMessage.js';
 import { AttestationResponse, FdcAttestation, FdcLeaf } from '../src/FdcAttestation.js';
@@ -31,15 +32,18 @@ import {
   DepositAction,
   DepositEvent,
   MinaPortBridge,
-  WithdrawalRecord,
   flareRecipientField,
   flareRecipientHex,
 } from '../src/MinaPortBridge.js';
 
 const MINA = 1_000_000_000n;
 
-/** The Flare bridge this escrow accepts events from, and the `WithdrawToMina` signature. */
+/** The Flare `TransferChain` this escrow accepts events from, and the `Transfer` signature. */
 const FLARE_BRIDGE = Field(BigInt('0x871493412EDCcfE0d24f127E6Deb2B20AE5497aB'));
+
+/** FMINA, and an asset belonging to another port — the chain carries both. */
+const FMINA = Field(BigInt('0x1234567890AbcdEF1234567890aBcdef12345678'));
+const OTHER_ASSET = Field(BigInt('0x8b4abA9C4BD7DD961659b02129beE20c6286e17F'));
 const TOPIC0 = BigInt('0x1e0b6b1f6b2a3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5');
 
 const RECIPIENT_A = '0x1111111111111111111111111111111111111111';
@@ -83,7 +87,8 @@ beforeAll(async () => {
     AccountUpdate.fundNewAccount(deployer);
     await bridge.deploy({
       admin: deployer,
-      flareBridge: FLARE_BRIDGE,
+      flareChain: FLARE_BRIDGE,
+      token: FMINA,
       signingPolicyRoot: policyTree.getRoot(),
     });
   });
@@ -261,13 +266,15 @@ describe('withdrawal release', () => {
    * `burnToMina` computes them, so these are the exact values the contract has
    * to land on.
    */
-  let w1: WithdrawalRecord;
+  let w1: TransferRecord;
   let s1: Field;
-  let w2: WithdrawalRecord;
+  let foreign: TransferRecord;
+  let sForeign: Field;
+  let w2: TransferRecord;
   let s2: Field;
 
   beforeAll(async () => {
-    await WithdrawalChain.compile({ proofsEnabled: false });
+    await TransferChain.compile({ proofsEnabled: false });
     await RelayMessage.compile({ proofsEnabled: false });
     await SigningPolicyFold.compile({ proofsEnabled: false });
     await MerkleInclusion.compile({ proofsEnabled: false });
@@ -276,18 +283,29 @@ describe('withdrawal release', () => {
 
     // Built here, not at describe scope: `user` is only assigned in the outer
     // beforeAll, which has not run when the describe body is evaluated.
-    w1 = new WithdrawalRecord({
-      nonce: UInt64.from(1n),
+    w1 = new TransferRecord({
+      index: UInt64.from(1n),
+      token: FMINA,
       recipient: user,
       amount: UInt64.from(MINA),
     });
-    s1 = applyWithdrawal(Field(0), w1);
-    w2 = new WithdrawalRecord({
-      nonce: UInt64.from(2n),
+    s1 = applyTransfer(Field(0), w1);
+    // An FXRP lock sitting between two MINA withdrawals. The escrow must step
+    // over it without paying it, which is the whole point of one shared chain.
+    foreign = new TransferRecord({
+      index: UInt64.from(2n),
+      token: OTHER_ASSET,
+      recipient: user,
+      amount: UInt64.from(7n * MINA),
+    });
+    sForeign = applyTransfer(s1, foreign);
+    w2 = new TransferRecord({
+      index: UInt64.from(3n),
+      token: FMINA,
       recipient: user,
       amount: UInt64.from(2n * MINA),
     });
-    s2 = applyWithdrawal(s1, w2);
+    s2 = applyTransfer(sForeign, w2);
   }, 300_000);
 
   /**
@@ -379,9 +397,9 @@ describe('withdrawal release', () => {
     ).rejects.toThrow(/came from another contract/);
   }, 600_000);
 
-  async function release(record: WithdrawalRecord, tail: WithdrawalChainProof) {
+  async function release(segment: TransferChainProof) {
     const tx = await Mina.transaction(deployer, async () => {
-      await bridge.releaseWithdrawal(record, tail);
+      await bridge.releaseWithdrawal(segment);
     });
     await tx.prove();
     return tx.sign([deployerKey]).send();
@@ -392,62 +410,89 @@ describe('withdrawal release', () => {
     expect(bridge.flareActionState.get().toString()).toBe(s2.toString());
   }, 300_000);
 
+  /** The full range the escrow is looking at, examined for FMINA. */
+  async function segmentFrom(from: Field, records: TransferRecord[]) {
+    let state = from;
+    let segment = (await TransferChain.empty(from, FMINA)).proof;
+    for (const record of records) {
+      const link = (await TransferChain.link(state, FMINA, record)).proof;
+      state = applyTransfer(state, record);
+      segment = (await TransferChain.merge(segment, link)).proof;
+    }
+    return segment;
+  }
+
   /**
-   * The property the design rests on: the record is untrusted input, and what
-   * constrains it is that no other record has a continuation reaching the
-   * attested state.
+   * The property the design rests on: the payee and amount are not arguments,
+   * they come out of a proof spanning the cursor to the attested head. A
+   * segment ending anywhere else is refused, so a fabricated record has nowhere
+   * to live.
    */
-  it('refuses a fabricated withdrawal', async () => {
-    const fake = new WithdrawalRecord({
-      nonce: UInt64.from(1n),
+  it('refuses a segment that stops short of the attested state', async () => {
+    const fake = new TransferRecord({
+      index: UInt64.from(1n),
+      token: FMINA,
       recipient: deployer,
       amount: UInt64.from(MINA),
     });
-    const { proof: tail } = await WithdrawalChain.link(applyWithdrawal(Field(0), fake), w2);
 
-    await expect(release(fake, tail)).rejects.toThrow(/does not reach the attested/);
+    await expect(release(await segmentFrom(Field(0), [fake]))).rejects.toThrow(
+      /does not reach the attested/,
+    );
   }, 300_000);
 
-  /** Same withdrawal, altered amount — the amount is inside the hash. */
-  it('refuses a withdrawal whose amount was changed', async () => {
-    const altered = new WithdrawalRecord({
-      nonce: UInt64.from(1n),
-      recipient: user,
-      amount: UInt64.from(5n * MINA),
-    });
-    const { proof: tail } = await WithdrawalChain.link(s1, w2);
+  /** A segment examined for another asset would pay an FXRP lock out of the escrow. */
+  it('refuses a segment examined for another asset', async () => {
+    let state = Field(0);
+    let segment = (await TransferChain.empty(Field(0), OTHER_ASSET)).proof;
+    for (const record of [w1, foreign, w2]) {
+      const link = (await TransferChain.link(state, OTHER_ASSET, record)).proof;
+      state = applyTransfer(state, record);
+      segment = (await TransferChain.merge(segment, link)).proof;
+    }
 
-    await expect(release(altered, tail)).rejects.toThrow(/does not continue/);
+    await expect(release(segment)).rejects.toThrow(/examined for another asset/);
   }, 300_000);
 
   it('releases the first withdrawal and advances the cursor', async () => {
     const balanceBefore = Mina.getBalance(user).toBigInt();
     const escrowBefore = Mina.getBalance(zkAppAddress).toBigInt();
 
-    const { proof: tail } = await WithdrawalChain.link(s1, w2);
-    await release(w1, tail);
+    await release(await segmentFrom(Field(0), [w1, foreign, w2]));
 
     expect(bridge.processedActionState.get().toString()).toBe(s1.toString());
     expect(Mina.getBalance(zkAppAddress).toBigInt()).toBe(escrowBefore - MINA);
     expect(Mina.getBalance(user).toBigInt()).toBe(balanceBefore + MINA);
   }, 300_000);
 
-  /** The newest withdrawal has an empty tail — that is what `empty` is for. */
-  it('releases the last withdrawal against an empty tail', async () => {
-    const { proof: tail } = await WithdrawalChain.empty(s2);
-    await release(w2, tail);
+  /**
+   * The shared chain in one test: the cursor sits before an FXRP lock, and the
+   * next release steps over it to the MINA withdrawal behind it — without ever
+   * paying the FXRP one, and without the caller choosing what to skip.
+   */
+  it('steps over another asset to reach the next withdrawal', async () => {
+    const balanceBefore = Mina.getBalance(user).toBigInt();
+
+    await release(await segmentFrom(s1, [foreign, w2]));
 
     expect(bridge.processedActionState.get().toString()).toBe(s2.toString());
+    expect(Mina.getBalance(user).toBigInt()).toBe(balanceBefore + 2n * MINA);
   }, 300_000);
 
   /**
-   * Replay protection now comes from the cursor rather than a stored nonce.
-   * The cursor sits at s2, so folding w1 onto it lands somewhere the old tail
-   * does not begin — the release is refused because the two no longer meet.
+   * Replay protection comes from the cursor rather than a stored nonce. It sits
+   * at s2 now, so a segment starting at s1 no longer begins where the contract
+   * is.
    */
   it('refuses a replayed withdrawal', async () => {
-    const { proof: tail } = await WithdrawalChain.link(s1, w2);
-    await expect(release(w1, tail)).rejects.toThrow(/does not continue/);
+    await expect(release(await segmentFrom(s1, [foreign, w2]))).rejects.toThrow(
+      /does not start at the cursor/,
+    );
+  }, 300_000);
+
+  /** Nothing left to pay: the range holds no FMINA record at all. */
+  it('refuses when the range holds nothing of ours', async () => {
+    await expect(release(await segmentFrom(s2, []))).rejects.toThrow(/no withdrawal to release/);
   }, 300_000);
 });
 

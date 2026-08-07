@@ -1,6 +1,6 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Worker } from 'node:worker_threads';
+import { fork, type ChildProcess } from 'node:child_process';
 
 /**
  * Front end to the proving worker: one worker, one proof at a time, a queue in
@@ -33,16 +33,39 @@ type Pending = {
   reject: (error: Error) => void;
 };
 
-let worker: Worker | undefined;
-let ready: Promise<void> | undefined;
+/**
+ * Two provers, because they serve different masters.
+ *
+ * A publication is three to five minutes of proving; a deposit is a couple of
+ * seconds with a user watching. One queue meant a deposit arriving mid-cycle
+ * waited behind the whole publication — a one-in-four chance of a four-minute
+ * spinner, which is exactly the kind of thing that ruins a live demo.
+ *
+ * Forked processes rather than worker threads: threads share the process heap
+ * and one instance of the `@o1js/native` addon, and o1js proves inside a global
+ * context that cannot be entered twice. Separate processes have neither
+ * problem. The cost is real — each compiles the whole stack and holds it, so
+ * memory roughly doubles.
+ */
+type Lane = 'user' | 'background';
+
+type Prover = {
+  child?: ChildProcess;
+  ready?: Promise<void>;
+  queue: Promise<unknown>;
+  pending: Map<number, Pending>;
+};
+
+const provers: Record<Lane, Prover> = {
+  user: { queue: Promise.resolve(), pending: new Map() },
+  background: { queue: Promise.resolve(), pending: new Map() },
+};
+
 let nextId = 1;
-const pending = new Map<number, Pending>();
 
-/** Requests waiting for the worker, oldest first. */
-let queue: Promise<unknown> = Promise.resolve();
-
-function start(): Promise<void> {
-  if (ready !== undefined) return ready;
+function start(lane: Lane): Promise<void> {
+  const prover = provers[lane];
+  if (prover.ready !== undefined) return prover.ready;
 
   const here = dirname(fileURLToPath(import.meta.url));
   // tsx compiles on the fly, so the worker is loaded from source in dev and
@@ -50,19 +73,22 @@ function start(): Promise<void> {
   // own is.
   const entry = join(here, here.includes('/src/') ? 'worker.ts' : 'worker.js');
 
-  ready = new Promise<void>((resolve, reject) => {
-    const w = new Worker(entry, { execArgv: ['--import', 'tsx'] });
-    worker = w;
+  prover.ready = new Promise<void>((resolve, reject) => {
+    const child = fork(entry, [], {
+      execArgv: entry.endsWith('.ts') ? ['--import', 'tsx'] : [],
+      env: process.env,
+    });
+    prover.child = child;
 
-    w.on('message', (message: Record<string, unknown>) => {
+    child.on('message', (message: Record<string, unknown>) => {
       if (message.type === 'ready') {
-        console.log(`prover ready (compile ${Number(message.compileMs) / 1000}s)`);
+        console.log(`prover[${lane}] ready (compile ${Number(message.compileMs) / 1000}s)`);
         return resolve();
       }
 
-      const entry = pending.get(Number(message.id));
+      const entry = prover.pending.get(Number(message.id));
       if (entry === undefined) return;
-      pending.delete(Number(message.id));
+      prover.pending.delete(Number(message.id));
 
       if (message.type === 'built') {
         entry.resolve({
@@ -76,53 +102,71 @@ function start(): Promise<void> {
       }
     });
 
-    // A worker that dies takes every in-flight request with it. Rejecting them
+    // A prover that dies takes every in-flight request with it. Rejecting them
     // explicitly beats leaving the callers hanging until their client times
-    // out, and the next request restarts the worker.
+    // out, and the next request restarts it.
     const die = (reason: string) => {
-      const error = new Error(`prover worker ${reason}`);
-      for (const [, p] of pending) p.reject(error);
-      pending.clear();
-      worker = undefined;
-      ready = undefined;
+      const error = new Error(`prover[${lane}] ${reason}`);
+      for (const [, p] of prover.pending) p.reject(error);
+      prover.pending.clear();
+      prover.child = undefined;
+      prover.ready = undefined;
       reject(error);
     };
-    w.on('error', (error) => die(`failed: ${error.message}`));
-    w.on('exit', (code) => code !== 0 && die(`exited with code ${code}`));
+    child.on('error', (error) => die(`failed: ${error.message}`));
+    child.on('exit', (code) => code !== 0 && die(`exited with code ${code}`));
   });
 
-  return ready;
+  return prover.ready;
+}
+
+/**
+ * Send one request and wait for its answer, serialised within its lane.
+ *
+ * Serialised because proving saturates the cores it is given: two concurrent
+ * proofs in one process do not finish in the time of one, they finish in twice
+ * the time, together.
+ */
+async function submit<T>(
+  lane: Lane,
+  message: (id: number) => Record<string, unknown>,
+  pick: (built: BuiltDeposit) => T,
+): Promise<T> {
+  await start(lane);
+  const prover = provers[lane];
+
+  const run = async (): Promise<T> => {
+    const id = nextId++;
+    return new Promise<T>((resolve, reject) => {
+      prover.pending.set(id, { resolve: (built) => resolve(pick(built)), reject });
+      prover.child?.send(message(id));
+    });
+  };
+
+  const result = prover.queue.then(run, run);
+  prover.queue = result.catch(() => undefined);
+  return result;
 }
 
 /** Build and prove a deposit. Resolves with an unsigned transaction. */
 export async function buildDeposit(request: DepositRequest): Promise<BuiltDeposit> {
-  await start();
-
-  const run = async (): Promise<BuiltDeposit> => {
-    const id = nextId++;
-    return new Promise<BuiltDeposit>((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-      worker?.postMessage({
-        kind: 'deposit',
-        id,
-        sender: request.sender,
-        recipient: request.recipient,
-        amountNanomina: request.amountNanomina.toString(),
-        nonce: request.nonce.toString(),
-      });
-    });
-  };
-
-  // Chain onto the queue so only one proof runs at a time, and so a failure
-  // does not break the chain for whoever is behind it.
-  const result = queue.then(run, run);
-  queue = result.catch(() => undefined);
-  return result;
+  return submit(
+    'user',
+    (id) => ({
+      kind: 'deposit',
+      id,
+      sender: request.sender,
+      recipient: request.recipient,
+      amountNanomina: request.amountNanomina.toString(),
+      nonce: request.nonce.toString(),
+    }),
+    (built) => built,
+  );
 }
 
 /** How many requests are waiting or in flight. For the API to report a wait. */
 export function queueDepth(): number {
-  return pending.size;
+  return provers.user.pending.size + provers.background.pending.size;
 }
 
 /**
@@ -147,62 +191,51 @@ export async function publishActionState(request: {
   /** Voters whose public keys are known, already checked against the policy. */
   keys: unknown[];
 }): Promise<string> {
-  await start();
-
-  const run = async (): Promise<string> => {
-    const id = nextId++;
-    return new Promise<string>((resolve, reject) => {
-      pending.set(id, { resolve: (built) => resolve(built.transaction), reject });
-      worker?.postMessage({
-        kind: 'publish',
-        id,
-        response: request.response,
-        siblings: request.siblings,
-        calls: request.calls,
-        keys: request.keys,
-      });
-    });
-  };
-
-  const result = queue.then(run, run);
-  queue = result.catch(() => undefined);
-  return result;
+  return submit(
+    'background',
+    (id) => ({
+      kind: 'publish',
+      id,
+      response: request.response,
+      siblings: request.siblings,
+      calls: request.calls,
+      keys: request.keys,
+    }),
+    (built) => built.transaction,
+  );
 }
 
-export async function releaseWithdrawal(request: {
-  nonce: bigint;
+/** One link of the shared chain, as the prover replays it. */
+export type ChainRecord = {
+  index: bigint;
+  /** Flare token address. Records of other assets are stepped over, not paid. */
+  token: string;
   recipient: string;
-  amountNanomina: bigint;
-  /** Withdrawals Flare committed to after this one, in order. */
-  tail: Array<{ nonce: bigint; recipient: string; amountNanomina: bigint }>;
-}): Promise<string> {
-  await start();
+  amount: bigint;
+};
 
-  const run = async (): Promise<string> => {
-    const id = nextId++;
-    return new Promise<string>((resolve, reject) => {
-      pending.set(id, {
-        resolve: (built) => resolve(built.transaction),
-        reject,
-      });
-      worker?.postMessage({
-        kind: 'release',
-        id,
-        nonce: request.nonce.toString(),
-        recipient: request.recipient,
-        amountNanomina: request.amountNanomina.toString(),
-        tail: request.tail.map((w) => ({
-          nonce: w.nonce.toString(),
-          recipient: w.recipient,
-          amountNanomina: w.amountNanomina.toString(),
-        })),
-      });
-    });
-  };
+const wire = (r: ChainRecord) => ({
+  index: r.index.toString(),
+  token: r.token,
+  recipient: r.recipient,
+  amount: r.amount.toString(),
+});
 
-  const result = queue.then(run, run);
-  queue = result.catch(() => undefined);
-  return result;
+/**
+ * Release the next withdrawal the escrow is entitled to.
+ *
+ * `range` is everything Flare committed to between the escrow's cursor and the
+ * head it has accepted — every asset, in order. Which record gets paid is
+ * decided inside the circuit, so nothing here names a recipient or an amount:
+ * the order is not a convenience, a range in the wrong order reaches a
+ * different head and is refused.
+ */
+export async function releaseWithdrawal(request: { range: ChainRecord[] }): Promise<string> {
+  return submit(
+    'background',
+    (id) => ({ kind: 'release', id, range: request.range.map(wire) }),
+    (built) => built.transaction,
+  );
 }
 
 /**
@@ -218,63 +251,45 @@ export async function publishLockState(request: {
   calls: unknown[];
   keys: unknown[];
 }): Promise<string> {
-  await start();
-
-  const run = async (): Promise<string> => {
-    const id = nextId++;
-    return new Promise<string>((resolve, reject) => {
-      pending.set(id, { resolve: (built) => resolve(built.transaction), reject });
-      worker?.postMessage({
-        kind: 'publishLock',
-        id,
-        port: request.port,
-        response: request.response,
-        siblings: request.siblings,
-        calls: request.calls,
-        keys: request.keys,
-      });
-    });
-  };
-
-  const result = queue.then(run, run);
-  queue = result.catch(() => undefined);
-  return result;
+  return submit(
+    'background',
+    (id) => ({
+      kind: 'publishLock',
+      id,
+      port: request.port,
+      response: request.response,
+      siblings: request.siblings,
+      calls: request.calls,
+      keys: request.keys,
+    }),
+    (built) => built.transaction,
+  );
 }
 
-/** Mint a locked asset on Mina. Returns the mint transaction's hash. */
+/**
+ * Mint the next lock a port is entitled to. Returns the mint transaction's hash.
+ *
+ * Same shape as {releaseWithdrawal}: `range` spans the port's cursor to its
+ * accepted head, and `asset` is what tells its own locks from the ones it steps
+ * over.
+ */
 export async function mintLock(request: {
   port: string;
   token: string;
-  claimId: bigint;
-  recipient: string;
-  amount: bigint;
-  /** Locks Flare committed to after this one, in order. */
-  tail: Array<{ claimId: bigint; recipient: string; amount: bigint }>;
+  /** Flare address of the asset this port administers. */
+  asset: string;
+  range: ChainRecord[];
 }): Promise<string> {
-  await start();
-
-  const run = async (): Promise<string> => {
-    const id = nextId++;
-    return new Promise<string>((resolve, reject) => {
-      pending.set(id, { resolve: (built) => resolve(built.transaction), reject });
-      worker?.postMessage({
-        kind: 'mint',
-        id,
-        port: request.port,
-        token: request.token,
-        claimId: request.claimId.toString(),
-        recipient: request.recipient,
-        amount: request.amount.toString(),
-        tail: request.tail.map((l) => ({
-          claimId: l.claimId.toString(),
-          recipient: l.recipient,
-          amount: l.amount.toString(),
-        })),
-      });
-    });
-  };
-
-  const result = queue.then(run, run);
-  queue = result.catch(() => undefined);
-  return result;
+  return submit(
+    'background',
+    (id) => ({
+      kind: 'mint',
+      id,
+      port: request.port,
+      token: request.token,
+      asset: request.asset,
+      range: request.range.map(wire),
+    }),
+    (built) => built.transaction,
+  );
 }

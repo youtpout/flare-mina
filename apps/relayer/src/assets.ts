@@ -7,21 +7,19 @@ import {
   markLocksPublished,
   mintableLocks,
   recordLock,
+  transferRange,
 } from './db/index.js';
-import { mintLock, publishLockState } from './prover/index.js';
-import { fetchAttestation, requestAttestationFor, type Attestation } from './fdc.js';
-import { policyProofInputs } from './publisher.js';
+import { mintLock } from './prover/index.js';
 
 /**
  * The Flare -> Mina asset rail: FXRP, USD₮0 and C2FLR.
  *
- * Structurally identical to the withdrawal rail, one chain per token instead of
- * one for the whole bridge. Three stages, each on its own timer because they
- * cost very different things:
+ * Every asset shares one chain with the MINA rail, so publishing its head is
+ * not this file's job — transfers.ts does it once for all four. What is left is
+ * per-asset:
  *
- *   watch    read `AssetLocked` from the vault                cheap
- *   publish  carry the chain head to the port, with ECDSA     expensive
- *   mint     replay the tail and mint, two Mina transactions  expensive
+ *   watch    read `AssetLocked` from the vault, for status    cheap
+ *   mint     replay the range and mint, two Mina transactions  expensive
  *
  * Nothing here can create supply. A mint has to be the next link in the chain
  * ending at a head the Flare validator set signed, and the port checks that
@@ -153,103 +151,12 @@ async function watch(): Promise<void> {
 }
 
 /**
- * Heads already sent and awaiting inclusion, per port.
+ * Mint everything a port has accepted a head for, oldest claim first.
  *
- * Devnet takes minutes, and the port still shows the old head for all of them.
- * Without this the next tick publishes the same head again, and the two fight
- * over the fee payer's nonce.
+ * The range comes from the shared ledger, not from this table: a segment has to
+ * replay the other assets' transfers too, since stepping over them is what lets
+ * one chain serve four ports. Which lock gets minted is the circuit's decision.
  */
-const publishInFlight = new Map<string, { state: bigint; at: number }>();
-
-/** Long enough for devnet inclusion, short enough that a rejection is retried. */
-const IN_FLIGHT_TTL_MS = Number(process.env.PUBLISH_IN_FLIGHT_TTL_MS ?? 12 * 60_000);
-
-/** `AssetLocked(uint256,address,address,bytes32,uint256,uint256,uint256)`. */
-const LOCK_TOPIC0 =
-  '0x078ee1eead8e83dabf8464df5a5e308db068b136607c9f7bef8e86f6fc783add' as const;
-
-/**
- * Get the round carrying a lock event, waiting for it to finalise.
- *
- * Polls inside the tick rather than deferring to the next one: the FDC settles
- * about a minute after a round closes, and the next tick is ten minutes away.
- */
-async function attestationFor(txHash: `0x${string}`): Promise<Attestation | null> {
-  if (VAULT === undefined) return null;
-  const expected = { emitter: VAULT, topic0: LOCK_TOPIC0 };
-
-  const { request, round } = await requestAttestationFor(txHash, expected);
-  console.log(`requested attestation for ${txHash} in round ${round}`);
-
-  const deadline = Date.now() + Number(process.env.FDC_WAIT_MS ?? 5 * 60_000);
-  while (Date.now() < deadline) {
-    const attestation = await fetchAttestation(request, round, expected);
-    if (attestation !== null) return attestation;
-    await new Promise((r) => setTimeout(r, 20_000));
-  }
-  console.warn(`round ${round} did not finalise in time; will retry next tick`);
-  return null;
-}
-
-/** Carry each token's chain head to its port, when the port is behind. */
-async function publish(): Promise<void> {
-  if (VAULT === undefined) return;
-  const list = assets();
-  if (list.length === 0) return;
-
-  // Not shared between assets any more: each attestation lands in its own FDC
-  // round, and the signatures have to be for that round or the inclusion path
-  // reaches a root nobody signed.
-
-  for (const asset of list) {
-    const onFlare = await client.readContract({
-      address: VAULT,
-      abi: vaultAbi,
-      functionName: 'lockActionStateOf',
-      args: [asset.flareToken],
-    });
-    if (onFlare === 0n) continue;
-
-    const state = await portState(asset.port);
-    if (state === null || state.accepted === onFlare) continue;
-    const sent = publishInFlight.get(asset.port);
-    if (sent?.state === onFlare && Date.now() - sent.at < IN_FLIGHT_TTL_MS) continue;
-
-    const txHash = (await lockTxFor(asset.flareToken, onFlare)) as `0x${string}` | null;
-    if (txHash === null) {
-      console.warn(`no recorded ${asset.symbol} lock produced state ${onFlare}`);
-      continue;
-    }
-
-    const attestation = await attestationFor(txHash);
-    if (attestation === null) continue;
-    if (attestation.event.newActionState !== onFlare) {
-      console.warn(`the attested ${asset.symbol} event carries a different state`);
-      continue;
-    }
-
-    const inputs = await policyProofInputs(attestation.round);
-    if (inputs === null) continue;
-
-    publishInFlight.set(asset.port, { state: onFlare, at: Date.now() });
-    try {
-      const hash = await publishLockState({
-        port: asset.port,
-        response: attestation.response.slice(2),
-        siblings: attestation.proof.map((p) => p.slice(2)),
-        calls: inputs.calls,
-        keys: inputs.keys,
-      });
-      console.log(`published ${asset.symbol} lock head ${onFlare} -> ${hash}`);
-    } catch (e) {
-      // Retry on the next tick: leaving it marked would strand the asset.
-      publishInFlight.delete(asset.port);
-      throw e;
-    }
-  }
-}
-
-/** Mint everything a port has accepted a head for, oldest claim first. */
 async function mint(): Promise<void> {
   for (const asset of assets()) {
     const state = await portState(asset.port);
@@ -261,21 +168,30 @@ async function mint(): Promise<void> {
     const queue = await mintableLocks(asset.flareToken);
     if (queue.length === 0) continue;
 
-    // Oldest first, and one at a time: the port advances a cursor, so two mints
-    // in one block conflict. The tail is everything after this claim in the
-    // batch — the port needs a continuation reaching the accepted head.
-    for (let i = 0; i < queue.length; i++) {
-      const row = queue[i]!;
+    // One at a time: the port advances a cursor, so two mints in one block
+    // conflict.
+    for (const row of queue) {
+      // Re-read: the previous mint moved the cursor, and a range starting where
+      // the port no longer is would be refused.
+      const now = await portState(asset.port);
+      if (now === null) break;
+
+      const range = await transferRange(now.processed, now.accepted);
+      if (range === null) {
+        console.warn(`${asset.symbol}: the transfer ledger has not caught up`);
+        break;
+      }
+      if (range.length === 0) break;
+
       try {
         await markLockMinting(row.id);
         const hash = await mintLock({
           port: asset.port,
           token: asset.token,
-          claimId: BigInt(row.claim_id),
-          recipient: row.recipient,
-          amount: BigInt(row.amount),
-          tail: queue.slice(i + 1).map((r) => ({
-            claimId: BigInt(r.claim_id),
+          asset: asset.flareToken,
+          range: range.map((r) => ({
+            index: BigInt(r.chain_index),
+            token: r.token,
             recipient: r.recipient,
             amount: BigInt(r.amount),
           })),
@@ -318,11 +234,8 @@ export function startAssets(): { stop(): void } {
     return { stop: () => undefined };
   }
 
-  const loops = [
-    loop('lock watcher', WATCH_MS, watch),
-    loop('lock publisher', PUBLISH_MS, publish),
-    // After the publisher: a mint cannot land ahead of the head it proves against.
-    loop('minter', WATCH_MS, mint),
-  ];
+  // Publishing lives in transfers.ts: one attestation covers every asset now,
+  // so a per-asset publisher would pay for the same round four times.
+  const loops = [loop('lock watcher', WATCH_MS, watch), loop('minter', WATCH_MS, mint)];
   return { stop: () => loops.forEach((l) => l.stop()) };
 }

@@ -31,9 +31,9 @@ const OFFSETS = {
   emitter: 28,
   /** Event signature. */
   topic0: 33,
-  /** `claimId` / withdrawal `nonce` — the first indexed argument. */
+  /** The transfer's index in the chain — the first indexed argument. */
   topic1: 34,
-  /** Token, for `AssetLocked`. Absent in spirit for `WithdrawToMina`. */
+  /** The asset. */
   topic2: 35,
   /** First word of the event's non-indexed data. */
   dataStart: 38,
@@ -50,10 +50,10 @@ export type AttestedEvent = {
   /** Non-indexed arguments, one per word. */
   data: Hex[];
   /**
-   * Last word of the event data.
+   * Last word of the event data: the chain head this transfer produced.
    *
-   * Both bridge events end with it — `AssetLocked` and `WithdrawToMina` were
-   * given the same tail on purpose, so one decoder serves both rails.
+   * One event for every asset now — `TransferChain.Transfer` — so this decoder
+   * serves the escrow and every port from a single attestation.
    */
   newActionState: bigint;
 };

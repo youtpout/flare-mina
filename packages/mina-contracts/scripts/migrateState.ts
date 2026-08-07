@@ -1,14 +1,14 @@
 import { AccountUpdate, Field, Mina, PrivateKey, PublicKey, fetchAccount } from 'o1js';
+import { adminCommitment } from '../src/AssetPort.js';
 import { FungibleToken } from 'mina-fungible-token';
 import { AssetPort } from '../src/AssetPort.js';
 import { FdcAttestation, FdcLeaf } from '../src/FdcAttestation.js';
-import { LockChain } from '../src/LockChain.js';
+import { TransferChain } from '../src/TransferChain.js';
 import { MerkleInclusion } from '../src/MerkleInclusion.js';
 import { MinaPortBridge } from '../src/MinaPortBridge.js';
 import { RelayMessage } from '../src/RelayMessage.js';
 import { SigningPolicyFold } from '../src/SigningPolicyFold.js';
 import { StateMigration } from '../src/StateMigration.js';
-import { WithdrawalChain } from '../src/WithdrawalChain.js';
 
 /**
  * Rearrange a deployed zkApp's state, then install its new circuit.
@@ -110,30 +110,42 @@ async function main() {
   // afterwards from the values alone.
   let after: Field[];
   if (what === 'bridge') {
-    // was: policyRoot | attestor.x | attestor.isOdd | flareState | processed | weight | admin.x | admin.isOdd
-    // now: policyRoot | flareBridge | flareState    | processed  | weight    | admin.x | admin.isOdd | -
+    // was: policyRoot | flareBridge | flareState | processed | weight | admin.x | admin.isOdd | -
+    // now: policyRoot | flareChain  | flareState | processed | weight | token   | admin.x     | admin.isOdd
+    //
+    // The two chain slots go back to zero: every asset folds into a freshly
+    // deployed `TransferChain` whose head starts there, and the old per-rail
+    // chain is abandoned. Anything it still owed must be released *before* this
+    // runs — the burn already happened on Flare, and a reset cursor cannot
+    // reach it.
     after = [
       before[0]!,
-      Field(BigInt(required('FLARE_BRIDGE_ADDRESS'))),
-      before[3]!,
+      Field(BigInt(required('FLARE_TRANSFER_CHAIN_ADDRESS'))),
+      Field(0),
+      Field(0),
       before[4]!,
+      Field(BigInt(required('FLARE_FMINA_ADDRESS'))),
       before[5]!,
       before[6]!,
-      before[7]!,
-      Field(0),
     ];
   } else {
-    // was: policyRoot | lockState | processed | weight | mintAuth | admin.x | admin.isOdd | -
-    // now: policyRoot | lockState | processed | weight | mintAuth | vault   | admin.x     | admin.isOdd
+    // was: policyRoot | lockState | processed | weight | mintAuth | vault      | admin.x    | admin.isOdd
+    // now: policyRoot | lockState | processed | weight | asset    | mintAuth   | flareChain | adminHash
+    //
+    // Both chain slots reset, for the reason given above. The admin key becomes
+    // a hash: a `PublicKey` costs two of the eight fields, and the eighth is
+    // spent on `asset` — which is what separates this port's locks from the
+    // other three now that they share a chain.
+    const symbolKey = symbol!.toUpperCase();
     after = [
       before[0]!,
-      before[1]!,
-      before[2]!,
+      Field(0),
+      Field(0),
       before[3]!,
+      Field(BigInt(required(`FLARE_${symbolKey}_ADDRESS`))),
       before[4]!,
-      Field(BigInt(required('FLARE_ASSET_VAULT_ADDRESS'))),
-      before[5]!,
-      before[6]!,
+      Field(BigInt(required('FLARE_TRANSFER_CHAIN_ADDRESS'))),
+      adminCommitment(PublicKey.from({ x: before[5]!, isOdd: before[6]!.equals(Field(1)) })),
     ];
   }
 
@@ -174,11 +186,11 @@ async function main() {
 
   let real;
   if (what === 'bridge') {
-    await WithdrawalChain.compile();
+    await TransferChain.compile();
     real = await MinaPortBridge.compile();
   } else {
     FungibleToken.AdminContract = AssetPort as never;
-    await LockChain.compile();
+    await TransferChain.compile();
     real = await AssetPort.compile();
   }
 

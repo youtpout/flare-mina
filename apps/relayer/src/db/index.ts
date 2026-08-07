@@ -388,3 +388,92 @@ export async function lockTxFor(token: string, lockState: bigint): Promise<strin
   );
   return rows[0]?.flare_tx_hash ?? null;
 }
+
+// -----------------------------------------------------------------------------
+// The shared transfer chain
+// -----------------------------------------------------------------------------
+
+export type TransferRow = {
+  chain_index: string;
+  token: string;
+  recipient: string;
+  amount: string;
+  previous_head: string;
+  new_head: string;
+  flare_tx_hash: string;
+};
+
+export async function recordTransfer(input: {
+  index: bigint;
+  token: string;
+  recipient: string;
+  amount: bigint;
+  previousHead: bigint;
+  newHead: bigint;
+  flareTxHash: string;
+}): Promise<void> {
+  await pool.query(
+    `INSERT INTO transfers
+       (chain_index, token, recipient, amount, previous_head, new_head, flare_tx_hash)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (chain_index) DO NOTHING`,
+    [
+      input.index.toString(),
+      input.token.toLowerCase(),
+      input.recipient,
+      input.amount.toString(),
+      input.previousHead.toString(),
+      input.newHead.toString(),
+      input.flareTxHash,
+    ],
+  );
+}
+
+/**
+ * The range a segment proof has to cover: everything from `from` up to and
+ * including `to`, in chain order, whatever the asset.
+ *
+ * Foreign records are included deliberately — they are what the circuit steps
+ * over, and leaving them out would produce a segment that does not meet.
+ *
+ * Returns null when either end is unknown, which means the indexer has not
+ * caught up. Proving against a gap would fail on chain instead, after paying
+ * for it.
+ */
+export async function transferRange(from: bigint, to: bigint): Promise<TransferRow[] | null> {
+  const start = from === 0n ? 0n : await transferIndexOf(from);
+  if (start === null) return null;
+  const end = await transferIndexOf(to);
+  if (end === null) return null;
+
+  // `from` is a head, so the range starts at the record *after* it. Zero is the
+  // empty chain, whose first record is index 0.
+  const first = from === 0n ? 0n : start + 1n;
+  if (first > end) return [];
+
+  const { rows } = await pool.query<TransferRow>(
+    `SELECT * FROM transfers WHERE chain_index >= $1 AND chain_index <= $2
+      ORDER BY chain_index ASC`,
+    [first.toString(), end.toString()],
+  );
+  // A hole would make the proof unbuildable; better to know here.
+  return rows.length === Number(end - first + 1n) ? rows : null;
+}
+
+/** Position of the record that produced `head`, or null if it is not indexed. */
+export async function transferIndexOf(head: bigint): Promise<bigint | null> {
+  const { rows } = await pool.query<{ chain_index: string }>(
+    `SELECT chain_index FROM transfers WHERE new_head = $1 LIMIT 1`,
+    [head.toString()],
+  );
+  return rows[0] === undefined ? null : BigInt(rows[0].chain_index);
+}
+
+/** The transaction that produced `head` — what the FDC attestation is asked for. */
+export async function transferTxFor(head: bigint): Promise<string | null> {
+  const { rows } = await pool.query<{ flare_tx_hash: string }>(
+    `SELECT flare_tx_hash FROM transfers WHERE new_head = $1 LIMIT 1`,
+    [head.toString()],
+  );
+  return rows[0]?.flare_tx_hash ?? null;
+}

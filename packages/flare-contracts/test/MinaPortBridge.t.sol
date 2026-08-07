@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {MinaPortBridge} from "../src/MinaPortBridge.sol";
+import {TransferChain} from "../src/TransferChain.sol";
 import {DeployBridge} from "./helpers/DeployBridge.sol";
 import {FMINA} from "../src/FMINA.sol";
 import {MockSettlementVerifier} from "../src/mocks/MockSettlementVerifier.sol";
@@ -14,6 +15,7 @@ import {IMinaSettlementVerifier, SettlementPublicValues} from
 
 contract MinaPortBridgeTest is Test {
     MinaPortBridge internal bridge;
+    TransferChain internal chain;
     FMINA internal fmina;
     MockSettlementVerifier internal verifier;
 
@@ -32,6 +34,14 @@ contract MinaPortBridgeTest is Test {
         verifier = new MockSettlementVerifier();
         bridge = DeployBridge.deploy(owner, verifier, BRIDGE_ID, GENESIS);
         fmina = bridge.TOKEN();
+
+        // Both halves of the handshake: the bridge points at the chain, and the
+        // chain lets this bridge record FMINA and nothing else.
+        chain = new TransferChain(owner);
+        vm.startPrank(owner);
+        bridge.setTransferChain(chain);
+        chain.setAppender(address(bridge), address(fmina), true);
+        vm.stopPrank();
     }
 
     // -------------------------------------------------------------------------
@@ -303,11 +313,12 @@ contract MinaPortBridgeTest is Test {
         bytes32 minaRecipient = bytes32(uint256(12345));
 
         // The chain starts empty, so this withdrawal folds into zero. Agreement
-        // with o1js is covered in WithdrawalChain.t.sol against fixed vectors.
-        uint256[] memory f = new uint256[](5);
-        (f[0], f[1], f[2], f[3], f[4]) = (0, 0, 12345, 0, 400_000_000);
+        // with o1js is covered in TransferChain.t.sol against fixed vectors.
+        uint256[] memory f = new uint256[](6);
+        (f[0], f[1], f[2], f[3], f[4], f[5]) =
+            (0, 0, uint256(uint160(address(fmina))), 12345, 0, 400_000_000);
         uint256 expectedState = PoseidonPallas.hashWithPrefix(
-            4297924978315896314651171907962194736605517, f
+            4297918352702906165387926136531478503123277, f
         );
 
         vm.expectEmit(true, true, true, true);
@@ -321,8 +332,8 @@ contract MinaPortBridgeTest is Test {
         assertEq(nonce, 0);
         assertEq(fmina.balanceOf(alice), 600_000_000);
         assertEq(bridge.nextWithdrawalNonce(), 1);
-        // Stored, not only emitted: the next withdrawal has to read it back.
-        assertEq(bridge.withdrawalActionState(), expectedState);
+        // Stored on the chain, not only emitted: the next transfer reads it back.
+        assertEq(chain.head(), expectedState);
         assertTrue(bridge.collateralInvariantHolds());
     }
 

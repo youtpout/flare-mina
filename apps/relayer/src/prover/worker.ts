@@ -28,7 +28,6 @@
   };
 }
 
-import { parentPort } from 'node:worker_threads';
 import {
   setBackend,
   initializeBindings,
@@ -92,22 +91,21 @@ type BuildRequest = {
  * Unlike a deposit, this transaction is proved *and signed* here: the user has
  * nothing to sign, their FMINA is already gone.
  *
- * `tail` is every withdrawal Flare committed to *after* this one, up to the
- * state the zkApp has accepted. It is what proves this record is genuinely the
- * next link in Flare's chain rather than something the relayer made up — no
- * other record has a continuation reaching that state. The relayer therefore
- * cannot invent, redirect or resize a withdrawal — which is what an attestor
- * co-signature used to stand in for, before the state came from a proof.
+ * `range` is everything Flare committed to between the escrow's cursor and the
+ * head it has accepted — every asset, in order. Which record gets paid is
+ * decided inside the circuit, so nothing here names a recipient or an amount.
+ * The relayer therefore cannot invent, redirect or resize a withdrawal, nor
+ * choose to skip one: a range in the wrong order, or missing a link, reaches a
+ * different head and is refused.
  */
 type ReleaseRequest = {
   kind: 'release';
   id: number;
-  nonce: string;
-  recipient: string;
-  amountNanomina: string;
-  /** Subsequent withdrawals, in Flare's order. Empty when this is the newest. */
-  tail: Array<{ nonce: string; recipient: string; amountNanomina: string }>;
+  range: ChainLink[];
 };
+
+/** One link of the shared chain, as it crosses the process boundary. */
+type ChainLink = { index: string; token: string; recipient: string; amount: string };
 
 /**
  * Push Flare's withdrawal chain state to the escrow.
@@ -151,8 +149,9 @@ type PublishLockRequest = {
  * transaction, so `canMint` would read an empty authorisation and refuse. See
  * the note on `AssetPort`.
  *
- * `tail` is every lock Flare committed to *after* this one, up to the attested
- * head. No fabricated record has a continuation that reaches it, which is what
+ * `range` spans the port's cursor to its accepted head, exactly as a release
+ * does, and `asset` is what tells this port's locks from the ones it steps
+ * over. No fabricated record fits in a range reaching that head, which is what
  * stops the relayer inventing, redirecting or resizing a mint.
  */
 type MintRequest = {
@@ -160,10 +159,9 @@ type MintRequest = {
   id: number;
   port: string;
   token: string;
-  claimId: string;
-  recipient: string;
-  amount: string;
-  tail: Array<{ claimId: string; recipient: string; amount: string }>;
+  /** Flare address of the asset this port administers. */
+  asset: string;
+  range: ChainLink[];
 };
 
 type Request =
@@ -177,8 +175,24 @@ type Ready = { type: 'ready'; compileMs: number };
 type Built = { type: 'built'; id: number; transaction: string; provingMs: number };
 type Failed = { type: 'failed'; id: number; error: string };
 
-if (parentPort === null) throw new Error('prover worker must be started as a worker thread');
-const port = parentPort;
+/**
+ * A forked child process, not a worker thread.
+ *
+ * Threads would share the process heap and, more to the point, one instance of
+ * the `@o1js/native` NAPI addon — which nothing promises is safe to load twice
+ * in a process. A fork gives each prover its own o1js global context and its
+ * own addon, which is what lets a user's deposit prove while a publication is
+ * mid-flight.
+ */
+if (process.send === undefined) {
+  throw new Error('prover worker must be started with child_process.fork');
+}
+const port = {
+  postMessage: (message: unknown) => void process.send!(message),
+  on(_event: 'message', handler: (request: Request) => void) {
+    process.on('message', (m) => handler(m as Request));
+  },
+};
 
 // The native backend is ~1.8x faster than wasm on this circuit and is a single
 // npm package. See packages/native-prover for the measurements.
@@ -196,8 +210,8 @@ const { signedMessageHash } = await import('@minaport/shared/dist/src/flareRelay
 const { attestationLeaf } = await import('@minaport/shared/dist/src/fdcResponse.js');
 /** The leaf, as hex without 0x — the form o1js `Bytes.fromHex` wants. */
 const keccak = (hex: string) => attestationLeaf(`0x${hex}` as `0x${string}`).slice(2);
-const { WithdrawalChain, applyWithdrawal } = await import(
-  '@minaport/mina-contracts/dist/src/WithdrawalChain.js'
+const { TransferChain, TransferRecord, applyTransfer } = await import(
+  '@minaport/mina-contracts/dist/src/TransferChain.js'
 );
 const { SigningPolicyFold, EcdsaSignature, Bytes32 } = await import(
   '@minaport/mina-contracts/dist/src/SigningPolicyFold.js'
@@ -205,14 +219,11 @@ const { SigningPolicyFold, EcdsaSignature, Bytes32 } = await import(
 const { buildPolicyTree, toSecp256k1 } = await import(
   '@minaport/mina-contracts/dist/src/policyTree.js'
 );
-const { MinaPortBridge, WithdrawalRecord, flareRecipientField } = await import(
+const { MinaPortBridge, flareRecipientField } = await import(
   '@minaport/mina-contracts/dist/src/MinaPortBridge.js'
 );
 const { RelayMessage, Bytes38, FDC_PROTOCOL_ID } = await import(
   '@minaport/mina-contracts/dist/src/RelayMessage.js'
-);
-const { LockChain, LockRecord, applyLock } = await import(
-  '@minaport/mina-contracts/dist/src/LockChain.js'
 );
 const { AssetPort, mintCommitment, NO_MINT_AUTHORIZED } = await import(
   '@minaport/mina-contracts/dist/src/AssetPort.js'
@@ -247,7 +258,7 @@ Mina.setActiveInstance(Mina.Network({ mina: graphql, archive: graphql }));
 const compileStart = Date.now();
 // The chain program first: the contract verifies its proofs, so its
 // verification key has to exist before the contract compiles.
-await WithdrawalChain.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
+await TransferChain.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 await RelayMessage.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 await MerkleInclusion.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 await SigningPolicyFold.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
@@ -256,9 +267,9 @@ await FdcLeaf.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 await FdcAttestation.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 await MinaPortBridge.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 // The asset rail. Skipped entirely when no port is configured, because these
-// three add ~30s to a cold start and a MINA-only deployment never uses them.
+// two add ~30s to a cold start and a MINA-only deployment never uses them.
+// The chain program is shared with the escrow, so it is already compiled.
 if (process.env.MINA_ASSET_PORTS) {
-  await LockChain.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
   await AssetPort.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
   await FungibleToken.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 }
@@ -266,46 +277,52 @@ port.postMessage({ type: 'ready', compileMs: Date.now() - compileStart } satisfi
 
 const bridge = new MinaPortBridge(PublicKey.fromBase58(bridgeAddress));
 
-const toRecord = (w: { nonce: string; recipient: string; amountNanomina: string }) =>
-  new WithdrawalRecord({
-    nonce: UInt64.from(BigInt(w.nonce)),
-    recipient: PublicKey.fromBase58(w.recipient),
-    amount: UInt64.from(BigInt(w.amountNanomina)),
+const toRecord = (r: ChainLink) =>
+  new TransferRecord({
+    index: UInt64.from(BigInt(r.index)),
+    token: Field(BigInt(r.token)),
+    recipient: PublicKey.fromBase58(r.recipient),
+    amount: UInt64.from(BigInt(r.amount)),
   });
 
 /**
- * Prove the stretch of Flare's chain that follows the released withdrawal.
+ * Prove a stretch of the shared chain, examined for one asset.
+ *
+ * The output names the first record of `token` in it and the head just after —
+ * which is what a consumer pays and where its cursor lands. Records of other
+ * assets are included and stepped over; leaving them out would produce a
+ * segment that does not meet.
  *
  * Links are proven first and merged afterwards rather than chained: every
  * intermediate state is known in advance, so no link waits on its predecessor's
  * proof. They are still proven one at a time — o1js has a single global proving
- * context — but the independence is what lets a future worker pool parallelise
- * them without changing the shape. Merging is folded left because a release
- * tail is short.
+ * context, and `Promise.all` over two links corrupts it, reporting a missing
+ * `await` rather than the real cause.
  */
-async function proveTail(from: Field, tail: ReleaseRequest['tail']) {
-  if (tail.length === 0) return (await WithdrawalChain.empty(from)).proof;
+async function proveSegment(from: Field, token: Field, range: ChainLink[]) {
+  let segment = (await TransferChain.empty(from, token)).proof;
+  if (range.length === 0) return segment;
 
   const states: Field[] = [from];
-  const records = tail.map(toRecord);
+  const records = range.map(toRecord);
   for (const record of records) {
-    states.push(applyWithdrawal(states[states.length - 1]!, record));
+    states.push(applyTransfer(states[states.length - 1]!, record));
   }
 
-  // Sequential, despite the links being mathematically independent. o1js proves
-  // inside a global context that cannot be entered twice, so `Promise.all` over
-  // two links corrupts it and the error names a missing `await` rather than the
-  // real cause. It never showed until a tail held more than one link.
   const links = [];
   for (let i = 0; i < records.length; i++) {
-    links.push((await WithdrawalChain.link(states[i]!, records[i]!)).proof);
+    links.push((await TransferChain.link(states[i]!, token, records[i]!)).proof);
   }
 
-  let segment = links[0]!;
-  for (let i = 1; i < links.length; i++) {
-    segment = (await WithdrawalChain.merge(segment, links[i]!)).proof;
+  for (const link of links) {
+    segment = (await TransferChain.merge(segment, link)).proof;
   }
   return segment;
+}
+
+/** The record a consumer will be paid for: the first of its asset in the range. */
+function firstOf(token: string, range: ChainLink[]): ChainLink | undefined {
+  return range.find((r) => BigInt(r.token) === BigInt(token));
 }
 
 /**
@@ -560,11 +577,17 @@ async function handleRelease(request: ReleaseRequest) {
   await fetchAccount({ publicKey: sender });
   await fetchAccount({ publicKey: bridge.address });
 
-  const record = toRecord(request);
+  const fmina = process.env.FLARE_FMINA_ADDRESS;
+  if (!fmina) throw new Error('FLARE_FMINA_ADDRESS is required');
+  if (firstOf(fmina, request.range) === undefined) {
+    throw new Error('the range holds no MINA withdrawal to release');
+  }
 
   const processed = (predictedCursor as Field | undefined) ?? bridge.processedActionState.get();
-  const next = applyWithdrawal(processed, record);
-  const tail = await proveTail(next, request.tail);
+  const segment = await proveSegment(processed, Field(BigInt(fmina)), request.range);
+  // Where the cursor lands: just past the withdrawal the circuit picked, having
+  // stepped over any other asset's transfers before it.
+  const next = segment.publicOutput.stateAfterFirst;
 
   // The balance precondition is a range, `amount .. MAXINT`, not an equality —
   // which is what lets several releases queue behind one another without the
@@ -572,13 +595,14 @@ async function handleRelease(request: ReleaseRequest) {
   const tx = await Mina.transaction(
     { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
     async () => {
-      await bridge.releaseWithdrawal(record, tail);
+      await bridge.releaseWithdrawal(segment);
     },
   );
   await tx.prove();
 
-  // Only the fee payer signs now. Authorisation is the tail proof, so a relayer
-  // holding this key still cannot release anything Flare did not commit to.
+  // Only the fee payer signs now. Authorisation is the segment proof, so a
+  // relayer holding this key still cannot release anything Flare did not
+  // commit to.
   const pending = await tx.sign([feePayer]).send();
   predictedCursor = next;
 
@@ -592,44 +616,6 @@ async function handleRelease(request: ReleaseRequest) {
     throw new Error(`release ${pending.hash} did not advance the cursor`);
   }
   return pending.hash;
-}
-
-/**
- * Prove the stretch of a token's lock chain that follows the claimed lock.
- *
- * Same shape as `proveTail`, against a different program. Kept separate rather
- * than generalised: the two records differ in their fields and their domain, and
- * a shared helper would have to erase exactly the distinction that stops one
- * chain's proof settling the other.
- */
-async function proveLockTail(from: unknown, tail: MintRequest['tail']) {
-  const toLock = (l: MintRequest['tail'][number]) =>
-    new LockRecord({
-      claimId: UInt64.from(BigInt(l.claimId)),
-      recipient: PublicKey.fromBase58(l.recipient),
-      amount: UInt64.from(BigInt(l.amount)),
-    });
-
-  if (tail.length === 0) return (await LockChain.empty(from as never)).proof;
-
-  const states: unknown[] = [from];
-  const records = tail.map(toLock);
-  for (const record of records) {
-    states.push(applyLock(states[states.length - 1] as never, record));
-  }
-
-  // Sequential, for the reason given in `proveTail`: o1js cannot prove two
-  // things at once in one process.
-  const links = [];
-  for (let i = 0; i < records.length; i++) {
-    links.push((await LockChain.link(states[i] as never, records[i]!)).proof);
-  }
-
-  let segment = links[0]!;
-  for (let i = 1; i < links.length; i++) {
-    segment = (await LockChain.merge(segment, links[i]!)).proof;
-  }
-  return segment;
 }
 
 /** Carry one token's Flare lock head to its port, rotating the policy if stale. */
@@ -663,7 +649,9 @@ async function handlePublishLock(request: PublishLockRequest) {
     const rotate = await Mina.transaction(
       { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
       async () => {
-        await assetPort.setSigningPolicyRoot(tree.root);
+        // The admin key is an argument now: the port stores its hash rather
+        // than the key, so the eighth state field can hold the asset.
+        await assetPort.setSigningPolicyRoot(tree.root, admin.toPublicKey());
       },
     );
     await rotate.prove();
@@ -707,18 +695,17 @@ async function handleMint(request: MintRequest) {
 
   const assetPort = new AssetPort(PublicKey.fromBase58(request.port));
   const token = new FungibleToken(PublicKey.fromBase58(request.token));
-  const recipient = PublicKey.fromBase58(request.recipient);
-  const amount = UInt64.from(BigInt(request.amount));
+
+  // The lock the circuit will pick, computed here too so the armed check below
+  // can run before paying for a proof. The circuit is what enforces it.
+  const claimed = firstOf(request.asset, request.range);
+  if (claimed === undefined) throw new Error('the range holds no lock of this asset');
+  const recipient = PublicKey.fromBase58(claimed.recipient);
+  const amount = UInt64.from(BigInt(claimed.amount));
 
   await fetchAccount({ publicKey: sender });
   await fetchAccount({ publicKey: assetPort.address });
   await fetchAccount({ publicKey: token.address });
-
-  const record = new LockRecord({
-    claimId: UInt64.from(BigInt(request.claimId)),
-    recipient,
-    amount,
-  });
 
   // Resume rather than restart. `authorizeMint` and the mint are two
   // transactions, so a failure between them leaves the claim armed and its
@@ -731,13 +718,17 @@ async function handleMint(request: MintRequest) {
 
   if (!alreadyArmed) {
     const processed = predictedLockCursor.get(request.port) ?? assetPort.processedLockState.get();
-    const next = applyLock(processed as never, record);
-    const tail = await proveLockTail(next, request.tail);
+    const segment = await proveSegment(
+      processed as Field,
+      Field(BigInt(request.asset)),
+      request.range,
+    );
+    const next = segment.publicOutput.stateAfterFirst;
 
     const authorize = await Mina.transaction(
       { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
       async () => {
-        await assetPort.authorizeMint(record, tail);
+        await assetPort.authorizeMint(segment);
       },
     );
     await authorize.prove();

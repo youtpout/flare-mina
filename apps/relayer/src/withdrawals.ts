@@ -6,8 +6,10 @@ import {
   markWithdrawalsPublished,
   recordWithdrawal,
   releasableWithdrawals,
+  transferRange,
 } from './db/index.js';
 import { releaseWithdrawal } from './prover/index.js';
+import { acceptedHead } from './transfers.js';
 
 /**
  * The Flare -> Mina return path.
@@ -79,15 +81,14 @@ const MINA_GRAPHQL =
 const ESCROW = process.env.MINA_BRIDGE_ACCOUNT;
 
 /**
- * `zkappState[2]` is `flareActionState`.
+ * `zkappState` by field order in MinaPortBridge.ts: 0 signingPolicyRoot,
+ * 1 flareChain, 2 flareActionState, 3 processedActionState.
  *
- * The slots moved when the attestor was removed: 0 signingPolicyRoot,
- * 1 flareBridge, 2 flareActionState, 3 processedActionState, 4 requiredWeight,
- * 5-6 admin. Reading the old index returned `processedActionState`, which is
- * always a state the escrow has already covered — so nothing was ever promoted
- * and every withdrawal sat at "waiting for FDC" while the publisher worked.
+ * Reading the wrong index once returned `processedActionState`, which is always
+ * a head the escrow has already covered — so nothing was ever promoted and
+ * every withdrawal sat at "waiting for FDC" while the publisher worked.
  */
-async function acceptedActionState(): Promise<bigint | null> {
+async function escrowState(): Promise<{ accepted: bigint; cursor: bigint } | null> {
   if (ESCROW === undefined) return null;
   try {
     const res = await fetch(MINA_GRAPHQL, {
@@ -96,8 +97,9 @@ async function acceptedActionState(): Promise<bigint | null> {
       body: JSON.stringify({ query: `{ account(publicKey: "${ESCROW}") { zkappState } }` }),
     });
     const body = (await res.json()) as { data?: { account?: { zkappState?: string[] } } };
-    const state = body.data?.account?.zkappState?.[2];
-    return state === undefined ? null : BigInt(state);
+    const state = body.data?.account?.zkappState;
+    if (state?.[2] === undefined || state[3] === undefined) return null;
+    return { accepted: BigInt(state[2]), cursor: BigInt(state[3]) };
   } catch {
     return null;
   }
@@ -156,38 +158,53 @@ async function scan(): Promise<void> {
  * minutes an inclusion takes.
  */
 async function refreshCoverage(): Promise<void> {
-  const accepted = await acceptedActionState();
-  if (accepted === null || accepted === 0n) return;
-  const promoted = await markWithdrawalsPublished(accepted);
+  const state = await escrowState();
+  if (state === null || state.accepted === 0n) return;
+  const promoted = await markWithdrawalsPublished(state.accepted);
   if (promoted > 0) console.log(`${promoted} withdrawal(s) now covered by an accepted state`);
 }
 
+/**
+ * Release what the escrow is entitled to, oldest first and one at a time.
+ *
+ * The range is read from the shared ledger rather than from this table: a
+ * segment has to replay the transfers of the other three assets too, since
+ * stepping over them is exactly what lets one chain serve every rail. Which
+ * record gets paid is the circuit's decision, so this only supplies the range
+ * and records the outcome.
+ */
 async function release(): Promise<void> {
-  // Oldest first and one at a time: the zkApp requires strictly increasing
-  // nonces, so releasing out of order would strand everything behind it.
   const pending = await releasableWithdrawals();
+  if (pending.length === 0) return;
 
-  for (const [index, withdrawal] of pending.entries()) {
+  for (const withdrawal of pending) {
+    // Re-read every iteration: the previous release moved the cursor, and a
+    // range starting where the escrow no longer is would simply be refused.
+    const state = await escrowState();
+    if (state === null || state.accepted === 0n) return;
+
+    const range = await transferRange(state.cursor, state.accepted);
+    if (range === null) {
+      console.warn('the transfer ledger has not caught up; retrying next tick');
+      return;
+    }
+    if (range.length === 0) return;
+
     try {
       await markWithdrawalReleasing(withdrawal.id);
       const hash = await releaseWithdrawal({
-        nonce: BigInt(withdrawal.nonce),
-        recipient: withdrawal.recipient,
-        amountNanomina: BigInt(withdrawal.amount_nanomina),
-        // Everything Flare committed to after this one. The proof over it is
-        // what authorises the release, so the order here is not a convenience:
-        // a tail in the wrong order reaches a different state and is refused.
-        tail: pending.slice(index + 1).map((w) => ({
-          nonce: BigInt(w.nonce),
-          recipient: w.recipient,
-          amountNanomina: BigInt(w.amount_nanomina),
+        range: range.map((r) => ({
+          index: BigInt(r.chain_index),
+          token: r.token,
+          recipient: r.recipient,
+          amount: BigInt(r.amount),
         })),
       });
       await markWithdrawalReleased(withdrawal.id, hash);
       console.log(`released withdrawal ${withdrawal.nonce} -> ${withdrawal.recipient}`);
     } catch (e) {
-      // Stop at the first failure rather than skipping ahead: the next nonce
-      // cannot be released before this one anyway.
+      // Stop at the first failure rather than skipping ahead: the next
+      // withdrawal sits behind this one in the chain anyway.
       console.error(
         `withdrawal ${withdrawal.nonce} not released:`,
         e instanceof Error ? e.message : e,

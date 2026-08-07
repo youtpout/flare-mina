@@ -4,7 +4,7 @@ import { FdcAttestation, FdcLeaf } from '../src/FdcAttestation.js';
 import { MerkleInclusion } from '../src/MerkleInclusion.js';
 import { RelayMessage } from '../src/RelayMessage.js';
 import { SigningPolicyFold } from '../src/SigningPolicyFold.js';
-import { WithdrawalChain } from '../src/WithdrawalChain.js';
+import { TransferChain } from '../src/TransferChain.js';
 
 /**
  * Deploy the escrow zkApp to Mina devnet.
@@ -50,9 +50,11 @@ async function main() {
   const zkAppKey = PrivateKey.random();
   const zkAppAddress = zkAppKey.toPublicKey();
 
-  // The Flare bridge whose events this escrow accepts. Pinned in state: an
+  // The Flare `TransferChain` whose events this escrow accepts, and FMINA, the
+  // one asset on it that belongs to this rail. Both pinned in state: an
   // attestation proves an event happened, not that it was ours.
-  const flareBridge = required('FLARE_BRIDGE_ADDRESS');
+  const flareChain = required('FLARE_TRANSFER_CHAIN_ADDRESS');
+  const token = required('FLARE_FMINA_ADDRESS');
 
   const signingPolicyRoot = Field(required('MINA_SIGNING_POLICY_ROOT'));
   // Coston2's real threshold is 32,767 of 65,534. A demo can require less, but
@@ -61,7 +63,8 @@ async function main() {
 
   console.log('deployer :', deployer.toBase58());
   console.log('zkApp    :', zkAppAddress.toBase58());
-  console.log('flare    :', flareBridge);
+  console.log('chain    :', flareChain);
+  console.log('token    :', token);
   console.log('policy   :', signingPolicyRoot.toString());
   console.log('weight   :', requiredWeight.toString());
   console.log('\nzkApp private key (store it, it is not recoverable):');
@@ -71,7 +74,7 @@ async function main() {
 
   console.log('compiling…');
   // The contract verifies proofs from both, so their keys must exist first.
-  await WithdrawalChain.compile();
+  await TransferChain.compile();
   await RelayMessage.compile();
   await SigningPolicyFold.compile();
   await MerkleInclusion.compile();
@@ -87,7 +90,8 @@ async function main() {
     AccountUpdate.fundNewAccount(deployer);
     await bridge.deploy({
       admin: deployer,
-      flareBridge: Field(BigInt(flareBridge)),
+      flareChain: Field(BigInt(flareChain)),
+      token: Field(BigInt(token)),
       signingPolicyRoot,
       requiredWeight,
     });

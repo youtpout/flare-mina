@@ -5,7 +5,7 @@ import { SigningPolicyFold } from '../src/SigningPolicyFold.js';
 import { FdcAttestation, FdcLeaf } from '../src/FdcAttestation.js';
 import { MerkleInclusion } from '../src/MerkleInclusion.js';
 import { RelayMessage } from '../src/RelayMessage.js';
-import { WithdrawalChain } from '../src/WithdrawalChain.js';
+import { TransferChain } from '../src/TransferChain.js';
 
 /**
  * Upgrading the escrow zkApp.
@@ -46,7 +46,7 @@ beforeAll(async () => {
   // actual verification key, and `proofsEnabled: false` produces none. The
   // contract verifies proofs from both programs, so their keys must exist
   // before its own can be built.
-  await WithdrawalChain.compile();
+  await TransferChain.compile();
   await RelayMessage.compile();
   await SigningPolicyFold.compile();
   await MerkleInclusion.compile();
@@ -60,7 +60,12 @@ beforeAll(async () => {
 
   const tx = await Mina.transaction(deployer, async () => {
     AccountUpdate.fundNewAccount(deployer);
-    await bridge.deploy({ admin, flareBridge: Field(1n), signingPolicyRoot: Field(7) });
+    await bridge.deploy({
+      admin,
+      flareChain: Field(1n),
+      token: Field(2n),
+      signingPolicyRoot: Field(7),
+    });
   });
   await tx.prove();
   await tx.sign([deployerKey, zkAppKey]).send();

@@ -112,6 +112,15 @@ export function Bridge({ session }: { session: Session }) {
   const [copied, setCopied] = useState(false);
   const [direction, setDirection] = useState<'toFlare' | 'toMina'>('toFlare');
   const [claiming, setClaiming] = useState<string | null>(null);
+  /**
+   * Claims whose transaction is on its way but not yet mined.
+   *
+   * The claim call returns once the transaction is *submitted*, so clearing the
+   * button there re-enabled it while the deposit was still `attested` — and a
+   * second click sent a second claim, which the bridge rejects as a consumed
+   * intent. No funds at risk, just an error where there was no problem.
+   */
+  const [submitting, setSubmitting] = useState<string[]>([]);
   const [claimError, setClaimError] = useState<string | null>(null);
   const [amount, setAmount] = useState('');
   const [depositSymbol, setDepositSymbol] = useState('MINA');
@@ -150,6 +159,13 @@ export function Bridge({ session }: { session: Session }) {
         if (live) {
           setDeposits(body.deposits);
           setError(null);
+          // Drop markers for deposits the chain has now settled, so a claim
+          // that genuinely failed becomes clickable again and one that landed
+          // does not.
+          const settled = new Set(
+            body.deposits.filter((d) => d.status !== 'attested').map((d) => d.id),
+          );
+          setSubmitting((ids) => ids.filter((id) => !settled.has(id)));
         }
       } catch (e) {
         if (live) setError(e instanceof Error ? e.message : String(e));
@@ -301,6 +317,9 @@ export function Bridge({ session }: { session: Session }) {
       } else if (!res.ok) {
         throw new Error(body.error ?? `relayer returned ${res.status}`);
       }
+      // Submitted, not mined. The poll below clears this when the deposit
+      // turns `claimed`.
+      setSubmitting((ids) => [...ids, d.id]);
     } catch (e) {
       setClaimError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -672,8 +691,16 @@ export function Bridge({ session }: { session: Session }) {
                 {LABEL[d.status]}
               </span>
               {d.status === 'attested' && (
-                <button className="ghost" disabled={claiming === d.id} onClick={() => claim(d)}>
-                  {claiming === d.id ? 'Signing…' : 'Claim'}
+                <button
+                  className="ghost"
+                  disabled={claiming === d.id || submitting.includes(d.id)}
+                  onClick={() => claim(d)}
+                >
+                  {claiming === d.id
+                    ? 'Signing…'
+                    : submitting.includes(d.id)
+                      ? 'Confirming…'
+                      : 'Claim'}
                 </button>
               )}
               {d.flareTxHash && (

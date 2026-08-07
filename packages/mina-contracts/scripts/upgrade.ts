@@ -2,12 +2,11 @@ import { AccountUpdate, Mina, PrivateKey, PublicKey, fetchAccount } from 'o1js';
 import { FungibleToken } from 'mina-fungible-token';
 import { AssetPort } from '../src/AssetPort.js';
 import { FdcAttestation, FdcLeaf } from '../src/FdcAttestation.js';
-import { LockChain } from '../src/LockChain.js';
+import { TransferChain } from '../src/TransferChain.js';
 import { MerkleInclusion } from '../src/MerkleInclusion.js';
 import { MinaPortBridge } from '../src/MinaPortBridge.js';
 import { RelayMessage } from '../src/RelayMessage.js';
 import { SigningPolicyFold } from '../src/SigningPolicyFold.js';
-import { WithdrawalChain } from '../src/WithdrawalChain.js';
 
 /**
  * Install a new verification key on a deployed zkApp.
@@ -60,7 +59,7 @@ async function main() {
   let zkAppKey: PrivateKey;
 
   if (what === 'bridge') {
-    await WithdrawalChain.compile();
+    await TransferChain.compile();
     await RelayMessage.compile();
     await SigningPolicyFold.compile();
     await MerkleInclusion.compile();
@@ -73,7 +72,7 @@ async function main() {
     if (symbol === undefined) throw new Error('a port needs a symbol, e.g. bFXRP');
     const upper = symbol.toUpperCase();
     FungibleToken.AdminContract = AssetPort as never;
-    await LockChain.compile();
+    await TransferChain.compile();
     await RelayMessage.compile();
     await SigningPolicyFold.compile();
     await MerkleInclusion.compile();

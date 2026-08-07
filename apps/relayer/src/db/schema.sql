@@ -171,3 +171,35 @@ CREATE TABLE IF NOT EXISTS locks (
 
 CREATE INDEX IF NOT EXISTS locks_status_idx ON locks (status);
 CREATE INDEX IF NOT EXISTS locks_recipient_idx ON locks (recipient);
+
+-- Every Flare -> Mina transfer, in one ordered ledger, exactly as
+-- `TransferChain` folded it.
+--
+-- This exists because a segment proof spans the whole range between a
+-- consumer's cursor and the attested head — including transfers of the *other*
+-- three assets, which it steps over. Neither `locks` nor `withdrawals` holds
+-- those, so neither can build the proof: they know their own rail only.
+--
+-- `locks` and `withdrawals` stay, for user-facing status. This is what the
+-- prover reads.
+CREATE TABLE IF NOT EXISTS transfers (
+  -- Position in the shared chain. Global across every asset, so it names one
+  -- transfer outright and orders the whole ledger.
+  chain_index   NUMERIC(78) PRIMARY KEY,
+
+  -- Flare token address, lowercase. FMINA for the escrow rail.
+  token         TEXT        NOT NULL,
+  -- Mina account, base58, decoded from the packed form in the event.
+  recipient     TEXT        NOT NULL,
+  amount        NUMERIC(78) NOT NULL CHECK (amount > 0),
+
+  -- Both ends of the link. `new_head` is unique because a Poseidon chain that
+  -- repeated a head would have repeated a whole transfer.
+  previous_head NUMERIC(78) NOT NULL,
+  new_head      NUMERIC(78) NOT NULL UNIQUE,
+
+  flare_tx_hash TEXT        NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS transfers_token_idx ON transfers (token);

@@ -26,7 +26,7 @@ import {
 import { keccak256 } from 'viem';
 import { FungibleToken } from 'mina-fungible-token';
 import { AssetPort, NO_MINT_AUTHORIZED } from '../src/AssetPort.js';
-import { LockChain, LockRecord, applyLock } from '../src/LockChain.js';
+import { TransferChain, TransferRecord, applyTransfer } from '../src/TransferChain.js';
 import { Bytes38, RelayMessage } from '../src/RelayMessage.js';
 import { AttestationResponse, FdcAttestation, FdcLeaf } from '../src/FdcAttestation.js';
 import { MerkleInclusion } from '../src/MerkleInclusion.js';
@@ -40,8 +40,12 @@ import {
   policyLeaf,
 } from '../src/SigningPolicyFold.js';
 
-/** The vault on Coston2, and the `AssetLocked` signature. */
+/** The shared chain on Coston2, and the `Transfer` signature. */
 const VAULT = Field(BigInt('0xa179E908C3F1156Edda0BD5f1A0B3b3f419f9F90'));
+
+/** FXRP, which this port administers, and an asset belonging to another one. */
+const FXRP = Field(BigInt('0x8b4abA9C4BD7DD961659b02129beE20c6286e17F'));
+const OTHER_ASSET = Field(BigInt('0x1234567890AbcdEF1234567890aBcdef12345678'));
 const TOPIC0 = BigInt('0x078ee1eead8e83dabf8464df5a5e308db068b136607c9f7bef8e86f6fc783add');
 
 it('locks on Flare, mints on Mina', async () => {
@@ -53,7 +57,7 @@ it('locks on Flare, mints on Mina', async () => {
   // would pass for entirely the wrong reason.
   FungibleToken.AdminContract = AssetPort as never;
 
-  await LockChain.compile();                          t('compile LockChain', Date.now() - m);
+  await TransferChain.compile();                      t('compile TransferChain', Date.now() - m);
   m = Date.now(); await RelayMessage.compile();       t('compile RelayMessage', Date.now() - m);
   m = Date.now(); await SigningPolicyFold.compile();  t('compile SigningPolicyFold', Date.now() - m);
   m = Date.now(); await MerkleInclusion.compile();    t('compile MerkleInclusion', Date.now() - m);
@@ -84,7 +88,7 @@ it('locks on Flare, mints on Mina', async () => {
   m = Date.now();
   let tx = await Mina.transaction(deployer, async () => {
     AccountUpdate.fundNewAccount(deployer);
-    await port.deploy({ admin: deployer, vault: VAULT, signingPolicyRoot: policyTree.getRoot() });
+    await port.deploy({ admin: deployer, flareChain: VAULT, asset: FXRP, signingPolicyRoot: policyTree.getRoot() });
   });
   await tx.prove(); await tx.sign([deployerKey, portKey]).send();
 
@@ -108,11 +112,27 @@ it('locks on Flare, mints on Mina', async () => {
     }).then((x) => x.prove()),
   ).rejects.toThrow();
 
-  // Flare's chain for this token: two locks, 1.0 and 0.25 FXRP.
-  const l1 = new LockRecord({ claimId: UInt64.from(0n), recipient: user, amount: UInt64.from(1_000_000n) });
-  const s1 = applyLock(Field(0), l1);
-  const l2 = new LockRecord({ claimId: UInt64.from(1n), recipient: user, amount: UInt64.from(250_000n) });
-  const s2 = applyLock(s1, l2);
+  // Flare's chain: two FXRP locks, 1.0 and 0.25, with a transfer of another
+  // asset between them. Every asset shares this chain, so stepping over that
+  // middle record without paying it is the case that matters.
+  const l1 = new TransferRecord({ index: UInt64.from(0n), token: FXRP, recipient: user, amount: UInt64.from(1_000_000n) });
+  const s1 = applyTransfer(Field(0), l1);
+  const other = new TransferRecord({ index: UInt64.from(1n), token: OTHER_ASSET, recipient: user, amount: UInt64.from(500_000n) });
+  const sOther = applyTransfer(s1, other);
+  const l2 = new TransferRecord({ index: UInt64.from(2n), token: FXRP, recipient: user, amount: UInt64.from(250_000n) });
+  const s2 = applyTransfer(sOther, l2);
+
+  /** The range from `from` to the attested head, examined for FXRP. */
+  const segmentFrom = async (from: Field, records: TransferRecord[]) => {
+    let state = from;
+    let segment = (await TransferChain.empty(from, FXRP)).proof;
+    for (const record of records) {
+      const link = (await TransferChain.link(state, FXRP, record)).proof;
+      state = applyTransfer(state, record);
+      segment = (await TransferChain.merge(segment, link)).proof;
+    }
+    return segment;
+  };
 
   // ---------------------------------------------------------------------
   // Build the attestation the way Flare would: an event carrying `s2`, hashed
@@ -175,20 +195,20 @@ it('locks on Flare, mints on Mina', async () => {
   // argument — nothing in this transaction let anyone name it.
   expect(port.flareLockState.get().toString()).toBe(s2.toString());
 
-  // A record Flare never folded has no continuation reaching the attested head,
-  // so it cannot be authorised however well-formed it looks.
-  const forged = new LockRecord({ claimId: UInt64.from(0n), recipient: user, amount: UInt64.from(9_999_999n) });
-  const { proof: forgedTail } = await LockChain.empty(s2);
+  // A record Flare never folded cannot appear in a segment that reaches the
+  // attested head, so it cannot be authorised however well-formed it looks.
+  const forged = new TransferRecord({ index: UInt64.from(0n), token: FXRP, recipient: user, amount: UInt64.from(9_999_999n) });
+  const forgedSegment = await segmentFrom(Field(0), [forged]);
   await expect(
-    Mina.transaction(deployer, async () => { await port.authorizeMint(forged, forgedTail); }).then((x) => x.prove()),
+    Mina.transaction(deployer, async () => { await port.authorizeMint(forgedSegment); }).then((x) => x.prove()),
   ).rejects.toThrow();
 
   m = Date.now();
-  const { proof: tail1 } = await LockChain.link(s1, l2);
-  t('prove tail (1 link)', Date.now() - m);
+  const seg1 = await segmentFrom(Field(0), [l1, other, l2]);
+  t('prove segment (3 links)', Date.now() - m);
 
   m = Date.now();
-  tx = await Mina.transaction(deployer, async () => { await port.authorizeMint(l1, tail1); });
+  tx = await Mina.transaction(deployer, async () => { await port.authorizeMint(seg1); });
   await tx.prove(); await tx.sign([deployerKey]).send();
   t('authorizeMint #1', Date.now() - m);
 
@@ -222,10 +242,11 @@ it('locks on Flare, mints on Mina', async () => {
     Mina.transaction(deployer, async () => { await token.mint(user, UInt64.from(1_000_000n)); }).then((x) => x.prove()),
   ).rejects.toThrow(/no mint is authorised/);
 
-  // The second lock, against an empty tail — it is the newest link in the chain.
+  // The second lock. The cursor sits before another port's transfer, so this
+  // segment steps over it — proven foreign in circuit, never paid here.
   m = Date.now();
-  const { proof: tail2 } = await LockChain.empty(s2);
-  tx = await Mina.transaction(deployer, async () => { await port.authorizeMint(l2, tail2); });
+  const seg2 = await segmentFrom(s1, [other, l2]);
+  tx = await Mina.transaction(deployer, async () => { await port.authorizeMint(seg2); });
   await tx.prove(); await tx.sign([deployerKey]).send();
   tx = await Mina.transaction(deployer, async () => { await token.mint(user, UInt64.from(250_000n)); });
   await tx.prove(); await tx.sign([deployerKey]).send();

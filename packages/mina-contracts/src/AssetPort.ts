@@ -13,7 +13,7 @@ import {
   method,
   state,
 } from 'o1js';
-import { LockChainProof, LockRecord, applyLock } from './LockChain.js';
+import { TransferChainProof } from './TransferChain.js';
 import { FdcAttestationProof } from './FdcAttestation.js';
 import { FDC_PROTOCOL_ID } from './RelayMessage.js';
 
@@ -27,9 +27,13 @@ import { FDC_PROTOCOL_ID } from './RelayMessage.js';
  *
  * ```text
  * publishFlareLockState(attestation)          <- FDC event, validator-signed
- * authorizeMint(record, tail)                 <- record + continuation to state
+ * authorizeMint(segment)                      <- cursor -> attested head
  * token.mint(recipient, amount) -> canMint    <- one shot, bound to the record
  * ```
+ *
+ * The chain it replays carries every bridged asset, so a segment steps over
+ * records belonging to the other ports. Which ones those are is decided in
+ * circuit, not by the caller: see {TransferChain}.
  *
  * Two transactions, not one, and established by test rather than by reading: a
  * second account update on the same zkApp does not observe state written by an
@@ -51,6 +55,14 @@ export function mintCommitment(recipient: PublicKey, amount: UInt64): Field {
   return Poseidon.hash([MINT_DOMAIN, recipient.x, recipient.isOdd.toField(), amount.value]);
 }
 
+/** Commitment to the admin key, so it costs one state field instead of two. */
+export function adminCommitment(admin: PublicKey): Field {
+  return Poseidon.hash([ADMIN_DOMAIN, admin.x, admin.isOdd.toField()]);
+}
+
+/** Domain tag for {adminCommitment}. */
+export const ADMIN_DOMAIN = Field(0x41444d494e5f5631n); // "ADMIN_V1"
+
 /** Sentinel meaning "no mint is currently authorised". */
 export const NO_MINT_AUTHORIZED = Field(0);
 
@@ -67,44 +79,59 @@ export class AssetPort extends SmartContract {
   /** Signing weight a policy proof must carry. */
   @state(UInt64) requiredWeight = State<UInt64>();
 
+  /**
+   * The token this port administers, as a 160-bit Flare address.
+   *
+   * The chain is shared, so this is the only thing separating one port's
+   * transfers from another's. Without it every port would mint against every
+   * lock.
+   */
+  @state(Field) asset = State<Field>();
+
   /** Commitment to the mint currently authorised, or {NO_MINT_AUTHORIZED}. */
   @state(Field) mintAuthorization = State<Field>();
 
   /**
-   * The Flare vault whose events this port accepts, as a 160-bit field.
-   *
-   * Pinned so one asset's chain cannot be advanced by an event from another
-   * contract — the attestation proves an event happened, not that it was ours.
+   * The Flare `TransferChain` whose events this port accepts, as a 160-bit
+   * field. Pinned because the attestation proves an event happened, not that it
+   * was ours.
    */
-  @state(Field) vault = State<Field>();
+  @state(Field) flareChain = State<Field>();
 
   /**
-   * Admin key. Its only remaining power is rotating the signing-policy root,
-   * which Flare forces every reward epoch. It cannot publish a state, mint,
-   * choose a recipient or an amount, or skip a link: those are all proven.
+   * Poseidon hash of the admin key, not the key itself: a `PublicKey` costs two
+   * of the eight state fields and the eighth is spent on {asset}. The key is
+   * passed to {setSigningPolicyRoot} and checked against this.
+   *
+   * Its only power is rotating the signing-policy root, which Flare forces every
+   * reward epoch. It cannot publish a state, mint, choose a recipient or an
+   * amount, or skip a link: those are all proven.
    */
-  @state(PublicKey) admin = State<PublicKey>();
+  @state(Field) adminHash = State<Field>();
 
   override async deploy(
     args: DeployArgs & {
       admin: PublicKey;
-      /** The Flare vault, as a 160-bit field. */
-      vault: Field;
+      /** The Flare `TransferChain`, as a 160-bit field. */
+      flareChain: Field;
+      /** The token this port administers, as a 160-bit Flare address. */
+      asset: Field;
       signingPolicyRoot?: Field;
       requiredWeight?: UInt64;
     },
   ) {
     await super.deploy(args);
-    this.admin.set(args.admin);
-    this.vault.set(args.vault);
+    this.adminHash.set(adminCommitment(args.admin));
+    this.flareChain.set(args.flareChain);
+    this.asset.set(args.asset);
     this.signingPolicyRoot.set(args.signingPolicyRoot ?? Field(0));
     this.requiredWeight.set(args.requiredWeight ?? UInt64.zero);
   }
 
   override init() {
     super.init();
-    // Zero is the empty chain on both sides: `lockActionStateOf` starts there
-    // too, so a fresh port is already in agreement with the vault.
+    // Zero is the empty chain on both sides: `TransferChain.head` starts there
+    // too, so a fresh port is already in agreement with Flare.
     this.flareLockState.set(Field(0));
     this.processedLockState.set(Field(0));
     this.mintAuthorization.set(NO_MINT_AUTHORIZED);
@@ -125,8 +152,11 @@ export class AssetPort extends SmartContract {
    * validator set changes every reward epoch — 6h on Coston2 — and a fixed root
    * would stop accepting proofs at the first change.
    */
-  @method async setSigningPolicyRoot(root: Field) {
-    const admin = this.admin.getAndRequireEquals();
+  @method async setSigningPolicyRoot(root: Field, admin: PublicKey) {
+    adminCommitment(admin).assertEquals(
+      this.adminHash.getAndRequireEquals(),
+      'not the admin key',
+    );
     AccountUpdate.createSigned(admin).body.useFullCommitment = Bool(true);
 
     this.signingPolicyRoot.getAndRequireEquals();
@@ -163,9 +193,9 @@ export class AssetPort extends SmartContract {
     // FDC rounds are the ones carrying attestation roots.
     attested.protocolId.value.assertEquals(Field(FDC_PROTOCOL_ID), 'not an FDC round');
 
-    // The event has to come from this asset's vault, and be a lock.
+    // The event has to come from the shared chain.
     attested.emitter.assertEquals(
-      this.vault.getAndRequireEquals(),
+      this.flareChain.getAndRequireEquals(),
       'the event came from another contract',
     );
 
@@ -174,33 +204,41 @@ export class AssetPort extends SmartContract {
   }
 
   /**
-   * Arm the mint for the next lock. The record is untrusted; `tail` constrains
-   * it, since no fabricated record has a continuation reaching the attested
-   * state. Advances the cursor, so two claims in one block conflict.
+   * Arm the mint for the next lock of this asset.
+   *
+   * Nothing is passed in but the segment: recipient and amount come out of the
+   * proof, which spans the cursor to the attested head and names the first
+   * record of this port's asset in that range. Locks of other assets in between
+   * are stepped over, proven foreign in circuit — the caller does not get to
+   * choose what to skip. Advances the cursor, so two claims in one block
+   * conflict.
    */
-  @method async authorizeMint(record: LockRecord, tail: LockChainProof) {
-    record.amount.assertGreaterThan(UInt64.zero, 'lock amount must be non-zero');
+  @method async authorizeMint(segment: TransferChainProof) {
+    segment.verify();
+    const found = segment.publicOutput;
 
-    tail.verify();
-
-    // This record's own link is computed here, not taken from the proof: it is
-    // what binds the recipient and amount being minted to the chain.
-    const processed = this.processedLockState.getAndRequireEquals();
-    const next = applyLock(processed, record);
-
-    tail.publicOutput.from.assertEquals(next, 'tail does not continue from this lock');
-    tail.publicOutput.to.assertEquals(
-      this.flareLockState.getAndRequireEquals(),
-      'tail does not reach the attested Flare state',
+    found.token.assertEquals(
+      this.asset.getAndRequireEquals(),
+      'segment was examined for another asset',
     );
+    found.from.assertEquals(
+      this.processedLockState.getAndRequireEquals(),
+      'segment does not start at the cursor',
+    );
+    found.to.assertEquals(
+      this.flareLockState.getAndRequireEquals(),
+      'segment does not reach the attested Flare state',
+    );
+    found.found.assertTrue('no lock to mint');
+    found.firstAmount.assertGreaterThan(UInt64.zero, 'lock amount must be non-zero');
 
     // Refuse to overwrite an armed authorisation, so a caller cannot stack two
     // claims and mint only the larger one.
     const armed = this.mintAuthorization.getAndRequireEquals();
     armed.assertEquals(NO_MINT_AUTHORIZED, 'a mint is already authorised');
 
-    this.processedLockState.set(next);
-    this.mintAuthorization.set(mintCommitment(record.recipient, record.amount));
+    this.processedLockState.set(found.stateAfterFirst);
+    this.mintAuthorization.set(mintCommitment(found.firstRecipient, found.firstAmount));
   }
 
   /**

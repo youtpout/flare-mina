@@ -27,7 +27,7 @@ import {
 } from './submitter.js';
 import { networkSnapshot } from './network.js';
 import { startWatcher } from './watcher.js';
-import { startPublisher } from './publisher.js';
+import { startTransfers } from './transfers.js';
 import { startWithdrawals } from './withdrawals.js';
 import { startAssets } from './assets.js';
 
@@ -337,7 +337,7 @@ async function main() {
 
   const watcher = startWatcher();
   // Before withdrawals: a release cannot land ahead of the state it proves against.
-  const publisher = startPublisher();
+  const publisher = startTransfers();
   const withdrawals = startWithdrawals();
   // The asset rail. Silently inert unless FLARE_ASSET_VAULT_ADDRESS and
   // MINA_ASSET_PORTS are both set, so a MINA-only deployment pays nothing.

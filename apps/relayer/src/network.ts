@@ -14,6 +14,7 @@ import { pool } from './db/index.js';
 const RPC = process.env.COSTON2_RPC_URL ?? 'https://coston2-api.flare.network/ext/C/rpc';
 const BRIDGE = process.env.FLARE_BRIDGE_ADDRESS as `0x${string}` | undefined;
 const VAULT = process.env.FLARE_ASSET_VAULT_ADDRESS as `0x${string}` | undefined;
+const CHAIN = process.env.FLARE_TRANSFER_CHAIN_ADDRESS as `0x${string}` | undefined;
 const REGISTRY = '0xaD67FE66660Fb8dFE9d6b1b4240d8650e30F6019' as const;
 
 const MINA_GRAPHQL =
@@ -55,8 +56,8 @@ async function attempt<T>(f: () => Promise<T>): Promise<T | null> {
 
 /**
  * The escrow's zkApp state, by field order in MinaPortBridge.ts:
- * 0 signingPolicyRoot, 1 flareBridge, 2 flareActionState,
- * 3 processedActionState, 4 requiredWeight, 5-6 admin.
+ * 0 signingPolicyRoot, 1 flareChain, 2 flareActionState,
+ * 3 processedActionState, 4 requiredWeight, 5 token, 6-7 admin.
  */
 async function minaState() {
   if (ESCROW === undefined) return null;
@@ -125,11 +126,16 @@ async function policy() {
 async function flareState() {
   if (BRIDGE === undefined) return null;
   const [withdrawalActionState, escrowedNanomina, currentMinaActionState] = await Promise.all([
-    client.readContract({
-      address: BRIDGE,
-      abi: parseAbi(['function withdrawalActionState() view returns (uint256)']),
-      functionName: 'withdrawalActionState',
-    }),
+    // The shared chain's head. Every asset folds into it, so this one number is
+    // what all four Mina zkApps are catching up to. The bridge's own
+    // `withdrawalActionState` is frozen at the value it held before the merge.
+    CHAIN === undefined
+      ? Promise.resolve(0n)
+      : client.readContract({
+          address: CHAIN,
+          abi: parseAbi(['function head() view returns (uint256)']),
+          functionName: 'head',
+        }),
     client.readContract({
       address: BRIDGE,
       abi: parseAbi(['function escrowedNanomina() view returns (uint256)']),
@@ -145,6 +151,7 @@ async function flareState() {
   return {
     bridge: BRIDGE,
     vault: VAULT ?? null,
+    transferChain: CHAIN ?? null,
     withdrawalActionState: withdrawalActionState.toString(),
     escrowedNanomina: escrowedNanomina?.toString() ?? null,
     currentMinaActionState: currentMinaActionState ?? null,

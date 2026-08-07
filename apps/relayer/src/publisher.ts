@@ -7,16 +7,15 @@ import {
   type PolicyKey,
   type RelayCall,
 } from '@minaport/shared';
-import { knownValidatorKeys, rememberValidatorKeys, withdrawalTxFor } from './db/index.js';
-import { publishActionState } from './prover/index.js';
-import { fetchAttestation, requestAttestationFor, type Attestation } from './fdc.js';
+import { knownValidatorKeys, rememberValidatorKeys } from './db/index.js';
 
 /**
- * Carries Flare's withdrawal chain state to Mina.
+ * Establishes that Flare's validator set signed an FDC round.
  *
- * The escrow releases against `flareActionState`, so without this nothing is
- * ever releasable. Runs on its own timer because establishing the state costs
- * ECDSA proving and is identical for every withdrawal in the batch it covers.
+ * The one question every publication asks, whatever moved: the signatures and
+ * the recovered keys are the same for the escrow and for every asset port, so
+ * this is gathered once per round in transfers.ts and reused. Publishing itself
+ * lives there.
  */
 
 const RPC = process.env.COSTON2_RPC_URL ?? 'https://coston2-api.flare.network/ext/C/rpc';
@@ -90,54 +89,6 @@ async function acceptedActionState(): Promise<bigint | null> {
   }
 }
 
-/**
- * The last state we sent, and when.
- *
- * Sending twice would have the two fight over the fee payer's nonce, so a
- * publication in flight blocks the next tick. But `send()` resolves even for a
- * transaction that is then included and rejected, so a marker kept until an
- * exception is a marker kept forever — the bridge stops retrying and looks
- * healthy while doing nothing. It expires instead.
- */
-let inFlight: { state: bigint; at: number } | undefined;
-
-/** Long enough for devnet inclusion, short enough that a rejection is retried. */
-const IN_FLIGHT_TTL_MS = Number(process.env.PUBLISH_IN_FLIGHT_TTL_MS ?? 12 * 60_000);
-
-/**
- * `WithdrawToMina(uint256,address,address,bytes32,uint256,uint256,uint256)`.
- *
- * Shaped like `AssetLocked` on purpose: the Mina circuit takes a fixed-size
- * response, and an event one data word narrower produced 41 words where it
- * wanted 42 — which does not fit the type at all.
- */
-const WITHDRAW_TOPIC0 =
-  '0x24d2ab5dabaa1673e788a746c4b8f40f36eb193072203823ceff2f3f1b997191' as const;
-
-/**
- * Get the round that carries our event, waiting for it to finalise.
- *
- * The FDC settles a round roughly a minute after it closes, so this polls
- * inside the tick rather than deferring to the next one — ten more minutes of
- * latency for a wait that is usually under three.
- */
-async function attestationFor(txHash: `0x${string}`): Promise<Attestation | null> {
-  if (BRIDGE === undefined) return null;
-  const expected = { emitter: BRIDGE, topic0: WITHDRAW_TOPIC0 };
-
-  const { request, round } = await requestAttestationFor(txHash, expected);
-  console.log(`requested attestation for ${txHash} in round ${round}`);
-
-  const deadline = Date.now() + Number(process.env.FDC_WAIT_MS ?? 5 * 60_000);
-  while (Date.now() < deadline) {
-    const attestation = await fetchAttestation(request, round, expected);
-    if (attestation !== null) return attestation;
-    await new Promise((r) => setTimeout(r, 20_000));
-  }
-  console.warn(`round ${round} did not finalise in time; will retry next tick`);
-  return null;
-}
-
 async function relay(): Promise<`0x${string}`> {
   relayAddress ??= await client.readContract({
     address: REGISTRY,
@@ -172,59 +123,6 @@ async function recentRelayCalls(): Promise<RelayCall[]> {
     }
   }
   return calls;
-}
-
-async function tick(): Promise<void> {
-  if (BRIDGE === undefined) return;
-
-  const actionState = await client.readContract({
-    address: BRIDGE,
-    abi: parseAbi(['function withdrawalActionState() view returns (uint256)']),
-    functionName: 'withdrawalActionState',
-  });
-
-  if (actionState === 0n) return;
-
-  // Already accepted on Mina, or already sent and waiting for inclusion —
-  // devnet takes minutes, and a second send would only fight the first for the
-  // fee payer's nonce.
-  const accepted = await acceptedActionState();
-  if (accepted === null || accepted === actionState) return;
-  if (inFlight?.state === actionState && Date.now() - inFlight.at < IN_FLIGHT_TTL_MS) return;
-
-  // The transaction whose event produced the state we are about to publish.
-  // Its `newActionState` is what the circuit will read, so the row and the
-  // chain have to agree before a proof is worth building.
-  const txHash = (await withdrawalTxFor(actionState)) as `0x${string}` | null;
-  if (txHash === null) {
-    console.warn(`no recorded withdrawal produced state ${actionState}`);
-    return;
-  }
-
-  const attestation = await attestationFor(txHash);
-  if (attestation === null) return;
-  if (attestation.event.newActionState !== actionState) {
-    console.warn('the attested event carries a different state than the bridge reports');
-    return;
-  }
-
-  const inputs = await policyProofInputs(attestation.round);
-  if (inputs === null) return;
-  const { calls, keys } = inputs;
-
-  inFlight = { state: actionState, at: Date.now() };
-  try {
-    const hash = await publishActionState({
-      response: attestation.response.slice(2),
-      siblings: attestation.proof.map((p) => p.slice(2)),
-      calls,
-      keys,
-    });
-    console.log(`published Flare action state ${actionState} -> ${hash}`);
-  } catch (e) {
-    inFlight = undefined;
-    throw e;
-  }
 }
 
 /**
@@ -289,22 +187,4 @@ export async function policyProofInputs(
   }
 
   return { calls, keys };
-}
-
-export function startPublisher(): { stop(): void } {
-  let stopped = false;
-
-  const loop = async () => {
-    while (!stopped) {
-      try {
-        await tick();
-      } catch (e) {
-        console.error('publisher tick failed:', e instanceof Error ? e.message : e);
-      }
-      await new Promise((r) => setTimeout(r, POLL_MS));
-    }
-  };
-
-  void loop();
-  return { stop: () => (stopped = true) };
 }

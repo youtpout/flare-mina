@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {Test, console} from "forge-std/Test.sol";
 import {MinaPortBridge} from "../src/MinaPortBridge.sol";
+import {TransferChain} from "../src/TransferChain.sol";
 import {DeployBridge} from "./helpers/DeployBridge.sol";
 import {FMINA} from "../src/FMINA.sol";
 import {MockSettlementVerifier} from "../src/mocks/MockSettlementVerifier.sol";
@@ -48,8 +49,12 @@ contract MinaSignatureDepositTest is Test {
         );
         fmina = bridge.TOKEN();
 
-        vm.prank(owner);
+        TransferChain chain = new TransferChain(owner);
+        vm.startPrank(owner);
+        bridge.setTransferChain(chain);
+        chain.setAppender(address(bridge), address(fmina), true);
         bridge.setEscrowAttestor(attestor);
+        vm.stopPrank();
     }
 
     /// @dev A real Mina signature over the bridge's own intent encoding.

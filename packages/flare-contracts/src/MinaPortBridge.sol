@@ -22,6 +22,7 @@ import {PoseidonPallas} from "./libraries/PoseidonPallas.sol";
 import {SignaturePurpose} from "./libraries/SignaturePurpose.sol";
 import {MinaPortEncoding} from "./libraries/MinaPortEncoding.sol";
 import {IMinaSettlementVerifier, SettlementPublicValues} from "./interfaces/IMinaSettlementVerifier.sol";
+import {TransferChain} from "./TransferChain.sol";
 
 /// @title MinaPortBridge
 /// @notice Flare side of the MINA <-> FMINA bridge.
@@ -95,15 +96,10 @@ contract MinaPortBridge is Ownable2StepUpgradeable, PausableUpgradeable, Reentra
     /// @notice Nanomina currently escrowed on Mina against circulating FMINA.
     uint256 public escrowedNanomina;
 
-    /// @notice Running Poseidon commitment to every withdrawal, Mina action-state
-    /// shaped. One field commits to the whole ordered history; replaying a link
-    /// costs Mina 13 rows against 14,733 for a keccak level. Starts at zero.
+    /// @notice DEPRECATED. This rail's own withdrawal chain, before every asset
+    /// was folded into {TransferChain}. Kept so the proxy's storage layout does
+    /// not shift; frozen at whatever it held at the upgrade.
     uint256 public withdrawalActionState;
-
-    /// @notice o1js `prefixToField("MinaPortWithdrawV1")`. Without domain
-    /// separation a digest from elsewhere could be replayed as a link here.
-    uint256 internal constant WITHDRAWAL_PREFIX_FIELD =
-        4297924978315896314651171907962194736605517;
 
     // -------------------------------------------------------------------------
     // Events
@@ -123,14 +119,9 @@ contract MinaPortBridge is Ownable2StepUpgradeable, PausableUpgradeable, Reentra
         uint64 amountNanomina
     );
 
-    /// @notice Canonical withdrawal event. This is the event the Mina side
-    /// proves against, so its signature and field order are protocol.
-    ///
-    /// @dev Replaying the chain needs every link, not just the last one.
-    /// @dev Shaped to match `AssetVault.AssetLocked` exactly — three indexed
-    /// arguments and four words of data — so one Mina circuit reads both rails.
-    /// The attestation response is a fixed-size input there, and an event one
-    /// word narrower simply does not fit the type.
+    /// @notice A withdrawal, as this bridge saw it. Informational: what Mina
+    /// proves against is {TransferChain-Transfer}, and `nonce` here is that
+    /// chain's global index so the two can be lined up.
     event WithdrawToMina(
         uint256 indexed nonce,
         address indexed token,
@@ -140,6 +131,8 @@ contract MinaPortBridge is Ownable2StepUpgradeable, PausableUpgradeable, Reentra
         uint256 previousActionState,
         uint256 newActionState
     );
+
+    event TransferChainSet(address indexed chain);
 
     event VerifierUpdateProposed(address indexed newVerifier, uint256 readyAt);
     event VerifierUpdateCancelled(address indexed cancelledVerifier);
@@ -164,6 +157,7 @@ contract MinaPortBridge is Ownable2StepUpgradeable, PausableUpgradeable, Reentra
     error WithdrawalNonceAlreadyUsed(uint256 nonce);
     error NoPendingVerifier();
     error VerifierUpdateNotReady(uint256 readyAt);
+    error TransferChainNotSet();
 
     // -------------------------------------------------------------------------
     // Construction
@@ -206,8 +200,19 @@ contract MinaPortBridge is Ownable2StepUpgradeable, PausableUpgradeable, Reentra
         emit AttestedMintLimitsUpdated(DEFAULT_MAX_ATTESTED_DEPOSIT, DEFAULT_ATTESTED_MINT_CAP);
     }
 
+    /// @notice The shared chain every withdrawal is folded into.
+    TransferChain public transferChain;
+
+    /// @notice Point withdrawals at the shared chain.
+    /// @dev The chain must also grant this bridge `mayAppend` for FMINA.
+    function setTransferChain(TransferChain chain) external onlyOwner {
+        if (address(chain) == address(0)) revert ZeroAddress();
+        transferChain = chain;
+        emit TransferChainSet(address(chain));
+    }
+
     /// @dev Room to append without shifting anything this version wrote.
-    uint256[45] private __gap;
+    uint256[44] private __gap;
 
     // -------------------------------------------------------------------------
     // Mina -> Flare
@@ -541,37 +546,24 @@ contract MinaPortBridge is Ownable2StepUpgradeable, PausableUpgradeable, Reentra
         (uint256 recipientX, bool recipientIsOdd) =
             MinaAddressLib.unpack(MinaAddressLib.fromBytes32(minaRecipient));
 
-        nonce = nextWithdrawalNonce;
-        if (processedWithdrawalNonces[nonce]) revert WithdrawalNonceAlreadyUsed(nonce);
-        processedWithdrawalNonces[nonce] = true;
-        nextWithdrawalNonce = nonce + 1;
+        TransferChain chain = transferChain;
+        if (address(chain) == address(0)) revert TransferChainNotSet();
 
+        nextWithdrawalNonce += 1;
         escrowedNanomina -= amount;
 
-        // The record is hashed, not the signature: Mina needs the recipient
-        // and amount to pay out, so those are what must be bound.
-        uint256 previousActionState = withdrawalActionState;
-        uint256[] memory fields = new uint256[](5);
-        fields[0] = previousActionState;
-        fields[1] = nonce;
-        fields[2] = recipientX;
-        fields[3] = recipientIsOdd ? 1 : 0;
-        fields[4] = amount;
-        uint256 newActionState =
-            PoseidonPallas.hashWithPrefix(WITHDRAWAL_PREFIX_FIELD, fields);
-        withdrawalActionState = newActionState;
-
-        // Burn before emitting so a reverting burn cannot leave a claimable event.
+        // Burn before folding: `append` is what makes the withdrawal claimable
+        // on Mina, so nothing may revert after it.
         TOKEN.burn(msg.sender, amount);
 
+        uint256 previousHead = chain.head();
+        uint256 newHead;
+        (nonce, newHead) =
+            chain.append(address(TOKEN), msg.sender, minaRecipient, recipientX, recipientIsOdd, amount);
+        processedWithdrawalNonces[nonce] = true;
+
         emit WithdrawToMina(
-            nonce,
-            address(TOKEN),
-            msg.sender,
-            minaRecipient,
-            amount,
-            previousActionState,
-            newActionState
+            nonce, address(TOKEN), msg.sender, minaRecipient, amount, previousHead, newHead
         );
     }
 
