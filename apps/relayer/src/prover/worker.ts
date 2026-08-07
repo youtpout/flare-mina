@@ -403,6 +403,26 @@ async function proveAttestation(
 }
 
 /**
+ * Wait for a transaction, treating a timeout as unknown rather than failed.
+ *
+ * `wait()` gives up after a fixed number of polls and throws — but devnet is
+ * simply slow, and the transaction usually lands moments later. Letting that
+ * throw aborted a whole publication cycle over a rotation that had in fact
+ * succeeded, and the next cycle would rotate again.
+ *
+ * The caller re-reads the account afterwards, which is the only honest way to
+ * know: this is the third thing today whose apparent success or failure said
+ * nothing about what the chain did.
+ */
+async function settle(pending: { hash: string; wait(): Promise<unknown> }, label: string) {
+  try {
+    await pending.wait();
+  } catch {
+    console.warn(`${label} ${pending.hash} not confirmed in time; checking the account`);
+  }
+}
+
+/**
  * Publish a chain state read out of an attested Flare event.
  *
  * Nothing is co-signed. The proof carries the validator signatures, the round
@@ -442,12 +462,13 @@ async function handlePublish(request: PublishRequest) {
     await rotate.prove();
     const rotated = await rotate.sign([feePayer, admin]).send();
     console.log(`rotated signing policy root -> ${rotated.hash}`);
-    // Waited on, unlike everything else here: the new root becomes a
-    // precondition of the publication below, and o1js builds that precondition
-    // from the account it has read. A rotation happens once per reward epoch,
-    // so the minutes cost nothing.
-    await rotated.wait();
+    // The new root becomes a precondition of the publication below, and o1js
+    // builds that precondition from the account it has read.
+    await settle(rotated, 'rotation');
     await fetchAccount({ publicKey: bridge.address });
+    if (bridge.signingPolicyRoot.get().toString() !== tree.root.toString()) {
+      throw new Error('policy rotation has not landed yet; retrying next tick');
+    }
   }
 
   const tx = await Mina.transaction(
@@ -629,10 +650,13 @@ async function handlePublishLock(request: PublishLockRequest) {
     await rotate.prove();
     const rotated = await rotate.sign([feePayer, admin]).send();
     console.log(`rotated ${request.port} policy root -> ${rotated.hash}`);
-    // Waited on: the new root becomes a precondition of the publication below,
-    // and o1js builds that precondition from the account it has read.
-    await rotated.wait();
+    // The new root becomes a precondition of the publication below, and o1js
+    // builds that precondition from the account it has read.
+    await settle(rotated, 'rotation');
     await fetchAccount({ publicKey: assetPort.address });
+    if (assetPort.signingPolicyRoot.get().toString() !== tree.root.toString()) {
+      throw new Error('policy rotation has not landed yet; retrying next tick');
+    }
   }
 
   const tx = await Mina.transaction(
@@ -701,9 +725,9 @@ async function handleMint(request: MintRequest) {
     const armed = await authorize.sign([feePayer]).send();
     predictedLockCursor.set(request.port, next);
 
-    // Waited on: `canMint` reads `mintAuthorization` as a precondition, and an
-    // account still showing the old value would build a mint that cannot apply.
-    await armed.wait();
+    // `canMint` reads `mintAuthorization` as a precondition, and an account
+    // still showing the old value would build a mint that cannot apply.
+    await settle(armed, 'authorisation');
     await fetchAccount({ publicKey: assetPort.address });
   }
 
