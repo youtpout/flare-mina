@@ -19,6 +19,8 @@ export default defineConfig({
   ],
   test: {
     include: ['test/**/*.test.ts'],
+    // The native backend, for every suite. See test/setup.ts.
+    setupFiles: ['./test/setup.ts'],
     testTimeout: 300_000,
     hookTimeout: 300_000,
     pool: 'forks',

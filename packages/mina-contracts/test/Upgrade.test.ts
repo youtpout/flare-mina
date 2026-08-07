@@ -53,7 +53,7 @@ beforeAll(async () => {
 
   const tx = await Mina.transaction(deployer, async () => {
     AccountUpdate.fundNewAccount(deployer);
-    await bridge.deploy({ admin, withdrawalAttestor: admin, signingPolicyRoot: Field(7) });
+    await bridge.deploy({ admin, flareBridge: Field(1n), signingPolicyRoot: Field(7) });
   });
   await tx.prove();
   await tx.sign([deployerKey, zkAppKey]).send();

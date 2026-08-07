@@ -96,8 +96,8 @@ type BuildRequest = {
  * state the zkApp has accepted. It is what proves this record is genuinely the
  * next link in Flare's chain rather than something the relayer made up — no
  * other record has a continuation reaching that state. The relayer therefore
- * cannot invent, redirect or resize a withdrawal, which is what the attestor
- * co-signature used to be standing in for.
+ * cannot invent, redirect or resize a withdrawal — which is what an attestor
+ * co-signature used to stand in for, before the state came from a proof.
  */
 type ReleaseRequest = {
   kind: 'release';
@@ -118,7 +118,10 @@ type ReleaseRequest = {
 type PublishRequest = {
   kind: 'publish';
   id: number;
-  actionState: string;
+  /** ABI-encoded FDC response, hex without 0x. */
+  response: string;
+  /** Sibling hashes bottom to top, hex without 0x. */
+  siblings: string[];
   calls: unknown[];
   keys: unknown[];
 };
@@ -134,7 +137,8 @@ type PublishLockRequest = {
   id: number;
   /** The port's zkApp address. */
   port: string;
-  lockState: string;
+  response: string;
+  siblings: string[];
   calls: unknown[];
   keys: unknown[];
 };
@@ -189,6 +193,9 @@ await initializeBindings();
 // From dist, like the contracts below: a worker thread has no tsx loader, so a
 // source import would resolve to .ts files whose own .js specifiers do not exist.
 const { signedMessageHash } = await import('@minaport/shared/dist/src/flareRelay.js');
+const { attestationLeaf } = await import('@minaport/shared/dist/src/fdcResponse.js');
+/** The leaf, as hex without 0x — the form o1js `Bytes.fromHex` wants. */
+const keccak = (hex: string) => attestationLeaf(`0x${hex}` as `0x${string}`).slice(2);
 const { WithdrawalChain, applyWithdrawal } = await import(
   '@minaport/mina-contracts/dist/src/WithdrawalChain.js'
 );
@@ -210,6 +217,10 @@ const { LockChain, LockRecord, applyLock } = await import(
 const { AssetPort, mintCommitment, NO_MINT_AUTHORIZED } = await import(
   '@minaport/mina-contracts/dist/src/AssetPort.js'
 );
+const { AttestationResponse, FdcAttestation, FdcLeaf } = await import(
+  '@minaport/mina-contracts/dist/src/FdcAttestation.js'
+);
+const { MerkleInclusion } = await import('@minaport/mina-contracts/dist/src/MerkleInclusion.js');
 const { FungibleToken } = await import('mina-fungible-token');
 
 // The token resolves its admin through this, and every wrapped asset in this
@@ -238,7 +249,11 @@ const compileStart = Date.now();
 // verification key has to exist before the contract compiles.
 await WithdrawalChain.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 await RelayMessage.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
+await MerkleInclusion.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 await SigningPolicyFold.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
+// FdcLeaf before the contracts: they verify proofs that chain up to it.
+await FdcLeaf.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
+await FdcAttestation.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 await MinaPortBridge.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
 // The asset rail. Skipped entirely when no port is configured, because these
 // three add ~30s to a cold start and a MINA-only deployment never uses them.
@@ -348,28 +363,68 @@ async function proveSigningPolicy(rawCalls: unknown[], rawKeys: unknown[]) {
 }
 
 /**
- * Prove enough validator weight signed a Flare round, then publish the state.
+ * Turn an FDC response and its Merkle path into the single proof a contract
+ * takes: the response hashed, the path climbed, the round's signatures folded.
  *
- * The signed digest is not yet bound to `actionState` — that needs the FDC
- * attestation and MerkleInclusion — so the attestor still co-signs. What the
- * proof does establish is that real policy members really signed.
+ * Levels prove independently and are merged left, because a path is three or
+ * four deep at most — a balanced tree would only pay off well past that.
  */
-async function handlePublish(request: PublishRequest) {
-  const attestorKey = process.env.MINA_WITHDRAWAL_ATTESTOR_PRIVATE_KEY;
-  const feePayerKey = process.env.MINA_DEVNET_PRIVATE_KEY;
-  if (!attestorKey || !feePayerKey) {
-    throw new Error('MINA_WITHDRAWAL_ATTESTOR_PRIVATE_KEY and MINA_DEVNET_PRIVATE_KEY are required');
+async function proveAttestation(
+  responseHex: string,
+  siblings: string[],
+  calls: unknown[],
+  keys: unknown[],
+) {
+  const { merged: policy, tree } = await proveSigningPolicy(calls, keys);
+
+  const bytes32 = (hex: string) =>
+    (Bytes32 as unknown as { fromHex(h: string): unknown }).fromHex(hex);
+  const response = (
+    AttestationResponse as unknown as { fromHex(h: string): unknown }
+  ).fromHex(responseHex);
+
+  // Climb from the leaf, one level at a time.
+  const leafDigest = keccak(responseHex);
+  let segment = (await MerkleInclusion.level(
+    bytes32(leafDigest) as never,
+    bytes32(siblings[0]!) as never,
+  )).proof;
+  for (const sibling of siblings.slice(1)) {
+    const next = (await MerkleInclusion.level(
+      segment.publicOutput.top,
+      bytes32(sibling) as never,
+    )).proof;
+    segment = (await MerkleInclusion.merge(segment, next)).proof;
   }
 
-  const attestor = PrivateKey.fromBase58(attestorKey);
+  const { proof: leaf } = await FdcLeaf.read(response as never, segment);
+  const { proof: attestation } = await FdcAttestation.attest(leaf, policy);
+  return { attestation, tree };
+}
+
+/**
+ * Publish a chain state read out of an attested Flare event.
+ *
+ * Nothing is co-signed. The proof carries the validator signatures, the round
+ * they signed, the response under that round's root, and the state inside the
+ * event — so the escrow can check every step itself.
+ */
+async function handlePublish(request: PublishRequest) {
+  const feePayerKey = process.env.MINA_DEVNET_PRIVATE_KEY;
+  if (!feePayerKey) throw new Error('MINA_DEVNET_PRIVATE_KEY is required');
+
   const feePayer = PrivateKey.fromBase58(feePayerKey);
   const sender = feePayer.toPublicKey();
 
-  const { merged, tree } = await proveSigningPolicy(request.calls, request.keys);
+  const { attestation, tree } = await proveAttestation(
+    request.response,
+    request.siblings,
+    request.calls,
+    request.keys,
+  );
 
   await fetchAccount({ publicKey: sender });
   await fetchAccount({ publicKey: bridge.address });
-  await fetchAccount({ publicKey: attestor.toPublicKey() });
 
   // Coston2 rotates its validator set every 6 hours, so a root fixed at deploy
   // goes stale the same day. Rotate before publishing rather than leaving an
@@ -398,11 +453,12 @@ async function handlePublish(request: PublishRequest) {
   const tx = await Mina.transaction(
     { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
     async () => {
-      await bridge.publishFlareActionState(Field(request.actionState), merged);
+      await bridge.publishFlareActionState(attestation);
     },
   );
   await tx.prove();
-  const pending = await tx.sign([feePayer, attestor]).send();
+  // Only the fee payer signs. The state came out of a proof.
+  const pending = await tx.sign([feePayer]).send();
   return pending.hash;
 }
 
@@ -543,16 +599,20 @@ async function handlePublishLock(request: PublishLockRequest) {
 
   const feePayer = PrivateKey.fromBase58(feePayerKey);
   const sender = feePayer.toPublicKey();
-  // The port's admin co-signs, standing in for the FDC binding exactly as the
-  // escrow's attestor does. Defaults to the withdrawal attestor so one key runs
-  // both rails in this deployment.
+  // The port's admin signs only a policy-root rotation, which Flare forces
+  // every reward epoch. It asserts nothing about the state being published.
   const admin = PrivateKey.fromBase58(
     process.env.MINA_LOCK_ADMIN_PRIVATE_KEY ??
       process.env.MINA_WITHDRAWAL_ATTESTOR_PRIVATE_KEY ??
       feePayerKey,
   );
 
-  const { merged, tree } = await proveSigningPolicy(request.calls, request.keys);
+  const { attestation, tree } = await proveAttestation(
+    request.response,
+    request.siblings,
+    request.calls,
+    request.keys,
+  );
   const assetPort = new AssetPort(PublicKey.fromBase58(request.port));
 
   await fetchAccount({ publicKey: sender });
@@ -578,11 +638,12 @@ async function handlePublishLock(request: PublishLockRequest) {
   const tx = await Mina.transaction(
     { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
     async () => {
-      await assetPort.publishFlareLockState(Field(request.lockState), merged);
+      await assetPort.publishFlareLockState(attestation);
     },
   );
   await tx.prove();
-  const pending = await tx.sign([feePayer, admin]).send();
+  // Only the fee payer signs. The state came out of a proof.
+  const pending = await tx.sign([feePayer]).send();
   return pending.hash;
 }
 

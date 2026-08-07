@@ -1,5 +1,8 @@
 import { AccountUpdate, Field, Mina, PrivateKey, PublicKey, UInt64, fetchAccount } from 'o1js';
 import { MinaPortBridge } from '../src/MinaPortBridge.js';
+import { FdcAttestation, FdcLeaf } from '../src/FdcAttestation.js';
+import { MerkleInclusion } from '../src/MerkleInclusion.js';
+import { RelayMessage } from '../src/RelayMessage.js';
 import { SigningPolicyFold } from '../src/SigningPolicyFold.js';
 import { WithdrawalChain } from '../src/WithdrawalChain.js';
 
@@ -42,16 +45,14 @@ async function main() {
   const deployerKey = PrivateKey.fromBase58(required('MINA_DEVNET_PRIVATE_KEY'));
   const deployer = deployerKey.toPublicKey();
 
-  // The zkApp gets its own key. Losing it costs the ability to rotate the
-  // attestor and nothing else — it cannot move the escrow.
+  // The zkApp gets its own key. It authorises verification-key upgrades and
+  // nothing else — it cannot move the escrow.
   const zkAppKey = PrivateKey.random();
   const zkAppAddress = zkAppKey.toPublicKey();
 
-  // Until the Flare-side proof exists, one key attests withdrawals. Keeping it
-  // distinct from the deployer means the deployer alone cannot release funds.
-  const attestor = PublicKey.fromBase58(
-    process.env.MINA_WITHDRAWAL_ATTESTOR ?? deployer.toBase58(),
-  );
+  // The Flare bridge whose events this escrow accepts. Pinned in state: an
+  // attestation proves an event happened, not that it was ours.
+  const flareBridge = required('FLARE_BRIDGE_ADDRESS');
 
   const signingPolicyRoot = Field(required('MINA_SIGNING_POLICY_ROOT'));
   // Coston2's real threshold is 32,767 of 65,534. A demo can require less, but
@@ -60,7 +61,7 @@ async function main() {
 
   console.log('deployer :', deployer.toBase58());
   console.log('zkApp    :', zkAppAddress.toBase58());
-  console.log('attestor :', attestor.toBase58());
+  console.log('flare    :', flareBridge);
   console.log('policy   :', signingPolicyRoot.toString());
   console.log('weight   :', requiredWeight.toString());
   console.log('\nzkApp private key (store it, it is not recoverable):');
@@ -68,23 +69,14 @@ async function main() {
 
   await fetchAccount({ publicKey: deployer });
 
-  // The attestor co-signs `publishFlareActionState`, and an account update on a
-  // Mina account that does not exist makes the whole transaction fail — included,
-  // rejected, nonce burnt. It is invisible from the sender's side, since `send()`
-  // succeeded, so refuse to deploy rather than ship a bridge whose return path
-  // dies silently hours later.
-  const attestorAccount = await fetchAccount({ publicKey: attestor });
-  if (attestorAccount.account === undefined) {
-    throw new Error(
-      `attestor ${attestor.toBase58()} has no account on Mina — send it at least 1 MINA ` +
-        '(the account-creation fee) before deploying',
-    );
-  }
-
   console.log('compiling…');
   // The contract verifies proofs from both, so their keys must exist first.
   await WithdrawalChain.compile();
+  await RelayMessage.compile();
   await SigningPolicyFold.compile();
+  await MerkleInclusion.compile();
+  await FdcLeaf.compile();
+  await FdcAttestation.compile();
   const { verificationKey } = await MinaPortBridge.compile();
   console.log('verification key hash:', verificationKey.hash.toString());
 
@@ -95,7 +87,7 @@ async function main() {
     AccountUpdate.fundNewAccount(deployer);
     await bridge.deploy({
       admin: deployer,
-      withdrawalAttestor: attestor,
+      flareBridge: Field(BigInt(flareBridge)),
       signingPolicyRoot,
       requiredWeight,
     });

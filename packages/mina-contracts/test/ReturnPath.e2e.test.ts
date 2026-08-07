@@ -14,7 +14,10 @@ import { expect, it } from 'vitest';
 import { AccountUpdate, Field, MerkleTree, Mina, PrivateKey, UInt32, UInt64 } from 'o1js';
 import { MinaPortBridge, WithdrawalRecord, flareRecipientField } from '../src/MinaPortBridge.js';
 import { WithdrawalChain, applyWithdrawal } from '../src/WithdrawalChain.js';
+import { keccak256 } from 'viem';
 import { Bytes38, RelayMessage } from '../src/RelayMessage.js';
+import { AttestationResponse, FdcAttestation, FdcLeaf } from '../src/FdcAttestation.js';
+import { MerkleInclusion } from '../src/MerkleInclusion.js';
 import {
   Bytes32,
   EcdsaSignature,
@@ -25,6 +28,9 @@ import {
   policyLeaf,
 } from '../src/SigningPolicyFold.js';
 
+const FLARE_BRIDGE = Field(BigInt('0x871493412EDCcfE0d24f127E6Deb2B20AE5497aB'));
+const TOPIC0 = BigInt('0x1e0b6b1f6b2a3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5');
+
 it('end to end with real proofs', async () => {
   const t = (s: string, ms: number) => console.log(`${s.padEnd(34)} ${(ms / 1000).toFixed(1)}s`);
   const MINA = 1_000_000_000n;
@@ -33,6 +39,9 @@ it('end to end with real proofs', async () => {
   await WithdrawalChain.compile();                       t('compile WithdrawalChain', Date.now() - m);
   m = Date.now(); await RelayMessage.compile();           t('compile RelayMessage', Date.now() - m);
   m = Date.now(); await SigningPolicyFold.compile();     t('compile SigningPolicyFold', Date.now() - m);
+  m = Date.now(); await MerkleInclusion.compile();       t('compile MerkleInclusion', Date.now() - m);
+  m = Date.now(); await FdcLeaf.compile();               t('compile FdcLeaf', Date.now() - m);
+  m = Date.now(); await FdcAttestation.compile();        t('compile FdcAttestation', Date.now() - m);
   m = Date.now(); await MinaPortBridge.compile();        t('compile MinaPortBridge', Date.now() - m);
 
   const Local = await Mina.LocalBlockchain({ proofsEnabled: true });
@@ -55,7 +64,7 @@ it('end to end with real proofs', async () => {
     AccountUpdate.fundNewAccount(deployer);
     await bridge.deploy({
       admin: deployer,
-      withdrawalAttestor: attestor,
+      flareBridge: FLARE_BRIDGE,
       signingPolicyRoot: policyTree.getRoot(),
     });
   });
@@ -75,12 +84,26 @@ it('end to end with real proofs', async () => {
   const w2 = new WithdrawalRecord({ nonce: UInt64.from(2n), recipient: user, amount: UInt64.from(2n * MINA) });
   const s2 = applyWithdrawal(s1, w2);
 
-  // A real FDC round envelope: protocol 200, a round id, and a root. The
-  // validators sign the digest this program derives, so the escrow can check
-  // that the signature is over this round rather than over arbitrary bytes.
+  // The attestation Flare would produce for a `WithdrawToMina` carrying `s2`.
+  const response = new Uint8Array(1344);
+  const putWord = (word: number, value: bigint) => {
+    for (let i = 0; i < 32; i++) {
+      response[word * 32 + 31 - i] = Number((value >> BigInt(8 * i)) & 0xffn);
+    }
+  };
+  putWord(28, FLARE_BRIDGE.toBigInt());
+  putWord(33, TOPIC0);
+  putWord(41, s2.toBigInt());
+
+  const leafHex = keccak256(`0x${Buffer.from(response).toString('hex')}` as `0x${string}`);
+  const siblingHex = keccak256('0xdeadbeef');
+  const [lo, hi] =
+    leafHex.toLowerCase() < siblingHex.toLowerCase() ? [leafHex, siblingHex] : [siblingHex, leafHex];
+  const rootHex = keccak256(`0x${lo.slice(2)}${hi.slice(2)}` as `0x${string}`);
+
   m = Date.now();
   const { proof: relayProof } = await RelayMessage.bind(
-    Bytes38.fromHex('c80015a2b401' + 'ab'.repeat(32)),
+    Bytes38.fromHex('c80015a2b401' + rootHex.slice(2)),
   );
   t('prove relay message binding', Date.now() - m);
   const msg = Bytes32.from(relayProof.publicOutput.digest.bytes);
@@ -96,9 +119,24 @@ it('end to end with real proofs', async () => {
   t('prove signing policy (1 ECDSA)', Date.now() - m);
 
   m = Date.now();
-  tx = await Mina.transaction(deployer, async () => { await bridge.publishFlareActionState(s2, sp); });
-  await tx.prove(); await tx.sign([deployerKey, attestorKey]).send();
+  const { proof: inclusion } = await MerkleInclusion.level(
+    Bytes32.fromHex(leafHex.slice(2)),
+    Bytes32.fromHex(siblingHex.slice(2)),
+  );
+  const { proof: leafProof } = await FdcLeaf.read(AttestationResponse.from(response), inclusion);
+  t('prove FDC leaf (10 keccak blocks)', Date.now() - m);
+
+  m = Date.now();
+  const { proof: attestation } = await FdcAttestation.attest(leafProof, sp);
+  t('prove FDC attestation', Date.now() - m);
+
+  m = Date.now();
+  tx = await Mina.transaction(deployer, async () => { await bridge.publishFlareActionState(attestation); });
+  await tx.prove(); await tx.sign([deployerKey]).send();
   t('publishFlareActionState', Date.now() - m);
+
+  // Read from the attested event, not named by anyone.
+  expect(bridge.flareActionState.get().toString()).toBe(s2.toString());
 
   m = Date.now();
   const { proof: tail1 } = await WithdrawalChain.link(s1, w2);

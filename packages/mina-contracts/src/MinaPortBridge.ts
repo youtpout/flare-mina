@@ -20,7 +20,7 @@ import {
   WithdrawalRecord,
   applyWithdrawal,
 } from './WithdrawalChain.js';
-import { SigningPolicyProof } from './SigningPolicyFold.js';
+import { FdcAttestationProof } from './FdcAttestation.js';
 import { FDC_PROTOCOL_ID } from './RelayMessage.js';
 
 /** Re-exported so callers of this contract get the record from one place. */
@@ -103,10 +103,13 @@ export class MinaPortBridge extends SmartContract {
   @state(Field) signingPolicyRoot = State<Field>();
 
   /**
-   * HACKATHON TRUST ASSUMPTION: co-signs `publishFlareActionState`. A single
-   * explicit field so removing it is a visible diff. See docs/threat-model.md.
+   * The Flare bridge whose events this escrow accepts, as a 160-bit field.
+   *
+   * Pinned because an attestation proves an event happened, not that it was
+   * ours. Occupies one of the two fields the withdrawal attestor used to hold —
+   * that key is gone, and `publishFlareActionState` now proves what it asserted.
    */
-  @state(PublicKey) withdrawalAttestor = State<PublicKey>();
+  @state(Field) flareBridge = State<Field>();
 
   /**
    * Newest attested state of Flare's withdrawal chain. Append-only, so a newer
@@ -134,7 +137,8 @@ export class MinaPortBridge extends SmartContract {
   override async deploy(
     args: DeployArgs & {
       admin: PublicKey;
-      withdrawalAttestor: PublicKey;
+      /** The Flare bridge, as a 160-bit field. */
+      flareBridge: Field;
       /** Poseidon root over Flare's validator set. Zero accepts no proof. */
       signingPolicyRoot?: Field;
       /** Signing weight a Flare root must carry. Zero accepts any. */
@@ -143,7 +147,7 @@ export class MinaPortBridge extends SmartContract {
   ) {
     await super.deploy(args);
     this.admin.set(args.admin);
-    this.withdrawalAttestor.set(args.withdrawalAttestor);
+    this.flareBridge.set(args.flareBridge);
     this.requiredWeight.set(args.requiredWeight ?? UInt64.zero);
     this.signingPolicyRoot.set(args.signingPolicyRoot ?? Field(0));
   }
@@ -189,29 +193,6 @@ export class MinaPortBridge extends SmartContract {
       setVerificationKey: Permissions.VerificationKey.signature(),
       setPermissions: Permissions.impossible(),
     });
-  }
-
-  /**
-   * Rotate the withdrawal attestor. Admin only.
-   *
-   * Authorised by a SEPARATE signed account update from the admin, not by
-   * `this.requireSignature()`. That distinction is not stylistic: requiring the
-   * zkApp's own signature switches this account update's authorisation kind
-   * from proof to signature, which `editState: Permissions.proof()` then
-   * rejects — the method simply cannot succeed. An earlier version shipped that
-   * way and could never have rotated anything.
-   *
-   * The admin's only power is this rotation. It cannot move the escrow, mint,
-   * or touch any accounting state, all of which are reachable only through
-   * proof-authorised methods.
-   */
-  @method async setWithdrawalAttestor(attestor: PublicKey) {
-    const admin = this.admin.getAndRequireEquals();
-    const adminUpdate = AccountUpdate.createSigned(admin);
-    adminUpdate.body.useFullCommitment = Bool(true);
-
-    this.withdrawalAttestor.getAndRequireEquals();
-    this.withdrawalAttestor.set(attestor);
   }
 
   /**
@@ -281,38 +262,42 @@ export class MinaPortBridge extends SmartContract {
   }
 
   /**
-   * Accept a new attested chain state. Separate from releasing because
-   * establishing it costs ECDSA and keccak, identical across a whole batch.
-   * Still attestor-co-signed: nothing yet binds this to the FDC round root.
+   * Accept a new chain state, read out of an attested Flare event.
+   *
+   * Nothing here is asserted by a key. The proof establishes that enough of
+   * Flare's validator set signed an FDC round, that the attestation response
+   * sits under that round's root, and that the state below was read from the
+   * `WithdrawToMina` event inside it.
+   *
+   * Separate from releasing because establishing a state costs ECDSA and
+   * keccak, and is identical across the whole batch it covers.
    */
-  @method async publishFlareActionState(actionState: Field, proof: SigningPolicyProof) {
-    proof.verify();
+  @method async publishFlareActionState(attestation: FdcAttestationProof) {
+    attestation.verify();
+    const attested = attestation.publicOutput;
 
-    // The proof now names the round it covers — `SigningPolicyFold` verifies
-    // the relay binding itself, so a digest cannot be lifted from one round and
-    // presented for another. All that is left to check here is that it is an
-    // FDC round, since those are the ones carrying attestation roots.
-    proof.publicOutput.protocolId.value.assertEquals(Field(FDC_PROTOCOL_ID), 'not an FDC round');
-
-    // The signers must belong to the policy this bridge knows about, or the
-    // weight below is a number the prover chose.
-    proof.publicOutput.policy.assertEquals(
+    attested.policy.assertEquals(
       this.signingPolicyRoot.getAndRequireEquals(),
       'proof is against a different signing policy',
     );
 
     const required = this.requiredWeight.getAndRequireEquals();
-    proof.publicOutput.weight.value.assertGreaterThanOrEqual(
+    attested.weight.value.assertGreaterThanOrEqual(
       required.value,
       'signing weight below the required threshold',
     );
 
-    const attestor = this.withdrawalAttestor.getAndRequireEquals();
-    const attestorUpdate = AccountUpdate.createSigned(attestor);
-    attestorUpdate.body.useFullCommitment = Bool(true);
+    // FDC rounds are the ones carrying attestation roots.
+    attested.protocolId.value.assertEquals(Field(FDC_PROTOCOL_ID), 'not an FDC round');
+
+    // And the event has to have come from our bridge.
+    attested.emitter.assertEquals(
+      this.flareBridge.getAndRequireEquals(),
+      'the event came from another contract',
+    );
 
     this.flareActionState.getAndRequireEquals();
-    this.flareActionState.set(actionState);
+    this.flareActionState.set(attested.actionState);
   }
 
   /**

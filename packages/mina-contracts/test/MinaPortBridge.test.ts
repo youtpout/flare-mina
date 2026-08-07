@@ -14,7 +14,10 @@ import {
   type WithdrawalChainProof,
   applyWithdrawal,
 } from '../src/WithdrawalChain.js';
+import { keccak256 } from 'viem';
 import { Bytes38, RelayMessage } from '../src/RelayMessage.js';
+import { AttestationResponse, FdcAttestation, FdcLeaf } from '../src/FdcAttestation.js';
+import { MerkleInclusion } from '../src/MerkleInclusion.js';
 import {
   Bytes32,
   EcdsaSignature,
@@ -34,6 +37,10 @@ import {
 } from '../src/MinaPortBridge.js';
 
 const MINA = 1_000_000_000n;
+
+/** The Flare bridge this escrow accepts events from, and the `WithdrawToMina` signature. */
+const FLARE_BRIDGE = Field(BigInt('0x871493412EDCcfE0d24f127E6Deb2B20AE5497aB'));
+const TOPIC0 = BigInt('0x1e0b6b1f6b2a3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5');
 
 const RECIPIENT_A = '0x1111111111111111111111111111111111111111';
 const RECIPIENT_B = '0x2222222222222222222222222222222222222222';
@@ -76,7 +83,7 @@ beforeAll(async () => {
     AccountUpdate.fundNewAccount(deployer);
     await bridge.deploy({
       admin: deployer,
-      withdrawalAttestor: attestor,
+      flareBridge: FLARE_BRIDGE,
       signingPolicyRoot: policyTree.getRoot(),
     });
   });
@@ -263,6 +270,9 @@ describe('withdrawal release', () => {
     await WithdrawalChain.compile({ proofsEnabled: false });
     await RelayMessage.compile({ proofsEnabled: false });
     await SigningPolicyFold.compile({ proofsEnabled: false });
+    await MerkleInclusion.compile({ proofsEnabled: false });
+    await FdcLeaf.compile({ proofsEnabled: false });
+    await FdcAttestation.compile({ proofsEnabled: false });
 
     // Built here, not at describe scope: `user` is only assigned in the outer
     // beforeAll, which has not run when the describe body is evaluated.
@@ -280,15 +290,34 @@ describe('withdrawal release', () => {
     s2 = applyWithdrawal(s1, w2);
   }, 300_000);
 
-  /** A proof from the one validator the deployed policy contains. */
-  async function signingProof() {
-    // A real FDC round envelope. The bridge now requires the signature to be
-    // over a relay message rather than over arbitrary bytes, so the digest has
-    // to come from one.
+  /**
+   * Build the attestation Flare would produce for a `WithdrawToMina` carrying
+   * `actionState`: an event, hashed into a leaf, in a round tree whose root the
+   * validator signs.
+   */
+  async function attestationFor(actionState: Field, opts: { emitter?: Field; protocol?: string } = {}) {
+    const response = new Uint8Array(1344);
+    const putWord = (word: number, value: bigint) => {
+      for (let i = 0; i < 32; i++) {
+        response[word * 32 + 31 - i] = Number((value >> BigInt(8 * i)) & 0xffn);
+      }
+    };
+    putWord(28, (opts.emitter ?? FLARE_BRIDGE).toBigInt());
+    putWord(33, TOPIC0);
+    putWord(41, actionState.toBigInt());
+
+    const leafHex = keccak256(`0x${Buffer.from(response).toString('hex')}` as `0x${string}`);
+    const siblingHex = keccak256('0xdeadbeef');
+    const [lo, hi] =
+      leafHex.toLowerCase() < siblingHex.toLowerCase()
+        ? [leafHex, siblingHex]
+        : [siblingHex, leafHex];
+    const rootHex = keccak256(`0x${lo.slice(2)}${hi.slice(2)}` as `0x${string}`);
+
     const { proof: relay } = await RelayMessage.bind(
-      Bytes38.fromHex('c80015a2b401' + 'ab'.repeat(32)),
+      Bytes38.fromHex((opts.protocol ?? 'c8') + '0015a2b401' + rootHex.slice(2)),
     );
-    const { proof } = await SigningPolicyFold.single(relay, policyTree.getRoot(), {
+    const { proof: policy } = await SigningPolicyFold.single(relay, policyTree.getRoot(), {
       publicKey: Secp256k1.generator.scale(validatorKey),
       signature: EcdsaSignature.signHash(
         Bytes32.from(relay.publicOutput.digest.bytes),
@@ -298,72 +327,57 @@ describe('withdrawal release', () => {
       weight: UInt32.from(1),
       witness: new PolicyWitness(policyTree.getWitness(0n)),
     } as never);
-    return { proof, relay };
+
+    const { proof: inclusion } = await MerkleInclusion.level(
+      Bytes32.fromHex(leafHex.slice(2)),
+      Bytes32.fromHex(siblingHex.slice(2)),
+    );
+    const { proof: leaf } = await FdcLeaf.read(AttestationResponse.from(response), inclusion);
+    return (await FdcAttestation.attest(leaf, policy)).proof;
   }
 
   async function publish(actionState: Field) {
-    const { proof, relay } = await signingProof();
+    const attestation = await attestationFor(actionState);
     const tx = await Mina.transaction(deployer, async () => {
-      await bridge.publishFlareActionState(actionState, proof);
+      await bridge.publishFlareActionState(attestation);
     });
     await tx.prove();
-    return tx.sign([deployerKey, attestorKey]).send();
+    // Only the fee payer signs. Nothing here asserts the state.
+    return tx.sign([deployerKey]).send();
   }
 
   /**
-   * The property the co-signature used to stand in for.
-   *
-   * A signature over one relay round must not pass as a signature over another.
-   * The binding now lives inside `SigningPolicyFold`, which derives the digest
-   * from the round rather than accepting one — so the substitution fails while
-   * the proof is being built, not later.
+   * The property the co-signature used to stand in for: the state comes out of
+   * the attested event, so a caller cannot name one.
    */
-  it('refuses a signature that is not over the round it names', async () => {
-    const { proof: signed } = await RelayMessage.bind(
-      Bytes38.fromHex('c80015a2b401' + 'ab'.repeat(32)),
-    );
-    // A genuine, well-formed FDC round — just not the one that was signed.
-    const { proof: other } = await RelayMessage.bind(
-      Bytes38.fromHex('c80015a2b401' + 'cd'.repeat(32)),
-    );
-
-    await expect(
-      SigningPolicyFold.single(other, policyTree.getRoot(), {
-        publicKey: Secp256k1.generator.scale(validatorKey),
-        signature: EcdsaSignature.signHash(
-          Bytes32.from(signed.publicOutput.digest.bytes),
-          validatorKey,
-        ),
-        index: UInt32.from(0),
-        weight: UInt32.from(1),
-        witness: new PolicyWitness(policyTree.getWitness(0n)),
-      } as never),
-    ).rejects.toThrow(/invalid validator signature/);
-  }, 300_000);
+  it('takes the state from the attested event', async () => {
+    await publish(s2);
+    expect(bridge.flareActionState.get().toString()).toBe(s2.toString());
+  }, 600_000);
 
   /** FDC rounds carry attestation roots; other protocols carry other things. */
   it('refuses a round that is not FDC', async () => {
-    const { proof: relay } = await RelayMessage.bind(
-      // Protocol 100 rather than 200.
-      Bytes38.fromHex('640015a2b401' + 'ab'.repeat(32)),
-    );
-    const { proof } = await SigningPolicyFold.single(relay, policyTree.getRoot(), {
-      publicKey: Secp256k1.generator.scale(validatorKey),
-      signature: EcdsaSignature.signHash(
-        Bytes32.from(relay.publicOutput.digest.bytes),
-        validatorKey,
-      ),
-      index: UInt32.from(0),
-      weight: UInt32.from(1),
-      witness: new PolicyWitness(policyTree.getWitness(0n)),
-    } as never);
-
+    const attestation = await attestationFor(s2, { protocol: '64' });
     await expect(
       Mina.transaction(deployer, async () => {
-        await bridge.publishFlareActionState(s2, proof);
+        await bridge.publishFlareActionState(attestation);
       }),
     ).rejects.toThrow(/not an FDC round/);
-  }, 300_000);
+  }, 600_000);
+
+  /**
+   * An attestation proves an event happened, not that it was ours. Without the
+   * emitter check, any contract could emit a `WithdrawToMina` and move the
+   * escrow's cursor.
+   */
+  it('refuses an event from another contract', async () => {
+    const attestation = await attestationFor(s2, { emitter: Field(0xdeadn) });
+    await expect(
+      Mina.transaction(deployer, async () => {
+        await bridge.publishFlareActionState(attestation);
+      }),
+    ).rejects.toThrow(/came from another contract/);
+  }, 600_000);
 
   async function release(record: WithdrawalRecord, tail: WithdrawalChainProof) {
     const tx = await Mina.transaction(deployer, async () => {
@@ -462,25 +476,3 @@ describe('signing policy rotation', () => {
   }, 300_000);
 });
 
-describe('attestor rotation', () => {
-  it('separates admin from attestor: the admin can rotate, and only the admin', async () => {
-    const fresh = PrivateKey.random().toPublicKey();
-
-    // A non-admin cannot rotate, even with a valid proof: the admin's account
-    // update is unsigned.
-    const bad = await Mina.transaction(user, async () => {
-      await bridge.setWithdrawalAttestor(fresh);
-    });
-    await bad.prove();
-    await expect(bad.sign([userKey]).send()).rejects.toThrow();
-
-    // The admin can.
-    const good = await Mina.transaction(deployer, async () => {
-      await bridge.setWithdrawalAttestor(fresh);
-    });
-    await good.prove();
-    await good.sign([deployerKey]).send();
-
-    expect(bridge.withdrawalAttestor.get().toBase58()).toBe(fresh.toBase58());
-  }, 180_000);
-});
