@@ -26,13 +26,14 @@ const REGISTRY = '0xaD67FE66660Fb8dFE9d6b1b4240d8650e30F6019' as const;
 /**
  * How often to publish, when there is anything to publish.
  *
- * Ten minutes. A publication covers every transfer accumulated since the last
- * one, so a shorter cadence buys latency for one user and pays for it in
- * proving — and the FDC round it depends on takes a minute or two to finalise
- * anyway, so polling faster than that mostly finds nothing new. Nothing is
- * emitted when the chain has not moved, so a quiet bridge costs nothing.
+ * Fifteen minutes. A cycle is not cheap: an attestation request, a round to
+ * finalise, then hashing 1344 bytes and climbing a Merkle path in-circuit —
+ * several minutes of proving, per chain that moved. A publication covers every
+ * transfer accumulated since the last one, so a shorter cadence buys latency
+ * for one user and pays for it in work the whole bridge shares. Nothing is
+ * emitted when a chain has not moved, so a quiet bridge costs nothing.
  */
-const POLL_MS = Number(process.env.PUBLISH_INTERVAL_MS ?? 10 * 60_000);
+const POLL_MS = Number(process.env.PUBLISH_INTERVAL_MS ?? 15 * 60_000);
 
 /** The public RPC rejects wider `getLogs` windows. */
 const CHUNK = 30n;
@@ -88,8 +89,19 @@ async function acceptedActionState(): Promise<bigint | null> {
   }
 }
 
-/** Last state we sent, so an in-flight publication is not sent twice. */
-let inFlight: bigint | undefined;
+/**
+ * The last state we sent, and when.
+ *
+ * Sending twice would have the two fight over the fee payer's nonce, so a
+ * publication in flight blocks the next tick. But `send()` resolves even for a
+ * transaction that is then included and rejected, so a marker kept until an
+ * exception is a marker kept forever — the bridge stops retrying and looks
+ * healthy while doing nothing. It expires instead.
+ */
+let inFlight: { state: bigint; at: number } | undefined;
+
+/** Long enough for devnet inclusion, short enough that a rejection is retried. */
+const IN_FLIGHT_TTL_MS = Number(process.env.PUBLISH_IN_FLIGHT_TTL_MS ?? 12 * 60_000);
 
 /**
  * `WithdrawToMina(uint256,address,address,bytes32,uint256,uint256,uint256)`.
@@ -177,7 +189,7 @@ async function tick(): Promise<void> {
   // fee payer's nonce.
   const accepted = await acceptedActionState();
   if (accepted === null || accepted === actionState) return;
-  if (inFlight === actionState) return;
+  if (inFlight?.state === actionState && Date.now() - inFlight.at < IN_FLIGHT_TTL_MS) return;
 
   // The transaction whose event produced the state we are about to publish.
   // Its `newActionState` is what the circuit will read, so the row and the
@@ -195,11 +207,11 @@ async function tick(): Promise<void> {
     return;
   }
 
-  const inputs = await policyProofInputs();
+  const inputs = await policyProofInputs(attestation.round);
   if (inputs === null) return;
   const { calls, keys } = inputs;
 
-  inFlight = actionState;
+  inFlight = { state: actionState, at: Date.now() };
   try {
     const hash = await publishActionState({
       response: attestation.response.slice(2),
@@ -223,12 +235,18 @@ async function tick(): Promise<void> {
  * threshold — refusing beats publishing something weaker than the network
  * requires.
  */
-export async function policyProofInputs(): Promise<
-  { calls: RelayCall[]; keys: PolicyKey[] } | null
-> {
-  const calls = await recentRelayCalls();
+export async function policyProofInputs(
+  votingRoundId: number,
+): Promise<{ calls: RelayCall[]; keys: PolicyKey[] } | null> {
+  // The round the attestation is in, and no other. The signatures prove which
+  // root the validators signed, and an inclusion path only reaches *that*
+  // round's root — proving against whichever round happened to carry the most
+  // signatures fails inside the circuit, and only there.
+  const calls = (await recentRelayCalls()).filter(
+    (c) => c.message.protocolId === 200 && c.message.votingRoundId === votingRoundId,
+  );
   if (calls.length === 0) {
-    console.warn('publisher: no relay transactions in the lookback window');
+    console.warn(`publisher: no relay transaction found for FDC round ${votingRoundId}`);
     return null;
   }
 

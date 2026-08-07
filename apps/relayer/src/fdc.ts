@@ -82,7 +82,15 @@ export async function findEventLogIndex(
       l.address.toLowerCase() === emitter.toLowerCase() &&
       l.topics[0]?.toLowerCase() === topic0.toLowerCase(),
   );
-  if (log === undefined) throw new Error(`no matching event in ${txHash}`);
+  if (log === undefined) {
+    // Almost always an event emitted before its signature changed shape, which
+    // resolves the moment a newer transfer moves the chain head — the tail
+    // proof from the older record reaches the newer state anyway.
+    throw new Error(
+      `${txHash} has no ${topic0.slice(0, 10)}… event from ${emitter.slice(0, 10)}…; ` +
+        'if it predates an event-shape change, the next transfer will cover it',
+    );
+  }
   return log.logIndex;
 }
 

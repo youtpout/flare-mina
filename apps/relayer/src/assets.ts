@@ -32,7 +32,7 @@ const RPC = process.env.COSTON2_RPC_URL ?? 'https://coston2-api.flare.network/ex
 const VAULT = process.env.FLARE_ASSET_VAULT_ADDRESS as `0x${string}` | undefined;
 
 /** Same cadence as the withdrawal publisher, and for the same reason. */
-const PUBLISH_MS = Number(process.env.PUBLISH_INTERVAL_MS ?? 10 * 60_000);
+const PUBLISH_MS = Number(process.env.PUBLISH_INTERVAL_MS ?? 15 * 60_000);
 const WATCH_MS = Number(process.env.LOCK_INTERVAL_MS ?? 20_000);
 
 const LOOKBACK = BigInt(process.env.LOCK_LOOKBACK_BLOCKS ?? 3_000);
@@ -159,7 +159,10 @@ async function watch(): Promise<void> {
  * Without this the next tick publishes the same head again, and the two fight
  * over the fee payer's nonce.
  */
-const publishInFlight = new Map<string, bigint>();
+const publishInFlight = new Map<string, { state: bigint; at: number }>();
+
+/** Long enough for devnet inclusion, short enough that a rejection is retried. */
+const IN_FLIGHT_TTL_MS = Number(process.env.PUBLISH_IN_FLIGHT_TTL_MS ?? 12 * 60_000);
 
 /** `AssetLocked(uint256,address,address,bytes32,uint256,uint256,uint256)`. */
 const LOCK_TOPIC0 =
@@ -194,9 +197,9 @@ async function publish(): Promise<void> {
   const list = assets();
   if (list.length === 0) return;
 
-  // Recovered once and reused: harvesting is the expensive half and the policy
-  // is the same for every asset.
-  let inputs: Awaited<ReturnType<typeof policyProofInputs>> | null = null;
+  // Not shared between assets any more: each attestation lands in its own FDC
+  // round, and the signatures have to be for that round or the inclusion path
+  // reaches a root nobody signed.
 
   for (const asset of list) {
     const onFlare = await client.readContract({
@@ -209,7 +212,8 @@ async function publish(): Promise<void> {
 
     const state = await portState(asset.port);
     if (state === null || state.accepted === onFlare) continue;
-    if (publishInFlight.get(asset.port) === onFlare) continue;
+    const sent = publishInFlight.get(asset.port);
+    if (sent?.state === onFlare && Date.now() - sent.at < IN_FLIGHT_TTL_MS) continue;
 
     const txHash = (await lockTxFor(asset.flareToken, onFlare)) as `0x${string}` | null;
     if (txHash === null) {
@@ -224,10 +228,10 @@ async function publish(): Promise<void> {
       continue;
     }
 
-    inputs ??= await policyProofInputs();
-    if (inputs === null) return;
+    const inputs = await policyProofInputs(attestation.round);
+    if (inputs === null) continue;
 
-    publishInFlight.set(asset.port, onFlare);
+    publishInFlight.set(asset.port, { state: onFlare, at: Date.now() });
     try {
       const hash = await publishLockState({
         port: asset.port,
