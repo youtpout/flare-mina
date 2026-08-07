@@ -127,10 +127,15 @@ contract MinaPortBridge is Ownable2StepUpgradeable, PausableUpgradeable, Reentra
     /// proves against, so its signature and field order are protocol.
     ///
     /// @dev Replaying the chain needs every link, not just the last one.
+    /// @dev Shaped to match `AssetVault.AssetLocked` exactly — three indexed
+    /// arguments and four words of data — so one Mina circuit reads both rails.
+    /// The attestation response is a fixed-size input there, and an event one
+    /// word narrower simply does not fit the type.
     event WithdrawToMina(
         uint256 indexed nonce,
+        address indexed token,
         address indexed sender,
-        bytes32 indexed minaRecipient,
+        bytes32 minaRecipient,
         uint256 amount,
         uint256 previousActionState,
         uint256 newActionState
@@ -560,7 +565,13 @@ contract MinaPortBridge is Ownable2StepUpgradeable, PausableUpgradeable, Reentra
         TOKEN.burn(msg.sender, amount);
 
         emit WithdrawToMina(
-            nonce, msg.sender, minaRecipient, amount, previousActionState, newActionState
+            nonce,
+            address(TOKEN),
+            msg.sender,
+            minaRecipient,
+            amount,
+            previousActionState,
+            newActionState
         );
     }
 

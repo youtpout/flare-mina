@@ -312,7 +312,7 @@ contract MinaPortBridgeTest is Test {
 
         vm.expectEmit(true, true, true, true);
         emit MinaPortBridge.WithdrawToMina(
-            0, alice, minaRecipient, 400_000_000, 0, expectedState
+            0, address(fmina), alice, minaRecipient, 400_000_000, 0, expectedState
         );
 
         vm.prank(alice);

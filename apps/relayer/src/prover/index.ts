@@ -139,7 +139,10 @@ export function queueDepth(): number {
  * and a release that lands before its state would fail anyway.
  */
 export async function publishActionState(request: {
-  actionState: bigint;
+  /** ABI-encoded FDC response, hex without 0x. */
+  response: string;
+  /** Sibling hashes bottom to top, hex without 0x. */
+  siblings: string[];
   calls: unknown[];
   /** Voters whose public keys are known, already checked against the policy. */
   keys: unknown[];
@@ -153,7 +156,8 @@ export async function publishActionState(request: {
       worker?.postMessage({
         kind: 'publish',
         id,
-        actionState: request.actionState.toString(),
+        response: request.response,
+        siblings: request.siblings,
         calls: request.calls,
         keys: request.keys,
       });
@@ -209,7 +213,8 @@ export async function releaseWithdrawal(request: {
  */
 export async function publishLockState(request: {
   port: string;
-  lockState: bigint;
+  response: string;
+  siblings: string[];
   calls: unknown[];
   keys: unknown[];
 }): Promise<string> {
@@ -223,7 +228,8 @@ export async function publishLockState(request: {
         kind: 'publishLock',
         id,
         port: request.port,
-        lockState: request.lockState.toString(),
+        response: request.response,
+        siblings: request.siblings,
         calls: request.calls,
         keys: request.keys,
       });

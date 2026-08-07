@@ -69,7 +69,7 @@ const bridgeAbi = parseAbi([
   // Must match the contract exactly: parseEventLogs filters on topic0, which is
   // the keccak of this signature, so a missing field makes every burn invisible
   // rather than mis-decoded — silence, not an error.
-  'event WithdrawToMina(uint256 indexed nonce, address indexed sender, bytes32 indexed minaRecipient, uint256 amount, uint256 previousActionState, uint256 newActionState)',
+  'event WithdrawToMina(uint256 indexed nonce, address indexed token, address indexed sender, bytes32 minaRecipient, uint256 amount, uint256 previousActionState, uint256 newActionState)',
 ]);
 
 const client = createPublicClient({ chain: COSTON2, transport: http(RPC) });

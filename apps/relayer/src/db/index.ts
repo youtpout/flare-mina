@@ -364,3 +364,27 @@ export async function locksFor(recipient: string): Promise<LockRow[]> {
   );
   return rows;
 }
+
+/**
+ * The Flare transaction whose event produced a given chain state.
+ *
+ * Keyed on `new_action_state` rather than on ordering: the state is what the
+ * circuit reads out of the attested event, so matching on it is the only way to
+ * be sure the attestation and the publication are about the same withdrawal.
+ */
+export async function withdrawalTxFor(actionState: bigint): Promise<string | null> {
+  const { rows } = await pool.query<{ flare_tx_hash: string }>(
+    `SELECT flare_tx_hash FROM withdrawals WHERE new_action_state = $1 LIMIT 1`,
+    [actionState.toString()],
+  );
+  return rows[0]?.flare_tx_hash ?? null;
+}
+
+/** Same, for a token's lock chain. */
+export async function lockTxFor(token: string, lockState: bigint): Promise<string | null> {
+  const { rows } = await pool.query<{ flare_tx_hash: string }>(
+    `SELECT flare_tx_hash FROM locks WHERE token = $1 AND new_lock_state = $2 LIMIT 1`,
+    [token.toLowerCase(), lockState.toString()],
+  );
+  return rows[0]?.flare_tx_hash ?? null;
+}

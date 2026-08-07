@@ -273,7 +273,7 @@ nothing to trust.
 | `MinaAuthRegistry` | `0xcf12aCe3f7D13EE714D57ee22EfA14cbb662fc56` |
 | `MinaAccountFactory` | `0x2a2AcdD54B93675828028fb8108fACc0A387fe23` |
 | `MinaPortBridge` (proxy) | `0x871493412EDCcfE0d24f127E6Deb2B20AE5497aB` |
-| ↳ implementation | `0x261B9C6BA506562C14f9e592166934F25972B081` |
+| ↳ implementation | `0xf171a25Dc8fbED4a312eE690728E22634A1EcF14` |
 | `FMINA` | `0x4aFce36d468136eD9d880E28C99373F0C3d3f046` |
 | `BridgeWrapperFactory` | `0xE4BB8D56CdF6C44Cc8878A636f77C352768f1b8b` |
 | `AssetVault` (proxy) | `0xa179E908C3F1156Edda0BD5f1A0B3b3f419f9F90` |

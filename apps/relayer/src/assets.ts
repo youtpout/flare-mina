@@ -1,6 +1,7 @@
 import { createPublicClient, http, parseAbi, parseEventLogs } from 'viem';
 import { decodeMinaRecipient, formatMinaAddress } from '@minaport/shared';
 import {
+  lockTxFor,
   markLockMinted,
   markLockMinting,
   markLocksPublished,
@@ -8,6 +9,7 @@ import {
   recordLock,
 } from './db/index.js';
 import { mintLock, publishLockState } from './prover/index.js';
+import { fetchAttestation, requestAttestationFor, type Attestation } from './fdc.js';
 import { policyProofInputs } from './publisher.js';
 
 /**
@@ -159,6 +161,33 @@ async function watch(): Promise<void> {
  */
 const publishInFlight = new Map<string, bigint>();
 
+/** `AssetLocked(uint256,address,address,bytes32,uint256,uint256,uint256)`. */
+const LOCK_TOPIC0 =
+  '0x078ee1eead8e83dabf8464df5a5e308db068b136607c9f7bef8e86f6fc783add' as const;
+
+/**
+ * Get the round carrying a lock event, waiting for it to finalise.
+ *
+ * Polls inside the tick rather than deferring to the next one: the FDC settles
+ * about a minute after a round closes, and the next tick is ten minutes away.
+ */
+async function attestationFor(txHash: `0x${string}`): Promise<Attestation | null> {
+  if (VAULT === undefined) return null;
+  const expected = { emitter: VAULT, topic0: LOCK_TOPIC0 };
+
+  const { request, round } = await requestAttestationFor(txHash, expected);
+  console.log(`requested attestation for ${txHash} in round ${round}`);
+
+  const deadline = Date.now() + Number(process.env.FDC_WAIT_MS ?? 5 * 60_000);
+  while (Date.now() < deadline) {
+    const attestation = await fetchAttestation(request, round, expected);
+    if (attestation !== null) return attestation;
+    await new Promise((r) => setTimeout(r, 20_000));
+  }
+  console.warn(`round ${round} did not finalise in time; will retry next tick`);
+  return null;
+}
+
 /** Carry each token's chain head to its port, when the port is behind. */
 async function publish(): Promise<void> {
   if (VAULT === undefined) return;
@@ -182,6 +211,19 @@ async function publish(): Promise<void> {
     if (state === null || state.accepted === onFlare) continue;
     if (publishInFlight.get(asset.port) === onFlare) continue;
 
+    const txHash = (await lockTxFor(asset.flareToken, onFlare)) as `0x${string}` | null;
+    if (txHash === null) {
+      console.warn(`no recorded ${asset.symbol} lock produced state ${onFlare}`);
+      continue;
+    }
+
+    const attestation = await attestationFor(txHash);
+    if (attestation === null) continue;
+    if (attestation.event.newActionState !== onFlare) {
+      console.warn(`the attested ${asset.symbol} event carries a different state`);
+      continue;
+    }
+
     inputs ??= await policyProofInputs();
     if (inputs === null) return;
 
@@ -189,7 +231,8 @@ async function publish(): Promise<void> {
     try {
       const hash = await publishLockState({
         port: asset.port,
-        lockState: onFlare,
+        response: attestation.response.slice(2),
+        siblings: attestation.proof.map((p) => p.slice(2)),
         calls: inputs.calls,
         keys: inputs.keys,
       });
