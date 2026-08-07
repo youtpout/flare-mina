@@ -575,6 +575,16 @@ async function handleRelease(request: ReleaseRequest) {
   // holding this key still cannot release anything Flare did not commit to.
   const pending = await tx.sign([feePayer]).send();
   predictedCursor = next;
+
+  // Confirmed against the cursor, not against the hash. `send()` resolves for a
+  // transaction that is then rejected, and the caller marks this withdrawal
+  // released and stops retrying — the user's MINA never arrives and nothing
+  // ever notices. The cursor is the only thing that says the payment happened.
+  await settle(pending, 'release');
+  await fetchAccount({ publicKey: bridge.address });
+  if (bridge.processedActionState.get().toString() !== next.toString()) {
+    throw new Error(`release ${pending.hash} did not advance the cursor`);
+  }
   return pending.hash;
 }
 
@@ -745,6 +755,15 @@ async function handleMint(request: MintRequest) {
   );
   await mint.prove();
   const minted = await mint.sign([feePayer]).send();
+
+  // Same reasoning as the release: a mint whose transaction is rejected still
+  // resolves here, and the caller would record the asset as delivered. What
+  // proves it ran is `canMint` clearing the authorisation it was armed with.
+  await settle(minted, 'mint');
+  await fetchAccount({ publicKey: assetPort.address });
+  if (!assetPort.mintAuthorization.get().equals(NO_MINT_AUTHORIZED).toBoolean()) {
+    throw new Error(`mint ${minted.hash} did not consume the authorisation`);
+  }
   return minted.hash;
 }
 
