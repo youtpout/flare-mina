@@ -204,22 +204,20 @@ export async function releasableWithdrawals(): Promise<WithdrawalRow[]> {
 /**
  * Mark every withdrawal covered by an accepted chain state.
  *
- * The state is a hash, so it cannot be compared for order — but the row whose
- * own `new_action_state` equals it is the last one it covers, and nonces are
- * monotonic, so everything below is covered too.
+ * The state is a hash and cannot be compared for order, so it is resolved to a
+ * position through the ledger. Looking for a *withdrawal* whose own state equals
+ * it does not work on a shared chain: the head usually belongs to another
+ * asset's transfer, and then nothing was ever promoted — the burn sat at
+ * "waiting for FDC" while its head had long since reached Mina.
  */
 export async function markWithdrawalsPublished(acceptedState: bigint): Promise<number> {
-  const { rows } = await pool.query<{ nonce: string }>(
-    `SELECT nonce FROM withdrawals WHERE new_action_state = $1`,
-    [acceptedState.toString()],
-  );
-  const upTo = rows[0]?.nonce;
-  if (upTo === undefined) return 0;
+  const upTo = await transferIndexOf(acceptedState);
+  if (upTo === null) return 0;
 
   const { rowCount } = await pool.query(
     `UPDATE withdrawals SET status = 'published', updated_at = now()
       WHERE status = 'seen' AND nonce <= $1`,
-    [upTo],
+    [upTo.toString()],
   );
   return rowCount ?? 0;
 }
@@ -315,22 +313,19 @@ export async function recordLock(input: {
 /**
  * Mark every lock on one token covered by an accepted head.
  *
- * A head is a hash and cannot be compared for order, but the row whose own
- * `new_lock_state` equals it is the last one it covers, and claim ids are
- * monotonic within a token, so everything below is covered too.
+ * Resolved through the ledger, for the reason given on
+ * {markWithdrawalsPublished}: on a shared chain the accepted head is usually
+ * another asset's transfer, so matching it against this token's own rows finds
+ * nothing and promotes nothing.
  */
 export async function markLocksPublished(token: string, acceptedState: bigint): Promise<number> {
-  const { rows } = await pool.query<{ claim_id: string }>(
-    `SELECT claim_id FROM locks WHERE token = $1 AND new_lock_state = $2`,
-    [token.toLowerCase(), acceptedState.toString()],
-  );
-  const upTo = rows[0]?.claim_id;
-  if (upTo === undefined) return 0;
+  const upTo = await transferIndexOf(acceptedState);
+  if (upTo === null) return 0;
 
   const { rowCount } = await pool.query(
     `UPDATE locks SET status = 'published', updated_at = now()
       WHERE token = $1 AND status = 'seen' AND claim_id <= $2`,
-    [token.toLowerCase(), upTo],
+    [token.toLowerCase(), upTo.toString()],
   );
   return rowCount ?? 0;
 }
