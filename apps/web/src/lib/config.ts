@@ -116,6 +116,12 @@ export type InboundAsset = {
   flareSymbol: string;
   /** Mina token zkApp. Absent for MINA, which is the chain's own coin. */
   token?: string;
+  /**
+   * Its token id, derived from that account. Precomputed because deriving one
+   * needs o1js, and pulling the prover into the page to read a balance is a
+   * megabyte of wasm for a number the node already knows.
+   */
+  tokenId?: string;
   live: boolean;
 };
 
@@ -126,6 +132,7 @@ export const INBOUND_ASSETS: InboundAsset[] = [
     decimals: 9,
     flareSymbol: 'C2FLR',
     token: 'B62qiVguTBzDp5vaHyTatzaQ2zTyhfU22tTi3VQ9MKfcnbnePukdQHQ',
+    tokenId: 'xKJdu2C8Ljij5GKfQYjSMzFKmf1PbrR8FHySEiiGFU6wvt3ZDb',
     live: false,
   },
   {
@@ -133,6 +140,7 @@ export const INBOUND_ASSETS: InboundAsset[] = [
     decimals: 6,
     flareSymbol: 'FXRP',
     token: 'B62qnmNChAeU6SpLDdze7FvVjoT4LsWCcHntiqmFx1aBvrd52mP3XVN',
+    tokenId: 'xPHC6du23rjWCeJVxeKZ8xzgqCCAy5tHCD7WgsLr3bX9aW3Xyw',
     live: false,
   },
   {
@@ -140,6 +148,7 @@ export const INBOUND_ASSETS: InboundAsset[] = [
     decimals: 6,
     flareSymbol: 'USD₮0',
     token: 'B62qjhVgqAbso6g8wsLNosuUMTyySicoqtgEbGGPYqWJXDCdQEH6Bg3',
+    tokenId: 'woBocoVw25c3CwTmC4eiYiTTmuwMiCN5Q6ZnqMn2jrfue2sDBT',
     live: false,
   },
 ];

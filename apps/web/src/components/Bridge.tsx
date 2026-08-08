@@ -134,6 +134,8 @@ export function Bridge({ session }: { session: Session }) {
   const [flareBalances, setFlareBalances] = useState<Balance[] | null>(null);
   /** Native MINA held on devnet — what a deposit escrows. */
   const [minaBalance, setMinaBalance] = useState<bigint | null>(null);
+  /** Wrapped-asset balances on Mina, by symbol. A missing key means "not read yet". */
+  const [minaTokenBalances, setMinaTokenBalances] = useState<Record<string, bigint>>({});
   const [locks, setLocks] = useState<
     | {
         token: string;
@@ -247,6 +249,41 @@ export function Bridge({ session }: { session: Session }) {
   }, [session.minaAddress, deposits]);
 
   /**
+   * Wrapped assets held on Mina, one query per token account.
+   *
+   * A token balance lives in its own account, keyed by token id — the plain
+   * `account(publicKey)` used above only ever returns MINA, which is why every
+   * wrapped asset read as empty. An account that has never held the token does
+   * not exist at all, and that is a zero rather than an error.
+   */
+  useEffect(() => {
+    let live = true;
+    const wrapped = INBOUND_ASSETS.filter((a) => a.tokenId !== undefined);
+
+    Promise.all(
+      wrapped.map(async (asset) => {
+        const res = await fetch(MINA.graphql, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            query: `{ account(publicKey: "${session.minaAddress}", token: "${asset.tokenId}") { balance { total } } }`,
+          }),
+        });
+        const body = (await res.json()) as {
+          data?: { account?: { balance?: { total?: string } } };
+        };
+        return [asset.symbol, BigInt(body.data?.account?.balance?.total ?? '0')] as const;
+      }),
+    )
+      .then((entries) => live && setMinaTokenBalances(Object.fromEntries(entries)))
+      .catch(() => undefined);
+
+    return () => {
+      live = false;
+    };
+  }, [session.minaAddress, deposits, withdrawals]);
+
+  /**
    * Claim an attested deposit.
    *
    * This is the depositor's half of the 2-of-2. The attestor has already said
@@ -333,6 +370,9 @@ export function Bridge({ session }: { session: Session }) {
     (Number(v) / 1e9).toLocaleString(undefined, { maximumFractionDigits: 9 });
 
   const inbound = INBOUND_ASSETS.find((a) => a.symbol === depositSymbol)!;
+  /** What the selected inbound asset is worth, whichever chain holds it. */
+  const inboundBalance =
+    inbound.tokenId === undefined ? minaBalance : (minaTokenBalances[inbound.symbol] ?? null);
   const outbound = BRIDGE_ASSETS.find((a) => a.symbol === burnSymbol)!;
   const outboundBalance = flareBalances?.find((b) => b.token.symbol === outbound.symbol) ?? null;
 
@@ -592,7 +632,9 @@ export function Bridge({ session }: { session: Session }) {
             <span>{inbound.live ? 'You escrow' : 'You burn'}</span>
             <span>
               Balance{' '}
-              {!inbound.live ? '—' : minaBalance === null ? '…' : formatNano(minaBalance)}
+              {inboundBalance === null
+                ? '…'
+                : `${formatUnits(inboundBalance, inbound.decimals)} ${inbound.symbol}`}
               {inbound.live && minaBalance !== null && minaBalance > 0n && (
                 <button
                   className="maxbtn"
