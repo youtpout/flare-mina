@@ -164,8 +164,14 @@ export const MINA = {
   explorer: 'https://minascan.io/devnet',
   /** Escrow account. Deposits are plain payments here, with the Flare recipient in the memo. */
   bridgeAccount: 'B62qpRkbjE5wH6nFmZnVUN7yrjfAhpJPP2qXxn6z7KQsL6RojmkaDr6',
-  /** Read-only. Used for balances; the wallet has its own endpoint for sending. */
-  graphql: 'https://api.minascan.io/node/devnet/v1/graphql',
+  /**
+   * Read-only. Used for balances; the wallet has its own endpoint for sending.
+   *
+   * Not minscan's node, which answers most token accounts in ~200ms and then
+   * times out on others every single time — measured 2/2 on bC2FLR while this
+   * one answered in under 180ms on every attempt.
+   */
+  graphql: 'https://mina-devnet-graphql.aurowallet.com/graphql',
 } as const;
 
 /**

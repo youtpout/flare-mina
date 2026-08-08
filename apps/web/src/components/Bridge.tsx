@@ -75,6 +75,16 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8787';
  * Held back from MAX on a deposit. The escrow transaction itself costs a fee,
  * so offering the whole balance produces a transaction the wallet cannot send.
  */
+/**
+ * How often balances are re-read on their own.
+ *
+ * Stabilising the dependencies stopped the pollers re-running these five times
+ * a minute, but it also removed the only thing that retried a failed read — so
+ * one timed-out token stayed blank forever. Half a minute is often enough to
+ * recover, and rare enough not to provoke the stalls in the first place.
+ */
+const BALANCE_REFRESH_MS = 30_000;
+
 const MINA_FEE_BUFFER = 200_000_000n; // 0.2 MINA
 
 /**
@@ -270,26 +280,38 @@ export function Bridge({ session }: { session: Session }) {
    */
   useEffect(() => {
     let live = true;
-    readBalances(session.account)
-      .then((b) => live && setFlareBalances(b))
-      .catch(() => live && setFlareBalances(null));
+    const read = () =>
+      readBalances(session.account)
+        .then((b) => live && setFlareBalances(b))
+        .catch(() => undefined);
+
+    void read();
+    const timer = setInterval(read, BALANCE_REFRESH_MS);
     return () => {
       live = false;
+      clearInterval(timer);
     };
   }, [session.account, settlementKey]);
 
   useEffect(() => {
     let live = true;
-    minaQuery<{ account?: { balance?: { total?: string } } }>(
-      `{ account(publicKey: "${session.minaAddress}") { balance { total } } }`,
-    ).then((data) => {
-      const total = data?.account?.balance?.total;
+    const read = async () => {
+      const data = await minaQuery<{ account?: { balance?: { total?: string } } }>(
+        `{ account(publicKey: "${session.minaAddress}") { balance { total } } }`,
+      );
+      // A failed read leaves the last known value alone rather than blanking it.
+      if (!live || data === null) return;
+      const total = data.account?.balance?.total;
       // Already nanomina. Scaling it again showed a balance a billion times
       // too large, and MAX offered an amount no wallet could ever send.
-      if (live) setMinaBalance(total === undefined ? null : BigInt(total));
-    });
+      setMinaBalance(total === undefined ? null : BigInt(total));
+    };
+
+    void read();
+    const timer = setInterval(read, BALANCE_REFRESH_MS);
     return () => {
       live = false;
+      clearInterval(timer);
     };
   }, [session.minaAddress, settlementKey]);
 
@@ -305,7 +327,8 @@ export function Bridge({ session }: { session: Session }) {
     let live = true;
     const wrapped = INBOUND_ASSETS.filter((a) => a.tokenId !== undefined);
 
-    Promise.all(
+    const read = () =>
+      Promise.all(
       wrapped.map(async (asset) => {
         const data = await minaQuery<{ account?: { balance?: { total?: string } } }>(
           `{ account(publicKey: "${session.minaAddress}", token: "${asset.tokenId}") { balance { total } } }`,
@@ -319,17 +342,20 @@ export function Bridge({ session }: { session: Session }) {
         return [asset.symbol, BigInt(data.account?.balance?.total ?? '0')] as const;
       }),
     )
-      .then((entries) => {
-        if (!live) return;
-        const read = entries.filter((e) => e !== null);
-        // Merged, not replaced: a token whose read failed keeps whatever was
-        // last known rather than disappearing.
-        setMinaTokenBalances((previous) => ({ ...previous, ...Object.fromEntries(read) }));
-      })
-      .catch(() => undefined);
+        .then((entries) => {
+          if (!live) return;
+          const got = entries.filter((e) => e !== null);
+          // Merged, not replaced: a token whose read failed keeps whatever was
+          // last known rather than disappearing.
+          setMinaTokenBalances((previous) => ({ ...previous, ...Object.fromEntries(got) }));
+        })
+        .catch(() => undefined);
 
+    void read();
+    const timer = setInterval(read, BALANCE_REFRESH_MS);
     return () => {
       live = false;
+      clearInterval(timer);
     };
   }, [session.minaAddress, settlementKey]);
 
