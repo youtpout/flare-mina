@@ -61,7 +61,7 @@ type Release = {
 /** What each release status means to someone waiting on their asset. */
 const RELEASE_LABEL: Record<Release['status'], string> = {
   built: 'not sent',
-  submitted: 'burning on Mina',
+  submitted: 'sending on Mina',
   attested: 'ready to claim',
   released: 'released',
   failed: 'failed',
@@ -948,13 +948,14 @@ export function Bridge({ session }: { session: Session }) {
       <div className="panel">
         <h2>Mina → Flare</h2>
         <p className="muted small" style={{ marginTop: 0 }}>
-          Escrow MINA on {MINA.network} and receive FMINA on Flare. The proof is built for you —
-          your wallet only signs.
+          Send an asset from {MINA.network} to your Flare account. MINA is escrowed and arrives as
+          FMINA; a bridged asset returns as the original. The proof is built for you — your wallet
+          only signs.
         </p>
 
         <div className="swapcard" style={{ marginBottom: 14 }}>
           <div className="swapcard-head">
-            <span>{inbound.live ? 'You escrow' : 'You burn'}</span>
+            <span>You deposit</span>
             <span>
               Balance{' '}
               {inboundBalance === null
@@ -1018,7 +1019,7 @@ export function Bridge({ session }: { session: Session }) {
           >
             {notEnoughWrapped
               ? `Not enough ${inbound.symbol}`
-              : (burningAsset ?? `Burn ${inbound.symbol}`)}
+              : (burningAsset ?? 'Deposit')}
           </button>
         ) : (
           <button
@@ -1032,9 +1033,8 @@ export function Bridge({ session }: { session: Session }) {
         )}
         {isWrapped && (
           <p className="small muted" style={{ marginTop: 10 }}>
-            {inbound.symbol} was minted here against {inbound.flareSymbol} locked in the vault on
-            Flare. Burning it releases the original — you sign once now, and once more to direct
-            where it goes.
+            {inbound.symbol} is {inbound.flareSymbol} held in the vault on Flare, so sending it
+            back returns the original. You sign once now, and once more to release it.
           </p>
         )}
         {depositError !== null && <p className="status err">{depositError}</p>}
