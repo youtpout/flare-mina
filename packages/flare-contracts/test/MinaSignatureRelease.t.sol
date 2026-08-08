@@ -6,10 +6,27 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {TransparentUpgradeableProxy} from
     "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
-import {AssetVault} from "../src/AssetVault.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {AssetVault, IWNat} from "../src/AssetVault.sol";
+import {BridgeWrapper} from "../src/BridgeWrapper.sol";
 import {TransferChain} from "../src/TransferChain.sol";
 import {MinaSchnorr} from "../src/libraries/MinaSchnorr.sol";
 import {SignaturePurpose} from "../src/libraries/SignaturePurpose.sol";
+
+/// @dev WNat as the vault uses it: an 18-decimal ERC-20 over the native token.
+contract MockWNat is ERC20 {
+    constructor() ERC20("Wrapped C2FLR", "WC2FLR") {}
+
+    function deposit() external payable {
+        _mint(msg.sender, msg.value);
+    }
+
+    function withdraw(uint256 amount) external {
+        _burn(msg.sender, amount);
+        (bool ok,) = msg.sender.call{value: amount}("");
+        require(ok, "native transfer failed");
+    }
+}
 
 contract ReleaseToken is ERC20 {
     constructor() ERC20("Release", "REL") {}
@@ -217,6 +234,72 @@ contract MinaSignatureReleaseTest is Test {
             abi.encodeWithSelector(AssetVault.ReleaseAboveCap.selector, address(token), AMOUNT, 0)
         );
         _release(sig, recipient, AMOUNT, 0, att);
+    }
+
+    /// @dev The native asset goes home as itself. It only crossed as a
+    /// 9-decimal wrapper because `UInt64` caps 18 decimals at ~18 whole tokens,
+    /// and handing that wrapper back would leave the holder with an accounting
+    /// artefact rather than the C2FLR they bridged.
+    function test_theNativeAssetIsUnwrappedOnTheWayBack() public {
+        MockWNat wnat = new MockWNat();
+        BridgeWrapper wrapper = new BridgeWrapper(IERC20(address(wnat)));
+
+        vm.prank(owner);
+        vault.setNativeRoute(IWNat(address(wnat)), wrapper);
+        vm.startPrank(owner);
+        vault.setAccepted(address(wrapper), true);
+        chain.setAppender(address(vault), address(wrapper), true);
+        vault.setMaxAttestedRelease(address(wrapper), type(uint256).max);
+        vm.stopPrank();
+
+        vm.deal(user, 5 ether);
+        vm.prank(user);
+        vault.lockNative{value: 2 ether}(MINA_RECIPIENT);
+
+        // 2e18 underlying is 2e9 wrapper units, which is what Mina held.
+        uint256 wrapped = 2e9;
+        bytes32 action =
+            keccak256(abi.encode(vault.RELEASE_INTENT_DOMAIN(), address(wrapper), recipient, wrapped));
+
+        string[] memory a = new string[](8);
+        a[0] = "node";
+        a[1] = "../shared/tools/signAuthorization.mjs";
+        a[2] = "--action";
+        a[3] = vm.toString(SignaturePurpose.WITHDRAWAL_INTENT);
+        a[4] = vm.toString(address(vault));
+        a[5] = vm.toString(action);
+        a[6] = vm.toString(uint256(0));
+        a[7] = vm.toString(CHAIN_ID);
+        Signed memory sig = abi.decode(vm.parseJson(string(vm.ffi(a))), (Signed));
+
+        bytes32 intent = keccak256(
+            abi.encode(
+                vault.RELEASE_INTENT_DOMAIN(),
+                CHAIN_ID,
+                sig.minaKey,
+                address(wrapper),
+                recipient,
+                wrapped,
+                uint64(0)
+            )
+        );
+        (uint8 v, bytes32 r, bytes32 sSig) =
+            vm.sign(attestorPk, MessageHashUtils.toEthSignedMessageHash(intent));
+
+        vault.releaseWithMinaSignature(
+            MinaSchnorr.PublicKey(uint256(sig.pkX), sig.isOdd, uint256(sig.pkY)),
+            MinaSchnorr.Signature(uint256(sig.sigR), uint256(sig.sigS)),
+            address(wrapper),
+            recipient,
+            wrapped,
+            0,
+            type(uint64).max,
+            abi.encodePacked(r, sSig, v)
+        );
+
+        assertEq(recipient.balance, 2 ether, "the round trip must return native C2FLR");
+        assertEq(wrapper.balanceOf(recipient), 0, "and not the wrapper");
+        assertEq(vault.lockedOf(address(wrapper)), 0);
     }
 
     /// @dev A release can never exceed what is actually held for that token, so

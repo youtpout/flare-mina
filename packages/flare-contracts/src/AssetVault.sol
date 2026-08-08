@@ -423,11 +423,23 @@ contract AssetVault is Ownable2StepUpgradeable, PausableUpgradeable, ReentrancyG
             )
         ) revert InvalidMinaSignature();
 
-        // Spend and debit before transferring: a token with a transfer hook must
+        // Spend and debit before paying out: a token with a transfer hook must
         // never re-enter and see the old figures.
         consumedIntents[intent] = true;
         lockedOf[token] = locked - amount;
-        IERC20(token).safeTransfer(recipient, amount);
+
+        // The native asset goes home as itself. It only crossed as a 9-decimal
+        // wrapper because `UInt64` caps 18 decimals at ~18 whole tokens, and
+        // handing that wrapper back would leave the holder with an accounting
+        // artefact rather than the C2FLR they bridged.
+        if (token == address(NATIVE_WRAPPER) && token != address(0)) {
+            uint256 underlying = NATIVE_WRAPPER.unwrap(amount);
+            WNAT.withdraw(underlying);
+            (bool ok,) = payable(recipient).call{value: underlying}("");
+            if (!ok) revert NativeTransferFailed();
+        } else {
+            IERC20(token).safeTransfer(recipient, amount);
+        }
 
         emit ReleasedFromSignature(minaSender, token, recipient, nonce, amount);
     }
