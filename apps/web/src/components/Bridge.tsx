@@ -310,10 +310,22 @@ export function Bridge({ session }: { session: Session }) {
         const data = await minaQuery<{ account?: { balance?: { total?: string } } }>(
           `{ account(publicKey: "${session.minaAddress}", token: "${asset.tokenId}") { balance { total } } }`,
         );
-        return [asset.symbol, BigInt(data?.account?.balance?.total ?? '0')] as const;
+        // `null` is a failed read, and must not be rendered as a zero balance:
+        // the form would then refuse a burn the holder can afford. An account
+        // that genuinely holds nothing answers with a balance of zero, and one
+        // that never existed answers with no account at all — which is also a
+        // real zero, and the only case worth turning into one.
+        if (data === null) return null;
+        return [asset.symbol, BigInt(data.account?.balance?.total ?? '0')] as const;
       }),
     )
-      .then((entries) => live && setMinaTokenBalances(Object.fromEntries(entries)))
+      .then((entries) => {
+        if (!live) return;
+        const read = entries.filter((e) => e !== null);
+        // Merged, not replaced: a token whose read failed keeps whatever was
+        // last known rather than disappearing.
+        setMinaTokenBalances((previous) => ({ ...previous, ...Object.fromEntries(read) }));
+      })
       .catch(() => undefined);
 
     return () => {
@@ -447,6 +459,9 @@ export function Bridge({ session }: { session: Session }) {
       return null;
     }
   })();
+  // Advisory until it loads. Refusing on an unread balance blocks a burn the
+  // holder can afford, which is worse than letting the relayer say no a moment
+  // later — it checks the same thing against the chain.
   const notEnoughWrapped =
     isWrapped && inboundBalance !== null && inboundValue !== null && inboundValue > inboundBalance;
 
