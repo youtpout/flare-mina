@@ -6,6 +6,7 @@ import {
   markWithdrawalsPublished,
   recordWithdrawal,
   releasableWithdrawals,
+  transferIndexOf,
   transferRange,
 } from './db/index.js';
 import { releaseWithdrawal } from './prover/index.js';
@@ -144,6 +145,17 @@ async function release(): Promise<void> {
       return;
     }
     if (range.length === 0) return;
+
+    // A row can outlive its own release: the transaction lands, and the process
+    // dies before recording it — which a restart does routinely. The cursor is
+    // the truth, so a row the escrow has already moved past is settled, and
+    // retrying it forever only produces noise that hides real failures.
+    const cursorIndex = await transferIndexOf(state.cursor);
+    if (cursorIndex !== null && BigInt(withdrawal.nonce) <= cursorIndex) {
+      await markWithdrawalReleased(withdrawal.id, withdrawal.mina_tx_hash ?? 'recovered');
+      console.log(`withdrawal ${withdrawal.nonce} was already released; catching the row up`);
+      continue;
+    }
 
     try {
       await markWithdrawalReleasing(withdrawal.id);
