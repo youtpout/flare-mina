@@ -589,3 +589,24 @@ export async function releasesFor(recipient: string): Promise<ReleaseRow[]> {
   );
   return rows;
 }
+
+/**
+ * Re-anchor the burns still waiting for a holder's token.
+ *
+ * Every pending row is anchored to the balance when it was *built*, so several
+ * built before any of them landed all carry the same anchor — and one burn
+ * would satisfy every one of their checks at once. Whenever a burn is
+ * confirmed, the rest are re-anchored to what is left, so each needs its own
+ * further drop.
+ */
+export async function reanchorPendingReleases(
+  minaSender: string,
+  token: string,
+  balance: bigint,
+): Promise<void> {
+  await pool.query(
+    `UPDATE releases SET balance_before = $3, updated_at = now()
+      WHERE mina_sender = $1 AND token = $2 AND status IN ('built','submitted')`,
+    [minaSender, token.toLowerCase(), balance.toString()],
+  );
+}

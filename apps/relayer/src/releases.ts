@@ -4,6 +4,7 @@ import { decodeMinaRecipient, formatMinaAddress } from '@minaport/shared';
 import {
   markReleaseAttested,
   markReleaseFailed,
+  reanchorPendingReleases,
   submittedReleases,
   type ReleaseRow,
 } from './db/index.js';
@@ -122,24 +123,34 @@ function assetFor(token: string) {
  * Attest the burns that landed.
  *
  * The check is that the holder's token balance has fallen by at least the
- * amount since the burn was built. Weaker than "this exact burn is on chain",
- * and deliberately not dressed up as more — but strictly stronger than the
- * inbound rail's, which only asks that the escrow holds enough.
+ * amount since the burn was anchored. Weaker than "this exact burn is on
+ * chain", and deliberately not dressed up as more — but strictly stronger than
+ * the inbound rail's, which only asks that the escrow holds enough.
+ *
+ * One per (holder, token) per tick, because attesting re-anchors the rest.
+ * Several burns built before any of them landed share an anchor, and a single
+ * drop would otherwise satisfy every one of their checks at once — three
+ * pending rows of 4 against one burn of 4 releases twelve.
  */
 async function tick(): Promise<void> {
   const key = process.env.ATTESTOR_PRIVATE_KEY as Hex | undefined;
   if (key === undefined || VAULT === undefined) return;
   const attestor = privateKeyToAccount(key);
 
+  // Oldest first within each holder's token, so an anchor always describes the
+  // balance the next burn in line is measured against.
+  const queues = new Map<string, ReleaseRow[]>();
   for (const row of await submittedReleases()) {
+    const key = `${row.mina_sender}|${row.token}`;
+    queues.set(key, [...(queues.get(key) ?? []), row]);
+  }
+
+  for (const rows of queues.values()) {
+    const row = rows[0]!;
     try {
       const asset = assetFor(row.token);
-      if (asset === undefined) {
+      if (asset?.tokenId === undefined) {
         await markReleaseFailed(row.id, `no port configured for ${row.token}`);
-        continue;
-      }
-      if (asset.tokenId === undefined) {
-        await markReleaseFailed(row.id, `no token id configured for ${asset.symbol}`);
         continue;
       }
       if (row.balance_before === null) {
@@ -165,6 +176,8 @@ async function tick(): Promise<void> {
 
       const signature = await attestor.signMessage({ message: { raw: digest } });
       await markReleaseAttested(row.id, signature);
+      // Everything still waiting on this token now measures from here.
+      await reanchorPendingReleases(row.mina_sender, row.token, balance);
       console.log(`attested release ${row.id} -> ${row.recipient}`);
     } catch (e) {
       console.error(`release ${row.id} not attested:`, e instanceof Error ? e.message : e);
