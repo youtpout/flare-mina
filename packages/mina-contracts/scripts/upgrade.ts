@@ -1,4 +1,4 @@
-import { AccountUpdate, Mina, PrivateKey, PublicKey, fetchAccount } from 'o1js';
+import { AccountUpdate, Mina, PrivateKey, PublicKey, fetchAccount, initializeBindings, setBackend } from 'o1js';
 import { FungibleToken } from 'mina-fungible-token';
 import { AssetPort } from '../src/AssetPort.js';
 import { FdcAttestation, FdcLeaf } from '../src/FdcAttestation.js';
@@ -39,6 +39,13 @@ function required(name: string): string {
   if (!value) throw new Error(`${name} is not set — source .env first`);
   return value;
 }
+
+// Mandatory, not a preference: AssetPort pulls in FdcLeaf, whose proving key
+// overflows the wasm heap while being serialised. Without this the compile dies
+// with `rust_oom` — and in a migration it dies *between* the state rewrite and
+// the real key going back, leaving StateMigration installed on a live port.
+setBackend('native');
+await initializeBindings();
 
 async function main() {
   const [what, symbol] = process.argv.slice(2);

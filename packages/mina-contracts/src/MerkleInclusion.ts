@@ -66,28 +66,55 @@ function sortsBefore(a: Bytes32, b: Bytes32) {
     .or(aHi.equals(bHi).and(aLo.lessThan(bLo)));
 }
 
+/** One level up: sort the pair, hash it. */
+function climb(node: Bytes32, sibling: Bytes32): Bytes32 {
+  // Sorted, so the path carries no side information — which is also why a
+  // sibling cannot be replayed on the wrong side to reach another root.
+  const nodeFirst = sortsBefore(node, sibling);
+  const left = Provable.if(nodeFirst, Bytes32, node, sibling);
+  const right = Provable.if(nodeFirst, Bytes32, sibling, node);
+
+  return Bytes32.from(Keccak.ethereum(Bytes64.from([...left.bytes, ...right.bytes])).bytes);
+}
+
 export const MerkleInclusion = ZkProgram({
   name: 'flare-merkle-inclusion',
   publicOutput: PathSegment,
 
   methods: {
-    /** One level. Independent of every other, so a whole path proves at once. */
+    /** One level, for a path whose depth is not a multiple of four. */
     level: {
       privateInputs: [Bytes32, Bytes32],
       async method(node: Bytes32, sibling: Bytes32) {
-        // Sorted, so the path carries no side information — which is also why a
-        // sibling cannot be replayed on the wrong side to reach another root.
-        const nodeFirst = sortsBefore(node, sibling);
-        const left = Provable.if(nodeFirst, Bytes32, node, sibling);
-        const right = Provable.if(nodeFirst, Bytes32, sibling, node);
-
-        const parent = Bytes32.from(
-          Keccak.ethereum(Bytes64.from([...left.bytes, ...right.bytes])).bytes,
-        );
-
-        return { publicOutput: new PathSegment({ bottom: node, top: parent, height: UInt32.one }) };
+        return {
+          publicOutput: new PathSegment({
+            bottom: node,
+            top: climb(node, sibling),
+            height: UInt32.one,
+          }),
+        };
       },
     },
+
+    /** Four levels at once, which is what a proof should carry. */
+    levels4: {
+      privateInputs: [Bytes32, Bytes32, Bytes32, Bytes32, Bytes32],
+      async method(
+        node: Bytes32,
+        first: Bytes32,
+        second: Bytes32,
+        third: Bytes32,
+        fourth: Bytes32,
+      ) {
+        let top = climb(node, first);
+        top = climb(top, second);
+        top = climb(top, third);
+        top = climb(top, fourth);
+
+        return { publicOutput: new PathSegment({ bottom: node, top, height: UInt32.from(4) }) };
+      },
+    },
+
 
     /** Join two segments. Only checks they meet — each side proved its own hashing. */
     merge: {

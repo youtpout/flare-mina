@@ -1,4 +1,13 @@
-import { AccountUpdate, Field, Mina, PrivateKey, PublicKey, fetchAccount } from 'o1js';
+import {
+  AccountUpdate,
+  Field,
+  Mina,
+  PrivateKey,
+  PublicKey,
+  fetchAccount,
+  initializeBindings,
+  setBackend,
+} from 'o1js';
 import { adminCommitment } from '../src/AssetPort.js';
 import { FungibleToken } from 'mina-fungible-token';
 import { AssetPort } from '../src/AssetPort.js';
@@ -92,10 +101,17 @@ async function installKey(
   await pending.wait();
 }
 
+// Mandatory, not a preference: AssetPort pulls in FdcLeaf, whose proving key
+// overflows the wasm heap while being serialised. Without this the compile dies
+// with `rust_oom` — and in a migration it dies *between* the state rewrite and
+// the real key going back, leaving StateMigration installed on a live port.
+setBackend('native');
+await initializeBindings();
+
 async function main() {
   const [what, symbol] = process.argv.slice(2);
-  if (what !== 'bridge' && what !== 'port') {
-    throw new Error('usage: migrateState.ts <bridge|port> [SYMBOL]');
+  if (what !== 'bridge' && what !== 'port' && what !== 'repair-admin') {
+    throw new Error('usage: migrateState.js <bridge|port|repair-admin> [symbol]');
   }
 
   Mina.setActiveInstance(Mina.Network(GRAPHQL));
@@ -126,7 +142,20 @@ async function main() {
   // this is the step that is easy to get subtly wrong and impossible to check
   // afterwards from the values alone.
   let after: Field[];
-  if (what === 'bridge') {
+  if (what === 'repair-admin') {
+    // Only slot [7]. Everything else is already in its new place, so recomputing
+    // the whole layout from a state that has already moved would be wrong.
+    // The same fallback the prover uses to sign a rotation. They have to agree,
+    // and hard-coding one variable here would silently commit to a key the
+    // relayer never signs with.
+    const key =
+      process.env.MINA_LOCK_ADMIN_PRIVATE_KEY ??
+      process.env.MINA_WITHDRAWAL_ATTESTOR_PRIVATE_KEY ??
+      required('MINA_DEVNET_PRIVATE_KEY');
+    const admin = PrivateKey.fromBase58(key).toPublicKey();
+    console.log('admin  :', admin.toBase58());
+    after = [...before.slice(0, 7), adminCommitment(admin)];
+  } else if (what === 'bridge') {
     // was: policyRoot | flareBridge | flareState | processed | weight | admin.x | admin.isOdd | -
     // now: policyRoot | flareChain  | flareState | processed | weight | token   | admin.x     | admin.isOdd
     //
@@ -161,7 +190,12 @@ async function main() {
       Field(BigInt(flareTokenOf(symbol!))),
       before[4]!,
       Field(BigInt(required('FLARE_TRANSFER_CHAIN_ADDRESS'))),
-      adminCommitment(PublicKey.from({ x: before[5]!, isOdd: before[6]!.equals(Field(1)) })),
+      // [6] and [7], not [5] and [6]: the old layout put the vault at [5], and
+      // hashing that as `admin.x` produced a commitment to a key nobody holds —
+      // which locks `setSigningPolicyRoot` out for good, and with it every
+      // publication to the port. Run `repair-admin` on anything migrated before
+      // this was fixed.
+      adminCommitment(PublicKey.from({ x: before[6]!, isOdd: before[7]!.equals(Field(1)) })),
     ];
   }
 
