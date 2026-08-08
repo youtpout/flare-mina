@@ -1,4 +1,4 @@
-import { createWalletClient, createPublicClient, http, parseAbi, type Hex } from 'viem';
+import { createWalletClient, createPublicClient, http, parseAbi, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 /**
@@ -165,6 +165,60 @@ export function submitterConfigured(): boolean {
  * and check themselves. It costs a few seconds on a chain with sub-second
  * blocks.
  */
+/** The return leg's claim: same bargain, different contract. */
+export type ReleaseClaim = {
+  publicKey: { x: bigint; isOdd: boolean; y: bigint };
+  signature: { field: bigint; scalar: bigint };
+  token: Address;
+  recipient: Address;
+  amount: bigint;
+  nonce: bigint;
+  expiry: bigint;
+  attestation: Hex;
+};
+
+const vaultReleaseAbi = parseAbi([
+  'function releaseWithMinaSignature((uint256,bool,uint256) publicKey, (uint256,uint256) signature, address token, address recipient, uint256 amount, uint64 nonce, uint64 expiry, bytes attestation)',
+]);
+
+/**
+ * Pay the gas for a release the holder authorised.
+ *
+ * Gas in exchange for nothing, exactly like a deposit claim: the vault
+ * recomputes the token, recipient, amount, nonce and expiry from the holder's
+ * Schnorr signature, so this service cannot redirect or resize anything. It is
+ * what lets a Mina user take their assets back without holding an EVM key.
+ */
+export async function submitRelease(claim: ReleaseClaim): Promise<Hex> {
+  const key = process.env.FLARE_SUBMITTER_PRIVATE_KEY;
+  const vault = process.env.FLARE_ASSET_VAULT_ADDRESS as Address | undefined;
+  if (!key || vault === undefined) throw new Error('no submitter configured');
+
+  const account = privateKeyToAccount(key as Hex);
+  const wallet = createWalletClient({ account, chain: COSTON2, transport: http(RPC) });
+  const publicClient = createPublicClient({ chain: COSTON2, transport: http(RPC) });
+
+  const hash = await wallet.writeContract({
+    address: vault,
+    abi: vaultReleaseAbi,
+    functionName: 'releaseWithMinaSignature',
+    args: [
+      [claim.publicKey.x, claim.publicKey.isOdd, claim.publicKey.y],
+      [claim.signature.field, claim.signature.scalar],
+      claim.token,
+      claim.recipient,
+      claim.amount,
+      claim.nonce,
+      claim.expiry,
+      claim.attestation,
+    ],
+  });
+
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== 'success') throw new Error(`release reverted on Flare (${hash})`);
+  return hash;
+}
+
 export async function submitClaim(claim: ClaimRequest): Promise<Hex> {
   const key = process.env.FLARE_SUBMITTER_PRIVATE_KEY;
   if (!key || BRIDGE === undefined) {

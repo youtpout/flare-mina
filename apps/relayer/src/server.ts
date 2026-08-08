@@ -28,6 +28,7 @@ import {
   deployAccount,
   submitBatch,
   submitClaim,
+  submitRelease,
   submitterConfigured,
 } from './submitter.js';
 import { networkSnapshot } from './network.js';
@@ -225,15 +226,38 @@ app.post('/releases/:id/submitted', async (req, res) => {
   }
 });
 
-/** The user has claimed on Flare. Recorded, not trusted — the chain decides. */
-app.post('/releases/:id/settled', async (req, res) => {
-  const { flareTxHash } = req.body ?? {};
-  if (typeof flareTxHash !== 'string' || flareTxHash.length === 0) {
-    return res.status(400).json({ error: 'flareTxHash is required' });
+/**
+ * Take an attested release back to Flare, paying the gas.
+ *
+ * The same bargain as a deposit claim: the vault recomputes the token,
+ * recipient, amount, nonce and expiry from the holder's Schnorr signature, so
+ * this cannot redirect or resize anything. It is what lets a Mina user take
+ * their assets back without holding an EVM key.
+ */
+app.post('/releases/:id/claim', async (req, res) => {
+  if (!submitterConfigured()) {
+    return res.status(501).json({ error: 'no submitter configured; claim from your own wallet' });
   }
+
+  const { publicKey, signature, token, recipient, amount, nonce, expiry, attestation } =
+    req.body ?? {};
   try {
-    await markReleaseSettled(req.params.id, flareTxHash);
-    res.json({ ok: true });
+    const hash = await submitRelease({
+      publicKey: {
+        x: BigInt(publicKey.x),
+        isOdd: Boolean(publicKey.isOdd),
+        y: BigInt(publicKey.y),
+      },
+      signature: { field: BigInt(signature.field), scalar: BigInt(signature.scalar) },
+      token,
+      recipient,
+      amount: BigInt(amount),
+      nonce: BigInt(nonce),
+      expiry: BigInt(expiry),
+      attestation,
+    });
+    await markReleaseSettled(req.params.id, hash);
+    res.json({ flareTxHash: hash });
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }

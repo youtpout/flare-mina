@@ -116,6 +116,8 @@ export type InboundAsset = {
   flareSymbol: string;
   /** Mina token zkApp. Absent for MINA, which is the chain's own coin. */
   token?: string;
+  /** The Flare asset it is backed by, and the one a burn releases. */
+  flareToken?: `0x${string}`;
   /**
    * Its token id, derived from that account. Precomputed because deriving one
    * needs o1js, and pulling the prover into the page to read a balance is a
@@ -133,7 +135,8 @@ export const INBOUND_ASSETS: InboundAsset[] = [
     flareSymbol: 'C2FLR',
     token: 'B62qiVguTBzDp5vaHyTatzaQ2zTyhfU22tTi3VQ9MKfcnbnePukdQHQ',
     tokenId: 'xKJdu2C8Ljij5GKfQYjSMzFKmf1PbrR8FHySEiiGFU6wvt3ZDb',
-    live: false,
+    flareToken: '0x6C790956D728ed82A75d2ec8D5c37F2e2F36b978',
+    live: true,
   },
   {
     symbol: 'bFXRP',
@@ -141,7 +144,8 @@ export const INBOUND_ASSETS: InboundAsset[] = [
     flareSymbol: 'FXRP',
     token: 'B62qnmNChAeU6SpLDdze7FvVjoT4LsWCcHntiqmFx1aBvrd52mP3XVN',
     tokenId: 'xPHC6du23rjWCeJVxeKZ8xzgqCCAy5tHCD7WgsLr3bX9aW3Xyw',
-    live: false,
+    flareToken: '0x0b6A3645c240605887a5532109323A3E12273dc7',
+    live: true,
   },
   {
     symbol: 'bUSDT',
@@ -149,7 +153,8 @@ export const INBOUND_ASSETS: InboundAsset[] = [
     flareSymbol: 'USD₮0',
     token: 'B62qjhVgqAbso6g8wsLNosuUMTyySicoqtgEbGGPYqWJXDCdQEH6Bg3',
     tokenId: 'woBocoVw25c3CwTmC4eiYiTTmuwMiCN5Q6ZnqMn2jrfue2sDBT',
-    live: false,
+    flareToken: '0xC1A5B41512496B80903D1f32d6dEa3a73212E71F',
+    live: true,
   },
 ];
 

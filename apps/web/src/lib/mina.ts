@@ -107,6 +107,7 @@ export const PURPOSE = {
   accountCall: 1n,
   accountBatch: 2n,
   depositIntent: 3n,
+  releaseIntent: 4n,
 } as const;
 
 /**
@@ -162,6 +163,24 @@ export function depositActionHash(recipient: Address, amountNanomina: bigint): H
     encodeAbiParameters(
       [{ type: 'bytes32' }, { type: 'address' }, { type: 'uint64' }],
       [DEPOSIT_INTENT_DOMAIN, recipient, amountNanomina],
+    ),
+  );
+}
+
+/** Must match `AssetVault.RELEASE_INTENT_DOMAIN`. */
+export const RELEASE_INTENT_DOMAIN = keccak256(toHex('FlareXMina.ReleaseIntent.v1'));
+
+/**
+ * What a holder signs to direct a burn back to Flare.
+ *
+ * Mirrors `AssetVault.releaseIntentFields`: the token is in here, so a
+ * signature for one asset cannot release another.
+ */
+export function releaseActionHash(token: Address, recipient: Address, amount: bigint): Hex {
+  return keccak256(
+    encodeAbiParameters(
+      [{ type: 'bytes32' }, { type: 'address' }, { type: 'address' }, { type: 'uint256' }],
+      [RELEASE_INTENT_DOMAIN, token, recipient, amount],
     ),
   );
 }

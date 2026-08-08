@@ -16,6 +16,7 @@ import {
   batchHash,
   depositActionHash,
   depositCommitment,
+  releaseActionHash,
   signAuthorization,
 } from '@/lib/mina';
 
@@ -28,6 +29,25 @@ import {
  * rather than a single opaque spinner.
  */
 type DepositStatus = 'built' | 'submitted' | 'attested' | 'claimed' | 'failed' | 'aborted';
+
+/**
+ * A wrapped asset on its way back to Flare.
+ *
+ * The mirror of a deposit, and the same 2-of-2: the burn happens on Mina, the
+ * attestor says it landed, and the holder's signature says which token, to
+ * whom, and how much.
+ */
+type Release = {
+  id: string;
+  token: string;
+  recipient: string;
+  amount: string;
+  nonce: string;
+  status: 'built' | 'submitted' | 'attested' | 'released' | 'failed' | 'aborted';
+  attestation: string | null;
+  mina_tx_hash: string | null;
+  flare_tx_hash: string | null;
+};
 
 type Deposit = {
   id: string;
@@ -150,6 +170,11 @@ export function Bridge({ session }: { session: Session }) {
   const [withdrawals, setWithdrawals] = useState<
     { nonce: string; amountNanomina: string; status: string }[] | null
   >(null);
+  /** The return leg for wrapped assets: a burn on Mina, released on Flare. */
+  const [releases, setReleases] = useState<Release[] | null>(null);
+  const [burningAsset, setBurningAsset] = useState<string | null>(null);
+  const [releaseError, setReleaseError] = useState<string | null>(null);
+  const [claimingRelease, setClaimingRelease] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -185,10 +210,15 @@ export function Bridge({ session }: { session: Session }) {
     let live = true;
     const poll = async () => {
       try {
-        const [w, l] = await Promise.all([
+        const [w, l, r] = await Promise.all([
           fetch(`${API}/withdrawals/${session.minaAddress}`),
           fetch(`${API}/locks/${session.minaAddress}`),
+          fetch(`${API}/releases/${session.account}`),
         ]);
+        if (r.ok) {
+          const body = (await r.json()) as { releases: Release[] };
+          if (live) setReleases(body.releases);
+        }
         if (w.ok) {
           const body = (await w.json()) as { withdrawals: typeof withdrawals };
           if (live) setWithdrawals(body.withdrawals);
@@ -399,6 +429,19 @@ export function Bridge({ session }: { session: Session }) {
 
   const wanted = nanomina(amount);
 
+  /** MINA is escrowed; everything else on this side is burned and released. */
+  const isWrapped = inbound.token !== undefined;
+  const inboundValue = (() => {
+    try {
+      const v = parseUnits(amount.trim() || '0', inbound.decimals);
+      return v > 0n ? v : null;
+    } catch {
+      return null;
+    }
+  })();
+  const notEnoughWrapped =
+    isWrapped && inboundBalance !== null && inboundValue !== null && inboundValue > inboundBalance;
+
   // Balances are advisory until they load: refusing on `null` would block the
   // form whenever the node is slow, which is worse than letting the wallet say
   // no a moment later.
@@ -469,6 +512,110 @@ export function Bridge({ session }: { session: Session }) {
       setDepositError(e instanceof Error ? e.message : String(e));
     } finally {
       setDepositing(null);
+    }
+  }
+
+  /**
+   * Burn a wrapped asset on Mina, to take the original back on Flare.
+   *
+   * The relayer builds the transaction — burning through a token contract needs
+   * a proof — and the wallet only signs. Nothing is authorised by this step: the
+   * release needs the holder's Schnorr signature afterwards, which is what binds
+   * the token, the recipient and the amount.
+   */
+  async function startRelease() {
+    if (inbound.token === undefined) return;
+    const value = (() => {
+      try {
+        const v = parseUnits(amount.trim() || '0', inbound.decimals);
+        return v > 0n ? v : null;
+      } catch {
+        return null;
+      }
+    })();
+    if (value === null) return;
+
+    setReleaseError(null);
+    setBurningAsset('Building the proof…');
+    try {
+      const res = await fetch(`${API}/releases/build`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sender: session.minaAddress,
+          token: inbound.flareToken,
+          recipient: session.account,
+          amount: value.toString(),
+        }),
+      });
+      const built = (await res.json()) as { id: string; transaction: string; error?: string };
+      if (!res.ok) throw new Error(built.error ?? `relayer returned ${res.status}`);
+
+      setBurningAsset('Waiting for your wallet…');
+      const { hash } = await session.provider.sendTransaction({ transaction: built.transaction });
+
+      await fetch(`${API}/releases/${built.id}/submitted`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ minaTxHash: hash }),
+      });
+
+      setAmount('');
+    } catch (e) {
+      setReleaseError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBurningAsset(null);
+    }
+  }
+
+  /**
+   * The holder's half of the return leg.
+   *
+   * The attestor has already said the burn landed; this signature says which
+   * token, to whom and how much. Neither is sufficient alone, which is why the
+   * attestor cannot pay itself.
+   */
+  async function claimRelease(r: Release) {
+    setReleaseError(null);
+    setClaimingRelease(r.id);
+    try {
+      if (r.attestation === null) throw new Error('not attested yet');
+
+      const token = r.token as `0x${string}`;
+      const recipient = r.recipient as `0x${string}`;
+      const amountRaw = BigInt(r.amount);
+      const nonce = BigInt(r.nonce);
+      const expiry = BigInt('18446744073709551615');
+
+      const signature = await signAuthorization(session.provider, {
+        purpose: PURPOSE.releaseIntent,
+        chainId: 114n,
+        target: CONTRACTS.assetVault,
+        actionHash: releaseActionHash(token, recipient, amountRaw),
+        nonce,
+        expiry,
+      });
+
+      const res = await fetch(`${API}/releases/${r.id}/claim`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          publicKey: { x: session.x.toString(), isOdd: session.isOdd, y: session.y.toString() },
+          signature: { field: signature.field, scalar: signature.scalar },
+          token,
+          recipient,
+          amount: amountRaw.toString(),
+          nonce: nonce.toString(),
+          expiry: expiry.toString(),
+          attestation: r.attestation,
+        }),
+      });
+      const body = (await res.json()) as { flareTxHash?: string; error?: string };
+      if (!res.ok) throw new Error(body.error ?? `relayer returned ${res.status}`);
+    } catch (e) {
+      setReleaseError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setClaimingRelease(null);
     }
   }
 
@@ -681,29 +828,90 @@ export function Bridge({ session }: { session: Session }) {
           </div>
         </div>
 
-        <button
-          className="primary"
-          style={{ marginTop: 14 }}
-          disabled={
-            !inbound.live || depositing !== null || nanomina(amount) === null || notEnoughMina
-          }
-          onClick={startDeposit}
-        >
-          {!inbound.live
-            ? `${inbound.symbol} return leg not live`
-            : notEnoughMina
-              ? 'Not enough MINA'
-              : (depositing ?? 'Deposit')}
-        </button>
-        {!inbound.live && (
+        {/* Two rails behind one button. MINA is the chain's own coin and gets
+            escrowed; a wrapped asset was minted here against something locked
+            on Flare, so it burns and the original is released. */}
+        {isWrapped ? (
+          <button
+            className="primary"
+            style={{ marginTop: 14 }}
+            disabled={burningAsset !== null || inboundValue === null || notEnoughWrapped}
+            onClick={startRelease}
+          >
+            {notEnoughWrapped
+              ? `Not enough ${inbound.symbol}`
+              : (burningAsset ?? `Burn ${inbound.symbol}`)}
+          </button>
+        ) : (
+          <button
+            className="primary"
+            style={{ marginTop: 14 }}
+            disabled={depositing !== null || nanomina(amount) === null || notEnoughMina}
+            onClick={startDeposit}
+          >
+            {notEnoughMina ? 'Not enough MINA' : (depositing ?? 'Deposit')}
+          </button>
+        )}
+        {isWrapped && (
           <p className="small muted" style={{ marginTop: 10 }}>
             {inbound.symbol} was minted here against {inbound.flareSymbol} locked in the vault on
-            Flare, so sending it back means burning it and releasing the original. The forward leg
-            is live; this one is the next thing being wired.
+            Flare. Burning it releases the original — you sign once now, and once more to direct
+            where it goes.
           </p>
         )}
         {depositError !== null && <p className="status err">{depositError}</p>}
+        {releaseError !== null && <p className="status err">{releaseError}</p>}
       </div>
+
+      {isWrapped && (
+        <div className="panel">
+          <h2>Your burns</h2>
+          {releases === null && <p className="muted small">Loading…</p>}
+          {releases?.length === 0 && (
+            <p className="muted small">
+              Nothing yet. Burn a wrapped asset above and it will appear here.
+            </p>
+          )}
+          {releases?.map((r) => {
+            const asset = INBOUND_ASSETS.find(
+              (a) => a.flareToken?.toLowerCase() === r.token.toLowerCase(),
+            );
+            return (
+              <div className="row" key={r.id}>
+                <span className="small">
+                  {formatUnits(BigInt(r.amount), asset?.decimals ?? 9)}{' '}
+                  {asset?.flareSymbol ?? 'token'}
+                  <span className="muted"> · {r.status}</span>
+                </span>
+                <span style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                  {r.flare_tx_hash && (
+                    <a
+                      className="mono small"
+                      href={explorerTx(r.flare_tx_hash)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Flare
+                    </a>
+                  )}
+                  {r.status === 'attested' && (
+                    <button
+                      className="primary"
+                      disabled={claimingRelease === r.id}
+                      onClick={() => void claimRelease(r)}
+                    >
+                      {claimingRelease === r.id ? 'Signing…' : 'Claim'}
+                    </button>
+                  )}
+                  {r.status === 'submitted' && (
+                    <span className="small muted">waiting for the burn to land</span>
+                  )}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <div className="panel">
         <h2>Your deposits</h2>
