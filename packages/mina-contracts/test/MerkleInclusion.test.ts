@@ -44,6 +44,38 @@ const nodeB = shash(leaves[2]!, leaves[3]!);
 const root = shash(nodeA, nodeB);
 
 /**
+ * A sixteen-leaf tree, so the path from leaf 0 to the root is four levels —
+ * exactly what `levels4` climbs in one circuit.
+ */
+const wideLeaves: Hex[] = Array.from(
+  { length: 16 },
+  (_, i) => keccak256(`0x${(i + 100).toString(16).padStart(64, '0')}` as Hex) as Hex,
+);
+
+/**
+ * The path and root, computed the way OpenZeppelin's `processProof` does.
+ *
+ * Written out here rather than taken from the circuit: a test that builds its
+ * expectation with the code under test only ever confirms the code is
+ * self-consistent, which is how the earlier left/right bug survived a green
+ * suite.
+ */
+function widePathTo(index: number): { siblings: Hex[]; root: Hex } {
+  const siblings: Hex[] = [];
+  let level = wideLeaves;
+  let i = index;
+
+  while (level.length > 1) {
+    siblings.push(level[i ^ 1]!);
+    const next: Hex[] = [];
+    for (let j = 0; j < level.length; j += 2) next.push(shash(level[j]!, level[j + 1]!));
+    level = next;
+    i >>= 1;
+  }
+  return { siblings, root: level[0]! };
+}
+
+/**
  * A sibling is now just a value.
  *
  * It used to carry a side bit that the caller computed. The circuit produced
@@ -117,6 +149,58 @@ describe('climbing a Flare round tree', () => {
     expect(toHex(a.proof.publicOutput.top)).toBe(nodeA);
     expect(toHex(b.proof.publicOutput.top)).toBe(nodeA);
   }, 900_000);
+
+  /**
+   * The two methods have to agree, or a path proved one way reaches a root the
+   * other does not — and only one of them would match Flare.
+   */
+  it('climbs four levels to the same place as four single levels', async () => {
+    const { siblings } = widePathTo(0);
+    const leaf = toBytes32(wideLeaves[0]!);
+
+    let chained = (await MerkleInclusion.level(leaf, toBytes32(siblings[0]!))).proof;
+    for (const sibling of siblings.slice(1)) {
+      const next = (await MerkleInclusion.level(chained.publicOutput.top, toBytes32(sibling)))
+        .proof;
+      chained = (await MerkleInclusion.merge(chained, next)).proof;
+    }
+
+    const batched = (
+      await MerkleInclusion.levels4(
+        leaf,
+        toBytes32(siblings[0]!),
+        toBytes32(siblings[1]!),
+        toBytes32(siblings[2]!),
+        toBytes32(siblings[3]!),
+      )
+    ).proof;
+
+    expect(toHex(batched.publicOutput.top)).toBe(toHex(chained.publicOutput.top));
+    expect(Number(batched.publicOutput.height.toBigint())).toBe(4);
+    expect(Number(chained.publicOutput.height.toBigint())).toBe(4);
+  }, 1_800_000);
+
+  /**
+   * And both have to agree with something that is not this circuit. The root
+   * here comes from the reference climb above, over a tree this file builds by
+   * the published rule rather than by asking the circuit what it thinks.
+   */
+  it('reaches a root an independent implementation computes', async () => {
+    for (const index of [0, 7, 15]) {
+      const { siblings, root: expected } = widePathTo(index);
+      const climbed = (
+        await MerkleInclusion.levels4(
+          toBytes32(wideLeaves[index]!),
+          toBytes32(siblings[0]!),
+          toBytes32(siblings[1]!),
+          toBytes32(siblings[2]!),
+          toBytes32(siblings[3]!),
+        )
+      ).proof;
+
+      expect(toHex(climbed.publicOutput.top)).toBe(expected);
+    }
+  }, 1_800_000);
 
   /**
    * The one that matters: a real FDC round.

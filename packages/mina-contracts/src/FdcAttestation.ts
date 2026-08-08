@@ -28,7 +28,19 @@ import { SigningPolicyProof } from './SigningPolicyFold.js';
  * does not accept them, and passing them there is silently ignored.
  */
 
-/** A trimmed `EVMTransaction` response: `provideInput: false`, one `logIndices`. */
+/**
+ * A trimmed `EVMTransaction` response: `provideInput: false`, one `logIndices`.
+ *
+ * The length is load-bearing, and by accident. {MerkleInclusion} sorts pairs and
+ * adds no domain separation, so a leaf and an internal node are the same kind of
+ * object to it — what stops an internal node being passed off as a leaf is only
+ * that a leaf preimage is an ABI-encoded response of this many bytes, and an
+ * internal node's is 64. Second-preimage resistance here is incidental to the
+ * encoding, not designed in.
+ *
+ * So an attestation type whose response is a different size must still never be
+ * 64 bytes, and adding one that is would need domain separation first.
+ */
 export const RESPONSE_BYTES = 1344;
 
 export class AttestationResponse extends Bytes(RESPONSE_BYTES) {}
