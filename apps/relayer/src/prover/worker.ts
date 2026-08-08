@@ -76,6 +76,11 @@ import type { PolicyKey, RelayCall } from '@minaport/shared';
 
 const CACHE_DIR = process.env.O1JS_CACHE_DIR;
 
+// Not `Cache.FileSystem`: it cannot write FdcLeaf's 2.6 GB step key, and fails
+// silently when it tries. See ./cache.ts.
+const { chunkedCache } = await import('./cache.js');
+const cacheOptions = CACHE_DIR ? { cache: chunkedCache(CACHE_DIR) } : {};
+
 type BuildRequest = {
   kind: 'deposit';
   id: number;
@@ -281,20 +286,20 @@ Mina.setActiveInstance(Mina.Network({ mina: graphql, archive: graphql }));
 const compileStart = Date.now();
 // The chain program first: the contract verifies its proofs, so its
 // verification key has to exist before the contract compiles.
-await TransferChain.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
-await RelayMessage.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
-await MerkleInclusion.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
-await SigningPolicyFold.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
+await TransferChain.compile(cacheOptions);
+await RelayMessage.compile(cacheOptions);
+await MerkleInclusion.compile(cacheOptions);
+await SigningPolicyFold.compile(cacheOptions);
 // FdcLeaf before the contracts: they verify proofs that chain up to it.
-await FdcLeaf.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
-await FdcAttestation.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
-await MinaPortBridge.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
+await FdcLeaf.compile(cacheOptions);
+await FdcAttestation.compile(cacheOptions);
+await MinaPortBridge.compile(cacheOptions);
 // The asset rail. Skipped entirely when no port is configured, because these
 // two add ~30s to a cold start and a MINA-only deployment never uses them.
 // The chain program is shared with the escrow, so it is already compiled.
 if (process.env.MINA_ASSET_PORTS) {
-  await AssetPort.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
-  await FungibleToken.compile(CACHE_DIR ? { cache: Cache.FileSystem(CACHE_DIR) } : {});
+  await AssetPort.compile(cacheOptions);
+  await FungibleToken.compile(cacheOptions);
 }
 port.postMessage({ type: 'ready', compileMs: Date.now() - compileStart } satisfies Ready);
 

@@ -8,7 +8,8 @@
     "start": "node --env-file=.env --import tsx src/server.ts",
     "migrate": "node --env-file=.env --import tsx src/migrate.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "warm-cache": "node --max-old-space-size=12288 dist/src/prover/warmCache.js"
   },
   "dependencies": {
     "@minaport/mina-contracts": "workspace:*",

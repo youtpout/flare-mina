@@ -74,8 +74,15 @@ function start(lane: Lane): Promise<void> {
   const entry = join(here, here.includes('/src/') ? 'worker.ts' : 'worker.js');
 
   prover.ready = new Promise<void>((resolve, reject) => {
+    // Reading FdcLeaf's proving key back needs room for 2.6 GB plus what the
+    // decoder allocates on top; the default heap dies with `Reached heap limit`
+    // partway through the restore, which reads as a mysterious silent exit.
+    const heapMb = process.env.PROVER_HEAP_MB ?? '12288';
     const child = fork(entry, [], {
-      execArgv: entry.endsWith('.ts') ? ['--import', 'tsx'] : [],
+      execArgv: [
+        `--max-old-space-size=${heapMb}`,
+        ...(entry.endsWith('.ts') ? ['--import', 'tsx'] : []),
+      ],
       env: process.env,
     });
     prover.child = child;
