@@ -6,6 +6,7 @@ import {
   markLocksPublished,
   mintableLocks,
   recordLock,
+  transferIndexOf,
   transferRange,
 } from './db/index.js';
 import { mintLock } from './prover/index.js';
@@ -141,6 +142,17 @@ async function mint(): Promise<void> {
         break;
       }
       if (range.length === 0) break;
+
+      // A row can outlive the mint that settled it: the transaction lands, and
+      // the process dies before recording it — which a restart does routinely.
+      // The port's cursor is the truth, so a claim it has already moved past is
+      // minted, and retrying it forever only hides real failures.
+      const cursorIndex = await transferIndexOf(now.processed);
+      if (cursorIndex !== null && BigInt(row.claim_id) <= cursorIndex) {
+        await markLockMinted(row.id, row.mina_tx_hash ?? 'recovered');
+        console.log(`${asset.symbol} claim ${row.claim_id} was already minted; catching the row up`);
+        continue;
+      }
 
       try {
         await markLockMinting(row.id);
