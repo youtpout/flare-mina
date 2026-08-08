@@ -120,8 +120,8 @@ const MINA_FEE_BUFFER = 200_000_000n; // 0.2 MINA
  */
 const LOCK_STAGE: Record<string, { tag: string; detail: string }> = {
   seen: {
-    tag: 'waiting for FDC',
-    detail: 'locked on Flare; its chain head reaches Mina at the next publication',
+    tag: 'awaiting publication',
+    detail: 'locked on Flare; the head reaches this asset’s port on the next publication',
   },
   published: {
     tag: 'proving',
@@ -134,7 +134,7 @@ const LOCK_STAGE: Record<string, { tag: string; detail: string }> = {
 
 const WITHDRAWAL_STAGE: Record<string, { tag: string; detail: string }> = {
   seen: {
-    tag: 'waiting for FDC',
+    tag: 'awaiting publication',
     detail: 'the burn is on Flare; its chain state reaches Mina at the next publication',
   },
   published: {

@@ -420,7 +420,42 @@ async function proveSigningPolicy(rawCalls: unknown[], rawKeys: unknown[]) {
  * Levels prove independently and are merged left, because a path is three or
  * four deep at most — a balanced tree would only pay off well past that.
  */
+/**
+ * The last attestation proved, and what it was proved from.
+ *
+ * One publication cycle pushes the same head into the escrow and every asset
+ * port, one after another. Each of those used to rebuild the whole chain —
+ * signing policy, inclusion, `FdcLeaf` — so the 43-second keccak was paid four
+ * times for one round. The shared chain saved four FDC *attestations*; this is
+ * what saves the four proving passes that went with them.
+ *
+ * A single entry, not a map: the reuse is a burst within one tick, and a map
+ * would hold a multi-hundred-megabyte proof alive for no one.
+ *
+ * Keyed on the response and its path. The policy proof also depends on `calls`
+ * and `keys`, but those come from the round that response sits in — the same
+ * response under a different validator set is not a thing a round can produce.
+ */
+let lastAttestation: { key: string; value: Awaited<ReturnType<typeof buildAttestation>> } | undefined;
+
 async function proveAttestation(
+  responseHex: string,
+  siblings: string[],
+  calls: unknown[],
+  keys: unknown[],
+) {
+  const key = `${responseHex}|${siblings.join(',')}`;
+  if (lastAttestation?.key === key) {
+    console.log('  reusing the attestation proof from this round');
+    return lastAttestation.value;
+  }
+
+  const value = await buildAttestation(responseHex, siblings, calls, keys);
+  lastAttestation = { key, value };
+  return value;
+}
+
+async function buildAttestation(
   responseHex: string,
   siblings: string[],
   calls: unknown[],
