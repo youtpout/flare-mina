@@ -14,7 +14,12 @@ import {PausableUpgradeable} from
 // no initialiser and an uninitialised slot reads as "not entered".
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+
 import {MinaAddressLib} from "./libraries/MinaAddress.sol";
+import {MinaSchnorr} from "./libraries/MinaSchnorr.sol";
+import {SignaturePurpose} from "./libraries/SignaturePurpose.sol";
 import {BridgeWrapper} from "./BridgeWrapper.sol";
 import {TransferChain} from "./TransferChain.sol";
 
@@ -82,8 +87,26 @@ contract AssetVault is Ownable2StepUpgradeable, PausableUpgradeable, ReentrancyG
     /// @notice The shared chain every lock is folded into.
     TransferChain public transferChain;
 
+    /// @notice Signs that a burn of the wrapped asset landed on Mina.
+    ///
+    /// @dev Deliberately not the owner: this key causes releases, so a
+    /// compromised owner cannot also be the attestor. Mirrors the inbound rail.
+    address public burnAttestor;
+
+    /// @notice Largest single attested release, per token, in that token's own
+    /// units. Zero refuses everything, which is the default — the owner opts a
+    /// token into this path explicitly.
+    mapping(address => uint256) public maxAttestedReleaseOf;
+
+    /// @notice Release intents already spent, keyed by their digest.
+    mapping(bytes32 => bool) public consumedIntents;
+
     /// @dev Reserved so future versions can add state behind the proxy.
-    uint256[43] private __gap;
+    uint256[40] private __gap;
+
+    /// @dev Domain separator for the return leg. Distinct from the deposit
+    /// domain so an attestation for one can never settle the other.
+    bytes32 public constant RELEASE_INTENT_DOMAIN = keccak256("FlareXMina.ReleaseIntent.v1");
 
     /// @notice A lock, as this vault saw it. Informational: what Mina proves
     /// against is {TransferChain-Transfer}, and `claimId` here is that chain's
@@ -102,6 +125,15 @@ contract AssetVault is Ownable2StepUpgradeable, PausableUpgradeable, ReentrancyG
         uint256 indexed claimId, address indexed token, address indexed recipient, uint256 amount
     );
     event TokenAccepted(address indexed token, bool accepted);
+    event BurnAttestorUpdated(address indexed previous, address indexed attestor);
+    event AttestedReleaseLimitUpdated(address indexed token, uint256 maxPerRelease);
+    event ReleasedFromSignature(
+        bytes32 indexed minaSender,
+        address indexed token,
+        address indexed recipient,
+        uint64 nonce,
+        uint256 amount
+    );
     event NativeRouteSet(address wnat, address wrapper);
     event TransferChainSet(address indexed chain);
 
@@ -115,6 +147,12 @@ contract AssetVault is Ownable2StepUpgradeable, PausableUpgradeable, ReentrancyG
     error NativeRouteNotSet();
     error NativeTransferFailed();
     error TransferChainNotSet();
+    error AttestorNotSet();
+    error InvalidAttestation();
+    error InvalidMinaSignature();
+    error IntentAlreadyConsumed(bytes32 intent);
+    error Expired(uint64 expiry, uint256 nowSeconds);
+    error ReleaseAboveCap(address token, uint256 amount, uint256 cap);
 
     constructor() {
         _disableInitializers();
@@ -282,6 +320,116 @@ contract AssetVault is Ownable2StepUpgradeable, PausableUpgradeable, ReentrancyG
         if (!ok) revert NativeTransferFailed();
 
         emit AssetReleased(claimId, token, recipient, amount);
+    }
+
+    // -------------------------------------------------------------------------
+    // Mina -> Flare: the return leg
+    // -------------------------------------------------------------------------
+
+    /// @notice Point attested releases at a key, or clear it.
+    function setBurnAttestor(address attestor) external onlyOwner {
+        emit BurnAttestorUpdated(burnAttestor, attestor);
+        burnAttestor = attestor;
+    }
+
+    /// @notice Opt a token into the attested return leg, and bound it.
+    /// @dev The relayer applies its own policy, but that is an honest attestor
+    /// restraining itself and is worth nothing against a compromised key.
+    function setMaxAttestedRelease(address token, uint256 maxPerRelease) external onlyOwner {
+        if (token == address(0)) revert ZeroAddress();
+        maxAttestedReleaseOf[token] = maxPerRelease;
+        emit AttestedReleaseLimitUpdated(token, maxPerRelease);
+    }
+
+    /// @notice Digest a Mina holder signs to direct their burn back to Flare.
+    /// @dev Field elements, because that is what Mina signs. Same layout as the
+    /// deposit intent, with its own purpose tag first so the two can never
+    /// collide.
+    function releaseIntentFields(
+        address token,
+        address recipient,
+        uint256 amount,
+        uint64 nonce,
+        uint64 expiry
+    ) public view returns (uint256[] memory fields) {
+        bytes32 action = keccak256(abi.encode(RELEASE_INTENT_DOMAIN, token, recipient, amount));
+
+        fields = new uint256[](7);
+        fields[0] = SignaturePurpose.WITHDRAWAL_INTENT;
+        fields[1] = block.chainid;
+        fields[2] = uint256(uint160(address(this)));
+        fields[3] = uint256(uint128(bytes16(action)));
+        fields[4] = uint256(uint128(uint256(action)));
+        fields[5] = nonce;
+        fields[6] = expiry;
+    }
+
+    /// @notice Release a locked asset against a burn on Mina, on two
+    /// independent authorisations that neither party can supply alone.
+    ///
+    /// @dev HACKATHON TRUST ASSUMPTION, the same one the inbound rail takes:
+    /// the attestor asserts that the burn happened rather than proving it. The
+    /// holder's Schnorr signature names the token, the recipient and the amount,
+    /// so a dishonest attestor can only refuse to sign, or sign for a burn that
+    /// never happened — it cannot redirect or resize this one. The per-token
+    /// ceiling bounds what that costs.
+    ///
+    /// The opposite direction takes no such shortcut: Flare -> Mina is proven
+    /// end to end against the validator set, through {TransferChain}.
+    function releaseWithMinaSignature(
+        MinaSchnorr.PublicKey calldata publicKey,
+        MinaSchnorr.Signature calldata signature,
+        address token,
+        address recipient,
+        uint256 amount,
+        uint64 nonce,
+        uint64 expiry,
+        bytes calldata attestation
+    ) external whenNotPaused nonReentrant {
+        if (amount == 0) revert ZeroAmount();
+        if (recipient == address(0)) revert ZeroAddress();
+        if (expiry < block.timestamp) revert Expired(expiry, block.timestamp);
+        if (burnAttestor == address(0)) revert AttestorNotSet();
+
+        uint256 cap = maxAttestedReleaseOf[token];
+        if (amount > cap) revert ReleaseAboveCap(token, amount, cap);
+
+        uint256 locked = lockedOf[token];
+        if (locked < amount) revert InsufficientLocked(token, locked, amount);
+
+        bytes32 minaSender =
+            bytes32(MinaAddressLib.raw(MinaAddressLib.pack(publicKey.x, publicKey.isOdd)));
+
+        bytes32 intent = keccak256(
+            abi.encode(
+                RELEASE_INTENT_DOMAIN, block.chainid, minaSender, token, recipient, amount, nonce
+            )
+        );
+        if (consumedIntents[intent]) revert IntentAlreadyConsumed(intent);
+
+        // The attestor confirms this exact intent — it signs the digest, so it
+        // cannot agree to one burn and have another released.
+        address signer =
+            ECDSA.recover(MessageHashUtils.toEthSignedMessageHash(intent), attestation);
+        if (signer != burnAttestor) revert InvalidAttestation();
+
+        // The holder's own authorisation, verified against Pallas on chain.
+        if (
+            !MinaSchnorr.verify(
+                publicKey,
+                signature,
+                releaseIntentFields(token, recipient, amount, nonce, expiry),
+                false
+            )
+        ) revert InvalidMinaSignature();
+
+        // Spend and debit before transferring: a token with a transfer hook must
+        // never re-enter and see the old figures.
+        consumedIntents[intent] = true;
+        lockedOf[token] = locked - amount;
+        IERC20(token).safeTransfer(recipient, amount);
+
+        emit ReleasedFromSignature(minaSender, token, recipient, nonce, amount);
     }
 
     /// @notice True when the vault holds at least what it says is locked.

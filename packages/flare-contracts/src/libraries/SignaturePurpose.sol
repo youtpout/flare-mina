@@ -33,8 +33,8 @@ library SignaturePurpose {
     /// @notice `MinaPortBridge.claimWithMinaSignature` — a deposit intent.
     uint256 internal constant DEPOSIT_INTENT = 3;
 
-    /// @notice Reserved for the withdrawal path, so it cannot be added later
-    /// with a value that collides with an existing one.
+    /// @notice `AssetVault.releaseWithMinaSignature` — a burn on Mina directed
+    /// back to a Flare address.
     uint256 internal constant WITHDRAWAL_INTENT = 4;
 
     /// @notice Reserved for binding an EVM controller to a Mina key.
