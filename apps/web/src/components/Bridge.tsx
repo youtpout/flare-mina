@@ -197,11 +197,12 @@ export function Bridge({ session }: { session: Session }) {
         status: string;
         flareTxHash: string;
         minaTxHash: string | null;
+        createdAt: string;
       }[]
     | null
   >(null);
   const [withdrawals, setWithdrawals] = useState<
-    { nonce: string; amountNanomina: string; status: string }[] | null
+    { nonce: string; amountNanomina: string; status: string; createdAt: string }[] | null
   >(null);
   /** The return leg for wrapped assets: a burn on Mina, released on Flare. */
   const [releases, setReleases] = useState<Release[] | null>(null);
@@ -209,6 +210,7 @@ export function Bridge({ session }: { session: Session }) {
   const [releaseError, setReleaseError] = useState<string | null>(null);
   const [claimingRelease, setClaimingRelease] = useState<string | null>(null);
   const [transferPage, setTransferPage] = useState(0);
+  const [outboundPage, setOutboundPage] = useState(0);
   const [unwrapping, setUnwrapping] = useState<string | null>(null);
 
   /**
@@ -524,6 +526,40 @@ export function Bridge({ session }: { session: Session }) {
               at: release.created_at ?? '',
             })),
         ].sort((x, y) => (x.at < y.at ? 1 : -1));
+
+  /**
+   * The other direction, also as one list.
+   *
+   * Burns and locks were rendered as two blocks, so every MINA row sat below
+   * every asset row whatever their dates — which reads as an ordering rather
+   * than as two lists, and a wrong one.
+   */
+  const outboundTransfers =
+    withdrawals === null && locks === null
+      ? null
+      : [
+          ...(locks ?? []).map((lock) => ({
+            kind: 'lock' as const,
+            lock,
+            label:
+              BRIDGE_ASSETS.find((a) => a.address.toLowerCase() === lock.token.toLowerCase()) ??
+              // The vault keys C2FLR's chain by its wrapper, so the address in
+              // the event is the wrapper's, not the one the asset list carries.
+              BRIDGE_ASSETS.find((a) => a.native === true)!,
+            at: lock.createdAt ?? '',
+          })),
+          ...(withdrawals ?? []).map((withdrawal) => ({
+            kind: 'withdrawal' as const,
+            withdrawal,
+            at: withdrawal.createdAt ?? '',
+          })),
+        ].sort((x, y) => (x.at < y.at ? 1 : -1));
+
+  const outboundPageCount = Math.max(1, Math.ceil((outboundTransfers?.length ?? 0) / PAGE_SIZE));
+  const outboundRows = (outboundTransfers ?? []).slice(
+    Math.min(outboundPage, outboundPageCount - 1) * PAGE_SIZE,
+    Math.min(outboundPage, outboundPageCount - 1) * PAGE_SIZE + PAGE_SIZE,
+  );
 
   const pageCount = Math.max(1, Math.ceil((transfers?.length ?? 0) / PAGE_SIZE));
   const page = Math.min(transferPage, pageCount - 1);
@@ -1246,62 +1282,82 @@ export function Bridge({ session }: { session: Session }) {
 
         {withdrawals === null && locks === null && <p className="muted small">Reading…</p>}
 
-        {withdrawals?.length === 0 && locks?.length === 0 && (
+        {outboundTransfers?.length === 0 && (
           <p className="muted small">
             Nothing yet. A burn or a lock appears here once the relayer has seen the event on
             Flare.
           </p>
         )}
 
-        {/* Locked assets, which mint a wrapped token rather than releasing MINA. */}
-        {locks?.map((l) => {
-          const asset = BRIDGE_ASSETS.find(
-            (a) => a.address.toLowerCase() === l.token.toLowerCase(),
-          );
-          // The vault keys C2FLR's chain by its wrapper, so the address in the
-          // event is the wrapper's, not the one the asset list carries.
-          const label = asset ?? BRIDGE_ASSETS.find((a) => a.native === true)!;
-          return (
-            <div className="row" key={`${l.token}-${l.claimId}`}>
+        {outboundRows.map((t) =>
+          t.kind === 'lock' ? (
+            <div className="row" key={`l${t.lock.token}-${t.lock.claimId}`}>
               <span>
                 <span className="mono small">
-                  {formatUnits(BigInt(l.amount), label.minaDecimals)} {label.minaSymbol}
+                  {formatUnits(BigInt(t.lock.amount), t.label.minaDecimals)} {t.label.minaSymbol}
                 </span>
                 <span className="muted small">
                   {' · '}
-                  {LOCK_STAGE[l.status]?.detail ?? l.status}
+                  {LOCK_STAGE[t.lock.status]?.detail ?? t.lock.status}
                 </span>
               </span>
               <span
                 className={`tag ${
-                  l.status === 'minted' ? 'ok' : l.status === 'failed' ? 'warn' : ''
+                  t.lock.status === 'minted' ? 'ok' : t.lock.status === 'failed' ? 'warn' : ''
                 }`}
               >
-                {LOCK_STAGE[l.status]?.tag ?? l.status}
+                {LOCK_STAGE[t.lock.status]?.tag ?? t.lock.status}
               </span>
             </div>
-          );
-        })}
-
-        {withdrawals !== null &&
-          withdrawals.map((w) => (
-            <div className="row" key={w.nonce}>
+          ) : (
+            <div className="row" key={`w${t.withdrawal.nonce}`}>
               <span>
-                <span className="mono small">{Number(w.amountNanomina) / 1e9} MINA</span>
+                <span className="mono small">
+                  {Number(t.withdrawal.amountNanomina) / 1e9} MINA
+                </span>
                 <span className="muted small">
                   {' · '}
-                  {WITHDRAWAL_STAGE[w.status]?.detail ?? w.status}
+                  {WITHDRAWAL_STAGE[t.withdrawal.status]?.detail ?? t.withdrawal.status}
                 </span>
               </span>
               <span
                 className={`tag ${
-                  w.status === 'released' ? 'ok' : w.status === 'failed' ? 'warn' : ''
+                  t.withdrawal.status === 'released'
+                    ? 'ok'
+                    : t.withdrawal.status === 'failed'
+                      ? 'warn'
+                      : ''
                 }`}
               >
-                {WITHDRAWAL_STAGE[w.status]?.tag ?? w.status}
+                {WITHDRAWAL_STAGE[t.withdrawal.status]?.tag ?? t.withdrawal.status}
               </span>
             </div>
-          ))}
+          ),
+        )}
+
+        {outboundPageCount > 1 && (
+          <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+            <span className="small muted" style={{ marginRight: 'auto' }}>
+              {outboundPage * PAGE_SIZE + 1}–
+              {Math.min((outboundPage + 1) * PAGE_SIZE, outboundTransfers?.length ?? 0)} of{' '}
+              {outboundTransfers?.length ?? 0}
+            </span>
+            <button
+              className="ghost"
+              onClick={() => setOutboundPage((p) => Math.max(0, p - 1))}
+              disabled={outboundPage === 0}
+            >
+              Previous
+            </button>
+            <button
+              className="ghost"
+              onClick={() => setOutboundPage((p) => Math.min(outboundPageCount - 1, p + 1))}
+              disabled={outboundPage >= outboundPageCount - 1}
+            >
+              Next
+            </button>
+          </div>
+        )}
       </div>
       </>
       )}

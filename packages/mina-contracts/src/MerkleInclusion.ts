@@ -27,8 +27,7 @@ export class PathSegment extends Struct({
    * node, and {FdcLeaf} requires `top` to equal the root `SigningPolicyFold`
    * proved was signed — so stopping early would mean an internal node *being*
    * the signed root, which is a collision. The security is in the signed root,
-   * not here. Carried because it costs nothing and a consumer that ever wants
-   * a specific depth should not have to reconstruct it.
+   * not here.
    */
   height: UInt32,
 }) {}
@@ -67,75 +66,26 @@ function sortsBefore(a: Bytes32, b: Bytes32) {
     .or(aHi.equals(bHi).and(aLo.lessThan(bLo)));
 }
 
-/**
- * One level up: sort the pair, hash it.
- *
- * Shared by {MerkleInclusion.level} and {MerkleInclusion.levels4} so the sort
- * convention has one definition. It had two once, and they disagreed.
- */
-function climb(node: Bytes32, sibling: Bytes32): Bytes32 {
-  // Sorted, so the path carries no side information — which is also why a
-  // sibling cannot be replayed on the wrong side to reach another root.
-  const nodeFirst = sortsBefore(node, sibling);
-  const left = Provable.if(nodeFirst, Bytes32, node, sibling);
-  const right = Provable.if(nodeFirst, Bytes32, sibling, node);
-
-  return Bytes32.from(Keccak.ethereum(Bytes64.from([...left.bytes, ...right.bytes])).bytes);
-}
-
 export const MerkleInclusion = ZkProgram({
   name: 'flare-merkle-inclusion',
   publicOutput: PathSegment,
 
   methods: {
-    /**
-     * One level. For the remainder when a path is not a multiple of four.
-     *
-     * Independent of every other, so a whole path still proves in parallel.
-     */
+    /** One level. Independent of every other, so a whole path proves at once. */
     level: {
       privateInputs: [Bytes32, Bytes32],
       async method(node: Bytes32, sibling: Bytes32) {
-        return {
-          publicOutput: new PathSegment({
-            bottom: node,
-            top: climb(node, sibling),
-            height: UInt32.one,
-          }),
-        };
-      },
-    },
+        // Sorted, so the path carries no side information — which is also why a
+        // sibling cannot be replayed on the wrong side to reach another root.
+        const nodeFirst = sortsBefore(node, sibling);
+        const left = Provable.if(nodeFirst, Bytes32, node, sibling);
+        const right = Provable.if(nodeFirst, Bytes32, sibling, node);
 
-    /**
-     * Four levels at once, which is what a proof should carry.
-     *
-     * A level is 14,733 rows in a circuit that holds 65,536, so one per proof
-     * left 78% of it empty while paying a full Pickles proof for it — and a
-     * depth-8 path then cost 8 levels plus 7 merges, fifteen proofs to climb
-     * eight hashes. Four fills the circuit without spilling into a second
-     * chunk, and turns that path into two proofs and one merge.
-     *
-     * Fixed at four rather than variable: a length flag would need a
-     * `Provable.if` per level and would make a partial climb representable,
-     * which is exactly what a fixed shape rules out by construction.
-     */
-    levels4: {
-      privateInputs: [Bytes32, Bytes32, Bytes32, Bytes32, Bytes32],
-      async method(
-        node: Bytes32,
-        first: Bytes32,
-        second: Bytes32,
-        third: Bytes32,
-        fourth: Bytes32,
-      ) {
-        let top = climb(node, first);
-        top = climb(top, second);
-        top = climb(top, third);
-        top = climb(top, fourth);
+        const parent = Bytes32.from(
+          Keccak.ethereum(Bytes64.from([...left.bytes, ...right.bytes])).bytes,
+        );
 
-        return {
-          publicOutput: new PathSegment({ bottom: node, top, height: UInt32.from(4) }),
-        };
+        return { publicOutput: new PathSegment({ bottom: node, top: parent, height: UInt32.one }) };
       },
     },
 

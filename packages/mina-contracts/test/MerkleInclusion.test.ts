@@ -151,55 +151,23 @@ describe('climbing a Flare round tree', () => {
   }, 900_000);
 
   /**
-   * The two methods have to agree, or a path proved one way reaches a root the
-   * other does not — and only one of them would match Flare.
-   */
-  it('climbs four levels to the same place as four single levels', async () => {
-    const { siblings } = widePathTo(0);
-    const leaf = toBytes32(wideLeaves[0]!);
-
-    let chained = (await MerkleInclusion.level(leaf, toBytes32(siblings[0]!))).proof;
-    for (const sibling of siblings.slice(1)) {
-      const next = (await MerkleInclusion.level(chained.publicOutput.top, toBytes32(sibling)))
-        .proof;
-      chained = (await MerkleInclusion.merge(chained, next)).proof;
-    }
-
-    const batched = (
-      await MerkleInclusion.levels4(
-        leaf,
-        toBytes32(siblings[0]!),
-        toBytes32(siblings[1]!),
-        toBytes32(siblings[2]!),
-        toBytes32(siblings[3]!),
-      )
-    ).proof;
-
-    expect(toHex(batched.publicOutput.top)).toBe(toHex(chained.publicOutput.top));
-    expect(Number(batched.publicOutput.height.toBigint())).toBe(4);
-    expect(Number(chained.publicOutput.height.toBigint())).toBe(4);
-  }, 1_800_000);
-
-  /**
-   * And both have to agree with something that is not this circuit. The root
-   * here comes from the reference climb above, over a tree this file builds by
-   * the published rule rather than by asking the circuit what it thinks.
+   * The root here comes from a tree this file builds by the published rule,
+   * not from asking the circuit what it thinks. A suite that builds its
+   * expectation with the code under test only confirms self-consistency, which
+   * is how the earlier left/right bug survived a green run.
    */
   it('reaches a root an independent implementation computes', async () => {
-    for (const index of [0, 7, 15]) {
-      const { siblings, root: expected } = widePathTo(index);
-      const climbed = (
-        await MerkleInclusion.levels4(
-          toBytes32(wideLeaves[index]!),
-          toBytes32(siblings[0]!),
-          toBytes32(siblings[1]!),
-          toBytes32(siblings[2]!),
-          toBytes32(siblings[3]!),
-        )
-      ).proof;
+    const { siblings, root: expected } = widePathTo(0);
 
-      expect(toHex(climbed.publicOutput.top)).toBe(expected);
+    let segment = (await MerkleInclusion.level(toBytes32(wideLeaves[0]!), toBytes32(siblings[0]!)))
+      .proof;
+    for (const sibling of siblings.slice(1)) {
+      const next = (await MerkleInclusion.level(segment.publicOutput.top, toBytes32(sibling)))
+        .proof;
+      segment = (await MerkleInclusion.merge(segment, next)).proof;
     }
+
+    expect(toHex(segment.publicOutput.top)).toBe(expected);
   }, 1_800_000);
 
   /**

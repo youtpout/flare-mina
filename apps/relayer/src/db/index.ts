@@ -155,6 +155,7 @@ export type WithdrawalRow = {
   mina_tx_hash: string | null;
   status: 'pending' | 'released' | 'failed';
   reason: string | null;
+  created_at: string;
 };
 
 /**
@@ -280,6 +281,7 @@ export type LockRow = {
   status: 'seen' | 'published' | 'minting' | 'minted' | 'failed';
   reason: string | null;
   new_lock_state: string | null;
+  created_at: string;
 };
 
 /**

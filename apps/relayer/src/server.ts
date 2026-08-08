@@ -462,6 +462,8 @@ app.get('/locks/:recipient', async (req, res) => {
         flareTxHash: r.flare_tx_hash,
         minaTxHash: r.mina_tx_hash,
         reason: r.reason,
+        // Both rails share one list in the UI, which needs a common ordering.
+        createdAt: r.created_at,
       })),
     });
   } catch (e) {
@@ -481,6 +483,7 @@ app.get('/withdrawals/:recipient', async (req, res) => {
         flareTxHash: r.flare_tx_hash,
         minaTxHash: r.mina_tx_hash,
         reason: r.reason,
+        createdAt: r.created_at,
       })),
     });
   } catch (e) {
