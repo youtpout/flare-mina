@@ -54,6 +54,17 @@ type Release = {
   attestation: string | null;
   mina_tx_hash: string | null;
   flare_tx_hash: string | null;
+  created_at: string;
+};
+
+/** What each release status means to someone waiting on their asset. */
+const RELEASE_LABEL: Record<Release['status'], string> = {
+  built: 'not sent',
+  submitted: 'burning on Mina',
+  attested: 'ready to claim',
+  released: 'released',
+  failed: 'failed',
+  aborted: 'abandoned',
 };
 
 type Deposit = {
@@ -67,6 +78,7 @@ type Deposit = {
   /** The attestor's half. Useless on its own — the depositor still has to sign. */
   attestation: string | null;
   reason: string | null;
+  createdAt: string;
 };
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8787';
@@ -83,6 +95,9 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8787';
  * one timed-out token stayed blank forever. Half a minute is often enough to
  * recover, and rare enough not to provoke the stalls in the first place.
  */
+/** Rows per page in the transfer list. */
+const PAGE_SIZE = 10;
+
 const BALANCE_REFRESH_MS = 30_000;
 
 const MINA_FEE_BUFFER = 200_000_000n; // 0.2 MINA
@@ -192,6 +207,7 @@ export function Bridge({ session }: { session: Session }) {
   const [burningAsset, setBurningAsset] = useState<string | null>(null);
   const [releaseError, setReleaseError] = useState<string | null>(null);
   const [claimingRelease, setClaimingRelease] = useState<string | null>(null);
+  const [transferPage, setTransferPage] = useState(0);
 
   /**
    * What the balance queries actually depend on.
@@ -472,6 +488,44 @@ export function Bridge({ session }: { session: Session }) {
     : 1n;
   const outboundValue =
     outboundAmount === null ? null : (outboundAmount / outboundScale) * outboundScale;
+
+  /**
+   * Both rails to Flare, newest first.
+   *
+   * One list, because a user does not think in rails: they sent something to
+   * Flare and want to know where it is. Which contract it went through is our
+   * problem, not theirs.
+   *
+   * Rows never signed on Mina are left out — a deposit or burn that was built
+   * and abandoned is not a transfer, and listing it as one makes an idle bridge
+   * look like a failing one.
+   */
+  const transfers =
+    deposits === null && releases === null
+      ? null
+      : [
+          ...(deposits ?? [])
+            .filter((d) => d.status !== 'built' && d.status !== 'aborted')
+            .map((deposit) => ({
+              kind: 'deposit' as const,
+              deposit,
+              at: deposit.createdAt ?? '',
+            })),
+          ...(releases ?? [])
+            .filter((r) => r.status !== 'built' && r.status !== 'aborted')
+            .map((release) => ({
+              kind: 'release' as const,
+              release,
+              asset: INBOUND_ASSETS.find(
+                (a) => a.flareToken?.toLowerCase() === release.token.toLowerCase(),
+              ),
+              at: release.created_at ?? '',
+            })),
+        ].sort((x, y) => (x.at < y.at ? 1 : -1));
+
+  const pageCount = Math.max(1, Math.ceil((transfers?.length ?? 0) / PAGE_SIZE));
+  const page = Math.min(transferPage, pageCount - 1);
+  const pageRows = (transfers ?? []).slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
 
   const wanted = nanomina(amount);
 
@@ -912,104 +966,121 @@ export function Bridge({ session }: { session: Session }) {
         {releaseError !== null && <p className="status err">{releaseError}</p>}
       </div>
 
-      {isWrapped && (
-        <div className="panel">
-          <h2>Your burns</h2>
-          {releases === null && <p className="muted small">Loading…</p>}
-          {releases?.length === 0 && (
-            <p className="muted small">
-              Nothing yet. Burn a wrapped asset above and it will appear here.
-            </p>
-          )}
-          {releases?.map((r) => {
-            const asset = INBOUND_ASSETS.find(
-              (a) => a.flareToken?.toLowerCase() === r.token.toLowerCase(),
-            );
-            return (
-              <div className="row" key={r.id}>
-                <span className="small">
-                  {formatUnits(BigInt(r.amount), asset?.decimals ?? 9)}{' '}
-                  {asset?.flareSymbol ?? 'token'}
-                  <span className="muted"> · {r.status}</span>
-                </span>
-                <span style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                  {r.flare_tx_hash && (
-                    <a
-                      className="mono small"
-                      href={explorerTx(r.flare_tx_hash)}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Flare
-                    </a>
-                  )}
-                  {r.status === 'attested' && (
-                    <button
-                      className="primary"
-                      disabled={claimingRelease === r.id}
-                      onClick={() => void claimRelease(r)}
-                    >
-                      {claimingRelease === r.id ? 'Signing…' : 'Claim'}
-                    </button>
-                  )}
-                  {r.status === 'submitted' && (
-                    <span className="small muted">waiting for the burn to land</span>
-                  )}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
       <div className="panel">
-        <h2>Your deposits</h2>
+        <h2>Your transfers to Flare</h2>
 
         {error && (
           <p className="status err">
-            Cannot reach the attestor API ({error}). Deposits already on-chain are unaffected — the
-            escrow does not depend on this service being up.
+            Cannot reach the attestor API ({error}). Transfers already on-chain are unaffected —
+            neither the escrow nor the vault depends on this service being up.
           </p>
         )}
 
-        {!deposits && !error && <p className="muted small">Loading…</p>}
-        {deposits?.length === 0 && (
-          <p className="muted small">Nothing yet. Send a payment above and it will appear here.</p>
+        {transfers === null && !error && <p className="muted small">Loading…</p>}
+        {transfers?.length === 0 && (
+          <p className="muted small">Nothing yet. Send something above and it will appear here.</p>
         )}
 
         {claimError && <p className="status err">{claimError}</p>}
+        {releaseError !== null && <p className="status err">{releaseError}</p>}
 
-        {deposits?.map((d) => (
-          <div className="row" key={d.id}>
-            <span>
-              <span className="mono">{(Number(d.amountNanomina) / 1e9).toFixed(4)} MINA</span>
-              {d.reason && <span className="muted small"> · {d.reason}</span>}
-            </span>
-            <span style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-              <span className={`tag ${d.status === 'claimed' ? 'ok' : d.status === 'failed' ? 'warn' : ''}`}>
-                {LABEL[d.status]}
+        {pageRows.map((t) =>
+          t.kind === 'deposit' ? (
+            <div className="row" key={`d${t.deposit.id}`}>
+              <span>
+                <span className="mono">
+                  {(Number(t.deposit.amountNanomina) / 1e9).toFixed(4)} MINA
+                </span>
+                {t.deposit.reason && <span className="muted small"> · {t.deposit.reason}</span>}
               </span>
-              {d.status === 'attested' && (
-                <button
-                  className="ghost"
-                  disabled={claiming === d.id || submitting.includes(d.id)}
-                  onClick={() => claim(d)}
+              <span style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                <span
+                  className={`tag ${t.deposit.status === 'claimed' ? 'ok' : t.deposit.status === 'failed' ? 'warn' : ''}`}
                 >
-                  {claiming === d.id
-                    ? 'Signing…'
-                    : submitting.includes(d.id)
-                      ? 'Confirming…'
-                      : 'Claim'}
-                </button>
-              )}
-              {d.flareTxHash && (
-                <a className="small" href={explorerTx(d.flareTxHash)} target="_blank" rel="noreferrer">
-                  tx
-                </a>
-              )}
+                  {LABEL[t.deposit.status]}
+                </span>
+                {t.deposit.status === 'attested' && (
+                  <button
+                    className="ghost"
+                    disabled={claiming === t.deposit.id || submitting.includes(t.deposit.id)}
+                    onClick={() => claim(t.deposit)}
+                  >
+                    {claiming === t.deposit.id
+                      ? 'Signing…'
+                      : submitting.includes(t.deposit.id)
+                        ? 'Confirming…'
+                        : 'Claim'}
+                  </button>
+                )}
+                {t.deposit.flareTxHash && (
+                  <a
+                    className="small"
+                    href={explorerTx(t.deposit.flareTxHash)}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    tx
+                  </a>
+                )}
+              </span>
+            </div>
+          ) : (
+            <div className="row" key={`r${t.release.id}`}>
+              <span className="mono">
+                {formatUnits(BigInt(t.release.amount), t.asset?.decimals ?? 9)}{' '}
+                {t.asset?.flareSymbol ?? 'token'}
+              </span>
+              <span style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                <span className={`tag ${t.release.status === 'released' ? 'ok' : ''}`}>
+                  {RELEASE_LABEL[t.release.status]}
+                </span>
+                {t.release.status === 'attested' && (
+                  <button
+                    className="ghost"
+                    disabled={claimingRelease === t.release.id}
+                    onClick={() => void claimRelease(t.release)}
+                  >
+                    {claimingRelease === t.release.id ? 'Signing…' : 'Claim'}
+                  </button>
+                )}
+                {t.release.flare_tx_hash && (
+                  <a
+                    className="small"
+                    href={explorerTx(t.release.flare_tx_hash)}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    tx
+                  </a>
+                )}
+              </span>
+            </div>
+          ),
+        )}
+
+        {pageCount > 1 && (
+          <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+            <span className="small muted" style={{ marginRight: 'auto' }}>
+              {page * PAGE_SIZE + 1}–
+              {Math.min((page + 1) * PAGE_SIZE, transfers?.length ?? 0)} of{' '}
+              {transfers?.length ?? 0}
             </span>
+            <button
+              className="ghost"
+              onClick={() => setTransferPage((p) => Math.max(0, p - 1))}
+              disabled={page === 0}
+            >
+              Previous
+            </button>
+            <button
+              className="ghost"
+              onClick={() => setTransferPage((p) => Math.min(pageCount - 1, p + 1))}
+              disabled={page >= pageCount - 1}
+            >
+              Next
+            </button>
           </div>
-        ))}
+        )}
       </div>
       </>
       )}

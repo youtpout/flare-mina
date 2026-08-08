@@ -41,6 +41,7 @@ export type DepositRow = {
   reason: string | null;
   attestation: string | null;
   flare_tx_hash: string | null;
+  created_at: string;
 };
 
 /**

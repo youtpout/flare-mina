@@ -420,6 +420,8 @@ app.get('/deposits/:minaSender', async (req, res) => {
         // signature, so withholding it would only break self-service claiming.
         attestation: r.attestation,
         reason: r.reason,
+        // Ordering the merged transfer list needs a timestamp on both rails.
+        createdAt: r.created_at,
       })),
     });
   } catch (e) {
