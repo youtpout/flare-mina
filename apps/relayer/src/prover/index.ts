@@ -165,6 +165,30 @@ export async function buildDeposit(request: DepositRequest): Promise<BuiltDeposi
 }
 
 /** How many requests are waiting or in flight. For the API to report a wait. */
+/**
+ * Build an unsigned burn of a wrapped asset.
+ *
+ * On the user lane, like a deposit: somebody is waiting at a wallet, and a
+ * background publication must not make them wait behind it.
+ */
+export async function buildBurn(request: {
+  sender: string;
+  token: string;
+  amount: bigint;
+}): Promise<BuiltDeposit> {
+  return submit(
+    'user',
+    (id) => ({
+      kind: 'burn',
+      id,
+      sender: request.sender,
+      token: request.token,
+      amount: request.amount.toString(),
+    }),
+    (built) => ({ transaction: built.transaction, provingMs: built.provingMs }),
+  );
+}
+
 export function queueDepth(): number {
   return provers.user.pending.size + provers.background.pending.size;
 }

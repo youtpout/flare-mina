@@ -479,3 +479,113 @@ export async function transferTxFor(head: bigint): Promise<string | null> {
   );
   return rows[0]?.flare_tx_hash ?? null;
 }
+
+// -----------------------------------------------------------------------------
+// The return leg for wrapped assets
+// -----------------------------------------------------------------------------
+
+export type ReleaseStatus =
+  | 'built'
+  | 'submitted'
+  | 'attested'
+  | 'released'
+  | 'failed'
+  | 'aborted';
+
+export type ReleaseRow = {
+  id: string;
+  mina_sender: string;
+  token: string;
+  recipient: string;
+  amount: string;
+  nonce: string;
+  mina_tx_hash: string | null;
+  flare_tx_hash: string | null;
+  attestation: string | null;
+  balance_before: string | null;
+  status: ReleaseStatus;
+  reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function recordRelease(input: {
+  minaSender: string;
+  token: string;
+  recipient: string;
+  amount: bigint;
+  nonce: bigint;
+  /** The holder's token balance now, against which the burn is later confirmed. */
+  balanceBefore: bigint;
+}): Promise<ReleaseRow> {
+  const { rows } = await pool.query<ReleaseRow>(
+    `INSERT INTO releases (mina_sender, token, recipient, amount, nonce, balance_before)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+    [
+      input.minaSender,
+      input.token.toLowerCase(),
+      input.recipient,
+      input.amount.toString(),
+      input.nonce.toString(),
+      input.balanceBefore.toString(),
+    ],
+  );
+  return rows[0]!;
+}
+
+/** Next nonce for a holder. Intents are keyed on it, so it must not repeat. */
+export async function nextReleaseNonceFor(minaSender: string): Promise<bigint> {
+  const { rows } = await pool.query<{ next: string }>(
+    `SELECT COALESCE(MAX(nonce), -1) + 1 AS next FROM releases WHERE mina_sender = $1`,
+    [minaSender],
+  );
+  return BigInt(rows[0]?.next ?? '0');
+}
+
+export async function markReleaseSubmitted(id: string, minaTxHash: string): Promise<void> {
+  await pool.query(
+    `UPDATE releases SET status = 'submitted', mina_tx_hash = $2, updated_at = now()
+      WHERE id = $1`,
+    [id, minaTxHash],
+  );
+}
+
+export async function markReleaseAttested(id: string, attestation: string): Promise<void> {
+  await pool.query(
+    `UPDATE releases SET status = 'attested', attestation = $2, updated_at = now()
+      WHERE id = $1`,
+    [id, attestation],
+  );
+}
+
+export async function markReleaseSettled(id: string, flareTxHash: string): Promise<void> {
+  await pool.query(
+    `UPDATE releases SET status = 'released', flare_tx_hash = $2, updated_at = now()
+      WHERE id = $1`,
+    [id, flareTxHash],
+  );
+}
+
+export async function markReleaseFailed(id: string, reason: string): Promise<void> {
+  await pool.query(
+    `UPDATE releases SET status = 'failed', reason = $2, updated_at = now() WHERE id = $1`,
+    [id, reason],
+  );
+}
+
+/** Burns the wallet has broadcast, awaiting confirmation on Mina. */
+export async function submittedReleases(): Promise<ReleaseRow[]> {
+  const { rows } = await pool.query<ReleaseRow>(
+    `SELECT * FROM releases WHERE status = 'submitted' ORDER BY created_at ASC LIMIT 20`,
+  );
+  return rows;
+}
+
+export async function releasesFor(recipient: string): Promise<ReleaseRow[]> {
+  const { rows } = await pool.query<ReleaseRow>(
+    `SELECT * FROM releases WHERE lower(recipient) = lower($1)
+      ORDER BY created_at DESC LIMIT 50`,
+    [recipient],
+  );
+  return rows;
+}

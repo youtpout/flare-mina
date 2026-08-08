@@ -164,8 +164,31 @@ type MintRequest = {
   range: ChainLink[];
 };
 
+/**
+ * Build an unsigned burn of a wrapped asset, for the holder to sign.
+ *
+ * The return leg's first step. Built here rather than in the page for the same
+ * reason a deposit is: burning through a token contract needs a proof, and
+ * shipping the prover to the browser is megabytes of wasm for a transaction the
+ * relayer can already produce — it compiles `FungibleToken` to mint.
+ *
+ * Nothing about it is trusted. The holder signs the account update that debits
+ * them, and the Flare side releases only against their own Schnorr signature
+ * over the token, recipient and amount.
+ */
+type BurnRequest = {
+  kind: 'burn';
+  id: number;
+  /** Holder, who signs and pays the fee. */
+  sender: string;
+  /** The `FungibleToken` zkApp. */
+  token: string;
+  amount: string;
+};
+
 type Request =
   | BuildRequest
+  | BurnRequest
   | ReleaseRequest
   | PublishRequest
   | PublishLockRequest
@@ -816,6 +839,41 @@ port.on('message', async (request: Request) => {
       port.postMessage({ type: 'released', id: request.id, hash: await handleRelease(request) });
     } catch (error) {
       forgetPredictions();
+      port.postMessage({
+        type: 'failed',
+        id: request.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
+  if (request.kind === 'burn') {
+    try {
+      const started = Date.now();
+      const sender = PublicKey.fromBase58(request.sender);
+      const token = new FungibleToken(PublicKey.fromBase58(request.token));
+
+      await fetchAccount({ publicKey: sender });
+      await fetchAccount({ publicKey: token.address });
+      // The holder's token account, which is what the burn debits. Without it
+      // the transaction is built against a balance o1js has not seen.
+      await fetchAccount({ publicKey: sender, tokenId: token.deriveTokenId() });
+
+      const tx = await Mina.transaction(
+        { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000) },
+        async () => {
+          await token.burn(sender, UInt64.from(BigInt(request.amount)));
+        },
+      );
+      await tx.prove();
+
+      port.postMessage({
+        type: 'built',
+        id: request.id,
+        transaction: tx.toJSON(),
+        provingMs: Date.now() - started,
+      } satisfies Built);
+    } catch (error) {
       port.postMessage({
         type: 'failed',
         id: request.id,

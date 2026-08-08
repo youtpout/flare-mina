@@ -14,11 +14,16 @@ import {
   migrate,
   nextNonceFor,
   locksFor,
+  markReleaseSettled,
+  markReleaseSubmitted,
+  nextReleaseNonceFor,
   pool,
   recordBuilt,
+  recordRelease,
+  releasesFor,
   withdrawalsFor,
 } from './db/index.js';
-import { buildDeposit } from './prover/index.js';
+import { buildBurn, buildDeposit } from './prover/index.js';
 import {
   deployAccount,
   submitBatch,
@@ -29,7 +34,8 @@ import { networkSnapshot } from './network.js';
 import { startWatcher } from './watcher.js';
 import { startTransfers } from './transfers.js';
 import { startWithdrawals } from './withdrawals.js';
-import { startAssets } from './assets.js';
+import { assets, startAssets } from './assets.js';
+import { startReleases } from './releases.js';
 
 /**
  * Attestor API.
@@ -45,6 +51,35 @@ import { startAssets } from './assets.js';
  */
 
 const PORT = Number(process.env.PORT ?? 8787);
+
+const MINA_GRAPHQL =
+  process.env.MINA_GRAPHQL ?? 'https://mina-devnet-graphql.aurowallet.com/graphql';
+
+/**
+ * A holder's balance of one wrapped asset.
+ *
+ * Keyed by token id: a token balance lives in its own account, so asking for
+ * the plain account returns their MINA instead — silently, and wrong.
+ */
+async function tokenBalance(publicKey: string, tokenId?: string): Promise<bigint | null> {
+  if (tokenId === undefined) return null;
+  try {
+    const res = await fetch(MINA_GRAPHQL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        query: `{ account(publicKey: "${publicKey}", token: "${tokenId}") { balance { total } } }`,
+      }),
+    });
+    const body = (await res.json()) as {
+      data?: { account?: { balance?: { total?: string } } };
+    };
+    const total = body.data?.account?.balance?.total;
+    return total === undefined ? null : BigInt(total);
+  } catch {
+    return null;
+  }
+}
 
 const app = express();
 
@@ -112,6 +147,101 @@ app.post('/deposits/build', async (req, res) => {
       transaction: built.transaction,
       provingMs: built.provingMs,
     });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/**
+ * Build an unsigned burn of a wrapped asset, the first step of the return leg.
+ *
+ * The holder's balance is read now and stored: a burn is confirmed later by
+ * that balance having fallen, which is what keeps this off an archive node.
+ */
+app.post('/releases/build', async (req, res) => {
+  const { sender, token, recipient, amount } = req.body ?? {};
+
+  if (typeof sender !== 'string' || !sender.startsWith('B62')) {
+    return res.status(400).json({ error: 'sender must be a Mina address' });
+  }
+  if (typeof recipient !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(recipient)) {
+    return res.status(400).json({ error: 'recipient must be a Flare address' });
+  }
+  const asset = assets().find((a) => a.flareToken.toLowerCase() === String(token).toLowerCase());
+  if (asset === undefined) return res.status(400).json({ error: 'unknown token' });
+
+  let value: bigint;
+  try {
+    value = BigInt(amount);
+  } catch {
+    return res.status(400).json({ error: 'amount must be an integer' });
+  }
+  if (value <= 0n) return res.status(400).json({ error: 'amount must be positive' });
+
+  try {
+    const packed = encodeMinaRecipient(parseMinaAddress(sender));
+    const nonce = await nextReleaseNonceFor(packed);
+    const balanceBefore = await tokenBalance(sender, asset.tokenId);
+    if (balanceBefore === null) {
+      return res.status(400).json({ error: `no ${asset.symbol} account for ${sender}` });
+    }
+    if (balanceBefore < value) {
+      return res.status(400).json({ error: `balance is ${balanceBefore}, cannot burn ${value}` });
+    }
+
+    const row = await recordRelease({
+      minaSender: packed,
+      token: asset.flareToken,
+      recipient,
+      amount: value,
+      nonce,
+      balanceBefore,
+    });
+
+    const built = await buildBurn({ sender, token: asset.token, amount: value });
+
+    res.json({
+      id: row.id,
+      nonce: nonce.toString(),
+      transaction: built.transaction,
+      provingMs: built.provingMs,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/** The wallet has broadcast the burn; the poller confirms it from here. */
+app.post('/releases/:id/submitted', async (req, res) => {
+  const { minaTxHash } = req.body ?? {};
+  if (typeof minaTxHash !== 'string' || minaTxHash.length === 0) {
+    return res.status(400).json({ error: 'minaTxHash is required' });
+  }
+  try {
+    await markReleaseSubmitted(req.params.id, minaTxHash);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/** The user has claimed on Flare. Recorded, not trusted — the chain decides. */
+app.post('/releases/:id/settled', async (req, res) => {
+  const { flareTxHash } = req.body ?? {};
+  if (typeof flareTxHash !== 'string' || flareTxHash.length === 0) {
+    return res.status(400).json({ error: 'flareTxHash is required' });
+  }
+  try {
+    await markReleaseSettled(req.params.id, flareTxHash);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+app.get('/releases/:recipient', async (req, res) => {
+  try {
+    res.json({ releases: await releasesFor(req.params.recipient) });
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
@@ -341,7 +471,8 @@ async function main() {
   const withdrawals = startWithdrawals();
   // The asset rail. Silently inert unless FLARE_ASSET_VAULT_ADDRESS and
   // MINA_ASSET_PORTS are both set, so a MINA-only deployment pays nothing.
-  const assets = startAssets();
+  const assetRail = startAssets();
+  const releases = startReleases();
 
   const server = app.listen(PORT, () => {
     console.log(`attestor API listening on :${PORT}`);
@@ -352,7 +483,8 @@ async function main() {
     watcher.stop();
     publisher.stop();
     withdrawals.stop();
-    assets.stop();
+    assetRail.stop();
+    releases.stop();
     server.close();
     await pool.end();
     process.exit(0);

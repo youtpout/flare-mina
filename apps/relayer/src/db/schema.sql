@@ -222,3 +222,44 @@ CREATE UNIQUE INDEX IF NOT EXISTS withdrawals_chain_nonce_idx
   ON withdrawals (chain, nonce);
 CREATE UNIQUE INDEX IF NOT EXISTS locks_chain_token_claim_idx
   ON locks (chain, token, claim_id);
+
+-- The return leg for wrapped assets: a burn on Mina releases the locked token
+-- on Flare. Mirrors `deposits`, because the flow mirrors it — the relayer
+-- builds the transaction, the holder signs, a poller confirms it landed, and
+-- the attestor signs that it did.
+CREATE TABLE IF NOT EXISTS releases (
+  id             BIGSERIAL PRIMARY KEY,
+
+  -- Holder's Mina key, packed as x | isOdd << 255, hex. With the nonce, this
+  -- is what the Flare intent is keyed on.
+  mina_sender    TEXT        NOT NULL,
+  -- Flare token being released, lowercase, and where it goes.
+  token          TEXT        NOT NULL,
+  recipient      TEXT        NOT NULL,
+  -- In the token's own base units. Decimals are never converted.
+  amount         NUMERIC(78) NOT NULL CHECK (amount > 0),
+  nonce          NUMERIC(78) NOT NULL,
+
+  -- Null between building and broadcast: the hash does not exist until signed.
+  mina_tx_hash   TEXT        UNIQUE,
+  flare_tx_hash  TEXT,
+  -- The attestor's signature over the intent, once the burn is confirmed.
+  attestation    TEXT,
+
+  -- The holder's token balance when the burn was built. A burn is confirmed by
+  -- this having fallen by at least the amount — the honest substitute for
+  -- reading the burn event back, which needs an archive node.
+  balance_before NUMERIC(78),
+
+  status         TEXT        NOT NULL DEFAULT 'built'
+                 CHECK (status IN ('built','submitted','attested','released','failed','aborted')),
+  reason         TEXT,
+
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  UNIQUE (mina_sender, nonce)
+);
+
+CREATE INDEX IF NOT EXISTS releases_status_idx ON releases (status);
+CREATE INDEX IF NOT EXISTS releases_recipient_idx ON releases (recipient);

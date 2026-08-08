@@ -61,6 +61,11 @@ export type Asset = {
   port: string;
   /** FungibleToken zkApp, base58. */
   token: string;
+  /**
+   * Its token id. A balance lives in its own account keyed by this, so reading
+   * one without it returns the holder's MINA instead — silently, as zero.
+   */
+  tokenId?: string;
   decimals: number;
 };
 
