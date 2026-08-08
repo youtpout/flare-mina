@@ -1,7 +1,14 @@
 import { useEffect, useState } from 'react';
 import { encodeFunctionData, formatUnits, parseUnits, type Hex } from 'viem';
 import type { Session } from '@/App';
-import { BRIDGE_ASSETS, CONTRACTS, INBOUND_ASSETS, MINA, explorerTx } from '@/lib/config';
+import {
+  BRIDGE_ASSETS,
+  CONTRACTS,
+  INBOUND_ASSETS,
+  MINA,
+  explorerTx,
+  minaQuery,
+} from '@/lib/config';
 import {
   assetVaultAbi,
   bridgeAbi,
@@ -176,6 +183,21 @@ export function Bridge({ session }: { session: Session }) {
   const [releaseError, setReleaseError] = useState<string | null>(null);
   const [claimingRelease, setClaimingRelease] = useState<string | null>(null);
 
+  /**
+   * What the balance queries actually depend on.
+   *
+   * Not the arrays themselves: the pollers replace them every eight seconds
+   * with fresh objects holding identical data, so depending on their identity
+   * re-ran every balance query five times a minute forever. That is what
+   * eventually gets a public node to stall — one such stall was measured at 61
+   * seconds, which is the whole of "why are balances so slow".
+   */
+  const settlementKey = [
+    deposits?.map((d) => `${d.id}:${d.status}`).join(),
+    withdrawals?.map((w) => `${w.nonce}:${w.status}`).join(),
+    releases?.map((r) => `${r.id}:${r.status}`).join(),
+  ].join('|');
+
   useEffect(() => {
     let live = true;
     const poll = async () => {
@@ -254,29 +276,22 @@ export function Bridge({ session }: { session: Session }) {
     return () => {
       live = false;
     };
-  }, [session.account, deposits, withdrawals]);
+  }, [session.account, settlementKey]);
 
   useEffect(() => {
     let live = true;
-    fetch(MINA.graphql, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        query: `{ account(publicKey: "${session.minaAddress}") { balance { total } } }`,
-      }),
-    })
-      .then((r) => r.json())
-      .then((body: { data?: { account?: { balance?: { total?: string } } } }) => {
-        const total = body.data?.account?.balance?.total;
-        // Already nanomina. Scaling it again showed a balance a billion times
-        // too large, and MAX offered an amount no wallet could ever send.
-        if (live) setMinaBalance(total === undefined ? null : BigInt(total));
-      })
-      .catch(() => live && setMinaBalance(null));
+    minaQuery<{ account?: { balance?: { total?: string } } }>(
+      `{ account(publicKey: "${session.minaAddress}") { balance { total } } }`,
+    ).then((data) => {
+      const total = data?.account?.balance?.total;
+      // Already nanomina. Scaling it again showed a balance a billion times
+      // too large, and MAX offered an amount no wallet could ever send.
+      if (live) setMinaBalance(total === undefined ? null : BigInt(total));
+    });
     return () => {
       live = false;
     };
-  }, [session.minaAddress, deposits]);
+  }, [session.minaAddress, settlementKey]);
 
   /**
    * Wrapped assets held on Mina, one query per token account.
@@ -292,17 +307,10 @@ export function Bridge({ session }: { session: Session }) {
 
     Promise.all(
       wrapped.map(async (asset) => {
-        const res = await fetch(MINA.graphql, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            query: `{ account(publicKey: "${session.minaAddress}", token: "${asset.tokenId}") { balance { total } } }`,
-          }),
-        });
-        const body = (await res.json()) as {
-          data?: { account?: { balance?: { total?: string } } };
-        };
-        return [asset.symbol, BigInt(body.data?.account?.balance?.total ?? '0')] as const;
+        const data = await minaQuery<{ account?: { balance?: { total?: string } } }>(
+          `{ account(publicKey: "${session.minaAddress}", token: "${asset.tokenId}") { balance { total } } }`,
+        );
+        return [asset.symbol, BigInt(data?.account?.balance?.total ?? '0')] as const;
       }),
     )
       .then((entries) => live && setMinaTokenBalances(Object.fromEntries(entries)))
@@ -311,7 +319,7 @@ export function Bridge({ session }: { session: Session }) {
     return () => {
       live = false;
     };
-  }, [session.minaAddress, deposits, withdrawals]);
+  }, [session.minaAddress, settlementKey]);
 
   /**
    * Claim an attested deposit.

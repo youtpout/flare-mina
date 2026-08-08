@@ -168,5 +168,28 @@ export const MINA = {
   graphql: 'https://api.minascan.io/node/devnet/v1/graphql',
 } as const;
 
+/**
+ * A Mina GraphQL read that cannot hang the page.
+ *
+ * The public nodes answer in about 100ms in the ordinary case and then stall —
+ * one measured read took 61 seconds. Without a deadline the card sits on "…"
+ * for that whole time and the user reasonably concludes the app is broken. A
+ * timeout turns it into a retry on the next poll instead.
+ */
+export async function minaQuery<T>(query: string, timeoutMs = 6000): Promise<T | null> {
+  try {
+    const res = await fetch(MINA.graphql, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const body = (await res.json()) as { data?: T };
+    return body.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export const explorerTx = (hash: string) => `${COSTON2.explorer}/tx/${hash}`;
 export const explorerAddress = (a: string) => `${COSTON2.explorer}/address/${a}`;
