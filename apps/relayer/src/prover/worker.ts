@@ -436,7 +436,9 @@ async function proveSigningPolicy(rawCalls: unknown[], rawKeys: unknown[]) {
  * and `keys`, but those come from the round that response sits in — the same
  * response under a different validator set is not a thing a round can produce.
  */
-let lastAttestation: { key: string; value: Awaited<ReturnType<typeof buildAttestation>> } | undefined;
+let lastAttestation:
+  | { key: string; value: Awaited<ReturnType<typeof buildAttestation>>; ms: number }
+  | undefined;
 
 async function proveAttestation(
   responseHex: string,
@@ -446,12 +448,18 @@ async function proveAttestation(
 ) {
   const key = `${responseHex}|${siblings.join(',')}`;
   if (lastAttestation?.key === key) {
-    console.log('  reusing the attestation proof from this round');
+    console.log(
+      `  reused the attestation proof (built in ${(lastAttestation.ms / 1000).toFixed(1)}s, ` +
+        'not paid again)',
+    );
     return lastAttestation.value;
   }
 
+  const started = Date.now();
   const value = await buildAttestation(responseHex, siblings, calls, keys);
-  lastAttestation = { key, value };
+  const ms = Date.now() - started;
+  console.log(`  built the attestation proof in ${(ms / 1000).toFixed(1)}s`);
+  lastAttestation = { key, value, ms };
   return value;
 }
 
