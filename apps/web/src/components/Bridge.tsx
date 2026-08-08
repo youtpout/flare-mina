@@ -14,6 +14,7 @@ import {
   bridgeAbi,
   erc20Abi,
   nextNonce,
+  unwrapAbi,
   readBalances,
   submit,
   type Balance,
@@ -208,6 +209,7 @@ export function Bridge({ session }: { session: Session }) {
   const [releaseError, setReleaseError] = useState<string | null>(null);
   const [claimingRelease, setClaimingRelease] = useState<string | null>(null);
   const [transferPage, setTransferPage] = useState(0);
+  const [unwrapping, setUnwrapping] = useState<string | null>(null);
 
   /**
    * What the balance queries actually depend on.
@@ -619,6 +621,79 @@ export function Bridge({ session }: { session: Session }) {
   }
 
   /**
+   * Turn held bWC2FLR back into native C2FLR.
+   *
+   * Releases from before the vault learned to unwrap handed the wrapper over
+   * directly, leaving holders with an accounting artefact. `unwrap` is
+   * permissionless, so this needs nobody's cooperation — but it is two calls,
+   * and they go in one signed batch so an unwrap cannot survive a failed
+   * withdrawal.
+   */
+  async function unwrapNative() {
+    const held = flareBalances?.find((b) => b.token.symbol === 'bWC2FLR')?.raw;
+    if (held === undefined || held === 0n) return;
+
+    setBurnError(null);
+    setUnwrapping('Waiting for your Mina wallet…');
+    try {
+      const nonce = await nextNonce(session.x, session.isOdd);
+      const expiry = BigInt('18446744073709551615');
+      // 9 decimals to 18: what `BridgeWrapper.SCALE` returns for this pair.
+      const underlying = held * 1_000_000_000n;
+
+      const calls = [
+        {
+          target: CONTRACTS.wrappedC2flr,
+          value: 0n,
+          data: encodeFunctionData({ abi: unwrapAbi, functionName: 'unwrap', args: [held] }),
+        },
+        {
+          target: CONTRACTS.wnat,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: unwrapAbi,
+            functionName: 'withdraw',
+            args: [underlying],
+          }),
+        },
+      ];
+
+      const signature = await signAuthorization(session.provider, {
+        purpose: PURPOSE.accountBatch,
+        chainId: 114n,
+        target: session.account,
+        actionHash: batchHash(calls),
+        nonce,
+        expiry,
+      });
+
+      setUnwrapping('Submitting…');
+      const res = await fetch(`${API}/accounts/execute`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          account: session.account,
+          publicKey: { x: session.x.toString(), isOdd: session.isOdd, y: session.y.toString() },
+          signature: { field: signature.field, scalar: signature.scalar },
+          nonce: nonce.toString(),
+          expiry: expiry.toString(),
+          calls: calls.map((c) => ({
+            target: c.target,
+            value: c.value.toString(),
+            data: c.data,
+          })),
+        }),
+      });
+      const body = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(body.error ?? `relayer returned ${res.status}`);
+    } catch (e) {
+      setBurnError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUnwrapping(null);
+    }
+  }
+
+  /**
    * Burn a wrapped asset on Mina, to take the original back on Flare.
    *
    * The relayer builds the transaction — burning through a token contract needs
@@ -983,6 +1058,21 @@ export function Bridge({ session }: { session: Session }) {
 
         {claimError && <p className="status err">{claimError}</p>}
         {releaseError !== null && <p className="status err">{releaseError}</p>}
+
+        {/* Releases from before the vault learned to unwrap handed the wrapper
+            over directly. It is 1:1 with C2FLR and reversible by anyone holding
+            it, so this is a leftover to clear rather than a loss. */}
+        {(flareBalances?.find((b) => b.token.symbol === 'bWC2FLR')?.raw ?? 0n) > 0n && (
+          <div className="row">
+            <span className="small">
+              {flareBalances?.find((b) => b.token.symbol === 'bWC2FLR')?.formatted} still wrapped
+              <span className="muted"> · bridged before the unwrap was automatic</span>
+            </span>
+            <button className="ghost" disabled={unwrapping !== null} onClick={unwrapNative}>
+              {unwrapping ?? 'Unwrap to C2FLR'}
+            </button>
+          </div>
+        )}
 
         {pageRows.map((t) =>
           t.kind === 'deposit' ? (

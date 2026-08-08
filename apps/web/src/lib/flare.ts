@@ -59,6 +59,19 @@ export const bridgeAbi = parseAbi([
   'function escrowAttestor() view returns (address)',
 ]);
 
+/**
+ * Undoing the 9-decimal wrapper C2FLR crosses as.
+ *
+ * `unwrap` is permissionless — it burns the caller's wrapper and returns the
+ * underlying WNat — and `withdraw` turns that back into native C2FLR. Both are
+ * needed: neither alone leaves the holder with the asset they bridged.
+ */
+export const unwrapAbi = parseAbi([
+  'function unwrap(uint256 amount) returns (uint256)',
+  'function withdraw(uint256 amount)',
+  'function SCALE() view returns (uint256)',
+]);
+
 export const assetVaultAbi = parseAbi([
   'function lock(address token, uint256 amount, bytes32 minaRecipient) returns (uint256)',
   'function lockNative(bytes32 minaRecipient) payable returns (uint256)',

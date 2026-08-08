@@ -28,6 +28,8 @@ export const CONTRACTS = {
    * which caps at ~18.4 whole tokens on Mina.
    */
   wrappedC2flr: '0x6C790956D728ed82A75d2ec8D5c37F2e2F36b978',
+  /** WNat, the ERC-20 form of C2FLR. `withdraw` turns it back into the coin. */
+  wnat: '0xC67DCE33D7A8efA5FfEB961899C73fe01bCe9273',
   bridge: '0x871493412EDCcfE0d24f127E6Deb2B20AE5497aB',
   fmina: '0x4aFce36d468136eD9d880E28C99373F0C3d3f046',
   wrapperFactory: '0x98f0CA385dBe0724b4D9211fA4e515eB4d6848b7',
@@ -69,6 +71,14 @@ export const TOKENS: TokenConfig[] = [
   { symbol: 'FXRP', address: '0x0b6A3645c240605887a5532109323A3E12273dc7', decimals: 6 },
   { symbol: 'USD₮0', address: '0xC1A5B41512496B80903D1f32d6dEa3a73212E71F', decimals: 6 },
   { symbol: 'WC2FLR', address: WNAT, decimals: 18 },
+  // The 9-decimal form C2FLR crosses as. Listed so a holder can see one they
+  // were handed before the vault unwrapped on the way back, and undo it.
+  {
+    symbol: 'bWC2FLR',
+    address: CONTRACTS.wrappedC2flr,
+    decimals: 9,
+    note: 'C2FLR at bridge decimals',
+  },
 ];
 
 /**
