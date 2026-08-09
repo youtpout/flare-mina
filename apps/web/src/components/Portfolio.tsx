@@ -138,6 +138,29 @@ export function Portfolio({
         </a>{' '}
         on Mina {MINA.network}.
       </div>
+
+      {/* Both sides need funding and neither says so when it runs out — a
+          transaction simply refuses. Here rather than on the connect screen
+          because connecting needs no funds at all: the address is derived from
+          the public key, so an empty wallet reaches this page and can read the
+          Flare address the C2FLR faucet asks for. */}
+      <div className="panel" style={{ marginTop: 14 }}>
+        <h2>Out of testnet funds?</h2>
+        <div className="row">
+          <span className="muted small">MINA on {MINA.network}, to pay Mina fees</span>
+          <a href="https://faucet.minaprotocol.com/" target="_blank" rel="noreferrer">
+            faucet.minaprotocol.com
+          </a>
+        </div>
+        <div className="row">
+          <span className="muted small">
+            C2FLR on {COSTON2.name}, for the address above
+          </span>
+          <a href="https://faucet.flare.network/coston2" target="_blank" rel="noreferrer">
+            faucet.flare.network
+          </a>
+        </div>
+      </div>
     </>
   );
 }

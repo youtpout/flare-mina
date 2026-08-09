@@ -174,19 +174,6 @@ export function App() {
         Your Mina wallet holds and trades assets on Flare. It never needs an EVM key.
       </p>
 
-      {/* Always, connected or not. Running dry mid-flow is the common failure,
-          and it does not announce itself as one — a transaction just refuses. */}
-      <p className="muted small" style={{ marginTop: -6 }}>
-        Testnet faucets:{' '}
-        <a href="https://faucet.minaprotocol.com/" target="_blank" rel="noreferrer">
-          MINA devnet
-        </a>{' '}
-        ·{' '}
-        <a href="https://faucet.flare.network/coston2" target="_blank" rel="noreferrer">
-          Coston2 C2FLR
-        </a>
-      </p>
-
       {!session ? (
         <>
         <div className="panel">
