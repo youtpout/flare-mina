@@ -732,7 +732,10 @@ async function handleRelease(request: ReleaseRequest) {
   const feePayer = PrivateKey.fromBase58(feePayerKey);
   const sender = feePayer.toPublicKey();
 
-  if (request.restart === true) forgetPredictions();
+  // Only this rail's cursor. `forgetPredictions()` would clear every port's too,
+  // and ports now run their waves concurrently — one rail re-anchoring must not
+  // invalidate another's in-flight prediction.
+  if (request.restart === true) predictedCursor = undefined;
 
   await fetchAccount({ publicKey: sender });
   await fetchAccount({ publicKey: bridge.address });
@@ -869,7 +872,8 @@ async function handleMint(request: MintRequest) {
   const feePayer = PrivateKey.fromBase58(feePayerKey);
   const sender = feePayer.toPublicKey();
 
-  if (request.restart === true) forgetPredictions();
+  // This port only, for the same reason: waves run concurrently across ports.
+  if (request.restart === true) predictedLockCursor.delete(request.port);
 
   const assetPort = new AssetPort(PublicKey.fromBase58(request.port));
   const token = new FungibleToken(PublicKey.fromBase58(request.token));

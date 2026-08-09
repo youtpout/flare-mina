@@ -1,5 +1,5 @@
-import { createPublicClient, http, parseAbi, parseEventLogs } from 'viem';
-import { decodeMinaRecipient, formatMinaAddress } from '@minaport/shared';
+import { createPublicClient, http, parseAbi, parseEventLogs } from "viem";
+import { decodeMinaRecipient, formatMinaAddress } from "@minaport/shared";
 import {
   markLockMinted,
   markLockMinting,
@@ -8,8 +8,8 @@ import {
   recordLock,
   transferIndexOf,
   transferRange,
-} from './db/index.js';
-import { mintLock } from './prover/index.js';
+} from "./db/index.js";
+import { mintLock } from "./prover/index.js";
 
 /**
  * The Flare -> Mina asset rail: FXRP, USD₮0 and C2FLR.
@@ -26,8 +26,10 @@ import { mintLock } from './prover/index.js';
  * itself — this process only decides *when*.
  */
 
-const RPC = process.env.COSTON2_RPC_URL ?? 'https://coston2-api.flare.network/ext/C/rpc';
-const VAULT = process.env.FLARE_ASSET_VAULT_ADDRESS as `0x${string}` | undefined;
+const RPC =
+  process.env.COSTON2_RPC_URL ?? "https://coston2-api.flare.network/ext/C/rpc";
+const VAULT = process.env.FLARE_ASSET_VAULT_ADDRESS as
+  `0x${string}` | undefined;
 
 const WATCH_MS = Number(process.env.LOCK_INTERVAL_MS ?? 20_000);
 
@@ -37,16 +39,16 @@ const CHUNK = BigInt(process.env.LOCK_CHUNK_BLOCKS ?? 30);
 
 const COSTON2 = {
   id: 114,
-  name: 'Coston2',
-  nativeCurrency: { name: 'Coston2 Flare', symbol: 'C2FLR', decimals: 18 },
+  name: "Coston2",
+  nativeCurrency: { name: "Coston2 Flare", symbol: "C2FLR", decimals: 18 },
   rpcUrls: { default: { http: [RPC] } },
 } as const;
 
 const client = createPublicClient({ chain: COSTON2, transport: http(RPC) });
 
 const vaultAbi = parseAbi([
-  'event AssetLocked(uint256 indexed claimId, address indexed token, address indexed sender, bytes32 minaRecipient, uint256 amount, uint256 previousActionState, uint256 newActionState)',
-  'function lockActionStateOf(address) view returns (uint256)',
+  "event AssetLocked(uint256 indexed claimId, address indexed token, address indexed sender, bytes32 minaRecipient, uint256 amount, uint256 previousActionState, uint256 newActionState)",
+  "function lockActionStateOf(address) view returns (uint256)",
 ]);
 
 /**
@@ -80,13 +82,17 @@ export function assets(): Asset[] {
   try {
     return JSON.parse(raw) as Asset[];
   } catch (e) {
-    console.error('MINA_ASSET_PORTS is not valid JSON:', e instanceof Error ? e.message : e);
+    console.error(
+      "MINA_ASSET_PORTS is not valid JSON:",
+      e instanceof Error ? e.message : e,
+    );
     return [];
   }
 }
 
 const MINA_GRAPHQL =
-  process.env.MINA_DEVNET_GRAPHQL ?? 'https://api.minascan.io/node/devnet/v1/graphql';
+  process.env.MINA_DEVNET_GRAPHQL ??
+  "https://api.minascan.io/node/devnet/v1/graphql";
 
 /**
  * A port's accepted head and cursor, read from Mina.
@@ -94,14 +100,20 @@ const MINA_GRAPHQL =
  * `zkappState` by field order in AssetPort.ts: 0 signingPolicyRoot,
  * 1 flareLockState, 2 processedLockState.
  */
-async function portState(port: string): Promise<{ accepted: bigint; processed: bigint } | null> {
+async function portState(
+  port: string,
+): Promise<{ accepted: bigint; processed: bigint } | null> {
   try {
     const res = await fetch(MINA_GRAPHQL, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ query: `{ account(publicKey: "${port}") { zkappState } }` }),
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: `{ account(publicKey: "${port}") { zkappState } }`,
+      }),
     });
-    const body = (await res.json()) as { data?: { account?: { zkappState?: string[] } } };
+    const body = (await res.json()) as {
+      data?: { account?: { zkappState?: string[] } };
+    };
     const state = body.data?.account?.zkappState;
     if (state === undefined) return null;
     return { accepted: BigInt(state[1]!), processed: BigInt(state[2]!) };
@@ -111,7 +123,10 @@ async function portState(port: string): Promise<{ accepted: bigint; processed: b
 }
 
 /** How many mints go out per port before anything waits for a block. */
-const WAVE = Math.max(1, Number(process.env.MINT_WAVE_SIZE ?? process.env.RELEASE_WAVE_SIZE ?? 5));
+const WAVE = Math.max(
+  1,
+  Number(process.env.MINT_WAVE_SIZE ?? process.env.RELEASE_WAVE_SIZE ?? 5),
+);
 
 /** How long to keep watching a port's cursor for a wave that has been sent. */
 const CONFIRM_MS = Number(process.env.MINT_CONFIRM_MS ?? 8 * 60_000);
@@ -130,78 +145,101 @@ const CONFIRM_MS = Number(process.env.MINT_CONFIRM_MS ?? 8 * 60_000);
  * predecessor leaves is valid in the same block. Each claim is still two
  * transactions — arm, then mint — and those chain the same way.
  *
- * Per port, not across them: chains are per asset, so two ports advance
+ * Per port, and all ports at once: chains are per asset, so two ports advance
  * independently and their waves never interfere.
  */
 async function mint(): Promise<void> {
-  for (const asset of assets()) {
-    const state = await portState(asset.port);
-    if (state === null) continue;
+  // Concurrently, one wave per port. Ports are separate zkApps reading separate
+  // cursors, so nothing they do can invalidate each other — running them in
+  // series meant every asset waited out the previous one's confirmation, up to
+  // eight minutes each, for no reason. Proving is still serialised by the prover
+  // queue; what overlaps is the waiting.
+  const results = await Promise.allSettled(assets().map(mintAsset));
+  for (const r of results) {
+    if (r.status === "rejected") console.error("mint failed:", r.reason);
+  }
+}
 
-    const covered = await markLocksPublished(asset.flareToken, state.accepted);
-    if (covered > 0) console.log(`${covered} ${asset.symbol} lock(s) now mintable`);
+async function mintAsset(
+  asset: ReturnType<typeof assets>[number],
+): Promise<void> {
+  const state = await portState(asset.port);
+  if (state === null) return;
 
-    const queue = await mintableLocks(asset.flareToken);
-    if (queue.length === 0) continue;
+  const covered = await markLocksPublished(asset.flareToken, state.accepted);
+  if (covered > 0)
+    console.log(`${covered} ${asset.symbol} lock(s) now mintable`);
 
-    const range = await transferRange(state.processed, state.accepted);
-    if (range === null) {
-      console.warn(`${asset.symbol}: the transfer ledger has not caught up`);
+  const queue = await mintableLocks(asset.flareToken);
+  if (queue.length === 0) return;
+
+  const range = await transferRange(state.processed, state.accepted);
+  if (range === null) {
+    console.warn(`${asset.symbol}: the transfer ledger has not caught up`);
+    return;
+  }
+  if (range.length === 0) return;
+
+  // A row can outlive the mint that settled it: the transaction lands, and
+  // the process dies before recording it — which a restart does routinely.
+  // The port's cursor is the truth, so a claim it has already moved past is
+  // minted, and retrying it forever only hides real failures.
+  const cursorIndex = await transferIndexOf(state.processed);
+  const flareToken = asset.flareToken.toLowerCase();
+
+  let remaining = range;
+  const sent: { id: string; claim: string; recipient: string; hash: string }[] =
+    [];
+
+  for (const row of queue.slice(0, WAVE)) {
+    if (cursorIndex !== null && BigInt(row.claim_id) <= cursorIndex) {
+      await markLockMinted(row.id, row.mina_tx_hash ?? "recovered");
+      console.log(
+        `${asset.symbol} claim ${row.claim_id} was already minted; catching the row up`,
+      );
       continue;
     }
-    if (range.length === 0) continue;
 
-    // A row can outlive the mint that settled it: the transaction lands, and
-    // the process dies before recording it — which a restart does routinely.
-    // The port's cursor is the truth, so a claim it has already moved past is
-    // minted, and retrying it forever only hides real failures.
-    const cursorIndex = await transferIndexOf(state.processed);
-    const flareToken = asset.flareToken.toLowerCase();
+    // The lock the circuit will pick, and where the next range must resume.
+    const at = remaining.findIndex((r) => r.token.toLowerCase() === flareToken);
+    if (at === -1) break;
 
-    let remaining = range;
-    const sent: { id: string; claim: string; recipient: string; hash: string }[] = [];
-
-    for (const row of queue.slice(0, WAVE)) {
-      if (cursorIndex !== null && BigInt(row.claim_id) <= cursorIndex) {
-        await markLockMinted(row.id, row.mina_tx_hash ?? 'recovered');
-        console.log(`${asset.symbol} claim ${row.claim_id} was already minted; catching the row up`);
-        continue;
-      }
-
-      // The lock the circuit will pick, and where the next range must resume.
-      const at = remaining.findIndex((r) => r.token.toLowerCase() === flareToken);
-      if (at === -1) break;
-
-      try {
-        await markLockMinting(row.id);
-        const hash = await mintLock({
-          port: asset.port,
-          token: asset.token,
-          asset: asset.flareToken,
-          range: remaining.map((r) => ({
-            index: BigInt(r.chain_index),
-            token: r.token,
-            recipient: r.recipient,
-            amount: BigInt(r.amount),
-          })),
-          wave: true,
-          restart: sent.length === 0,
-        });
-        sent.push({ id: row.id, claim: row.claim_id, recipient: row.recipient, hash });
-        remaining = remaining.slice(at + 1);
-      } catch (e) {
-        const reason = e instanceof Error ? e.message : String(e);
-        // Left in 'minting' rather than marked failed, and 'minting' is still
-        // picked up by `mintableLocks`: the usual cause is the previous mint
-        // not yet included, which resolves on its own. Marking it failed would
-        // strand the user's tokens in the vault with nothing retrying.
-        console.warn(`${asset.symbol} claim ${row.claim_id} not minted: ${reason}`);
-        break;
-      }
+    try {
+      await markLockMinting(row.id);
+      const hash = await mintLock({
+        port: asset.port,
+        token: asset.token,
+        asset: asset.flareToken,
+        range: remaining.map((r) => ({
+          index: BigInt(r.chain_index),
+          token: r.token,
+          recipient: r.recipient,
+          amount: BigInt(r.amount),
+        })),
+        wave: true,
+        restart: sent.length === 0,
+      });
+      sent.push({
+        id: row.id,
+        claim: row.claim_id,
+        recipient: row.recipient,
+        hash,
+      });
+      remaining = remaining.slice(at + 1);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      // Left in 'minting' rather than marked failed, and 'minting' is still
+      // picked up by `mintableLocks`: the usual cause is the previous mint
+      // not yet included, which resolves on its own. Marking it failed would
+      // strand the user's tokens in the vault with nothing retrying.
+      console.warn(
+        `${asset.symbol} claim ${row.claim_id} not minted: ${reason}`,
+      );
+      break;
     }
-
-    if (sent.length > 0) await confirmMints(asset, sent);
   }
+
+  if (sent.length > 0) await confirmMints(asset, sent);
 }
 
 /**
@@ -218,7 +256,9 @@ async function confirmMints(
   asset: { symbol: string; port: string },
   sent: { id: string; claim: string; recipient: string; hash: string }[],
 ) {
-  console.log(`sent a wave of ${sent.length} ${asset.symbol} mint(s); waiting on the cursor`);
+  console.log(
+    `sent a wave of ${sent.length} ${asset.symbol} mint(s); waiting on the cursor`,
+  );
 
   const outstanding = new Map(sent.map((s) => [s.id, s]));
   const deadline = Date.now() + CONFIRM_MS;
@@ -234,7 +274,9 @@ async function confirmMints(
     for (const [id, row] of outstanding) {
       if (BigInt(row.claim) > index) continue;
       await markLockMinted(id, row.hash);
-      console.log(`minted ${asset.symbol} claim ${row.claim} -> ${row.recipient}`);
+      console.log(
+        `minted ${asset.symbol} claim ${row.claim} -> ${row.recipient}`,
+      );
       outstanding.delete(id);
     }
   }
@@ -246,7 +288,11 @@ async function confirmMints(
   }
 }
 
-function loop(name: string, every: number, tick: () => Promise<void>): { stop(): void } {
+function loop(
+  name: string,
+  every: number,
+  tick: () => Promise<void>,
+): { stop(): void } {
   let stopped = false;
 
   const run = async () => {
@@ -254,7 +300,10 @@ function loop(name: string, every: number, tick: () => Promise<void>): { stop():
       try {
         await tick();
       } catch (e) {
-        console.error(`${name} tick failed:`, e instanceof Error ? e.message : e);
+        console.error(
+          `${name} tick failed:`,
+          e instanceof Error ? e.message : e,
+        );
       }
       await new Promise((r) => setTimeout(r, every));
     }
@@ -273,6 +322,6 @@ export function startAssets(): { stop(): void } {
   // so a per-asset publisher would pay for the same round four times.
   // Watching lives in transfers.ts: one scan of the shared chain fills both
   // rails' tables, where three scanners only bought rate-limit errors.
-  const loops = [loop('minter', WATCH_MS, mint)];
+  const loops = [loop("minter", WATCH_MS, mint)];
   return { stop: () => loops.forEach((l) => l.stop()) };
 }
