@@ -1,12 +1,12 @@
-import { useEffect, useState } from 'react';
-import type { Session } from '@/App';
-import { readBalances, type Balance } from '@/lib/flare';
-import { COSTON2, MINA, explorerAddress } from '@/lib/config';
+import { useEffect, useState } from "react";
+import type { Session } from "@/App";
+import { readBalances, type Balance } from "@/lib/flare";
+import { COSTON2, MINA, explorerAddress } from "@/lib/config";
 
 const short = (s: string, head = 10, tail = 8) =>
   s.length <= head + tail + 1 ? s : `${s.slice(0, head)}…${s.slice(-tail)}`;
 
-const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8787';
+const API = import.meta.env.VITE_API_URL ?? "http://localhost:8787";
 
 export function Portfolio({
   session,
@@ -31,9 +31,15 @@ export function Portfolio({
     setDeployError(null);
     setDeploying(true);
     try {
-      const res = await fetch(`${API}/accounts/${session.packed}/deploy`, { method: 'POST' });
-      const body = (await res.json()) as { flareTxHash?: string; error?: string };
-      if (!res.ok) throw new Error(body.error ?? `relayer returned ${res.status}`);
+      const res = await fetch(`${API}/accounts/${session.packed}/deploy`, {
+        method: "POST",
+      });
+      const body = (await res.json()) as {
+        flareTxHash?: string;
+        error?: string;
+      };
+      if (!res.ok)
+        throw new Error(body.error ?? `relayer returned ${res.status}`);
       // Re-read from the chain rather than assuming success flipped the flag,
       // and without reloading -- a reload would drop the session.
       await onRefresh();
@@ -85,20 +91,21 @@ export function Portfolio({
 
         <div className="row">
           <span className="muted small">Status</span>
-          <span className={`tag ${session.deployed ? 'ok' : 'warn'}`}>
-            {session.deployed ? 'deployed' : 'not deployed yet'}
+          <span className={`tag ${session.deployed ? "ok" : "warn"}`}>
+            {session.deployed ? "deployed" : "not deployed yet"}
           </span>
         </div>
       </div>
 
       {!session.deployed && (
         <div className="notice">
-          <strong>This address already belongs to you.</strong> It is derived from your Mina public
-          key with CREATE2, so it is fixed before any transaction exists — the bridge can pay into
-          it today. Deploying is only needed before you send something out.
+          <strong>This address already belongs to you.</strong> It is derived
+          from your Mina public key with CREATE2, so it is fixed before any
+          transaction exists — the bridge can pay into it today. Deploying is
+          only needed before you send something out.
           <div style={{ marginTop: 12 }}>
             <button className="primary" disabled={deploying} onClick={deploy}>
-              {deploying ? 'Deploying…' : 'Deploy now'}
+              {deploying ? "Deploying…" : "Deploy now"}
             </button>
           </div>
           {deployError !== null && <p className="status err">{deployError}</p>}
@@ -109,7 +116,9 @@ export function Portfolio({
         <h2>Balances on {COSTON2.name}</h2>
 
         {error && <p className="status err">{error}</p>}
-        {!balances && !error && <p className="muted small">Reading the chain…</p>}
+        {!balances && !error && (
+          <p className="muted small">Reading the chain…</p>
+        )}
 
         {balances && (
           <>
@@ -119,24 +128,18 @@ export function Portfolio({
               <div className="row" key={token.symbol}>
                 <span>
                   {token.symbol}
-                  {token.native === true && <span className="muted small"> native</span>}
-                  {token.note && <span className="muted small"> · {token.note}</span>}
+                  {token.native === true && (
+                    <span className="muted small"> native</span>
+                  )}
+                  {token.note && (
+                    <span className="muted small"> · {token.note}</span>
+                  )}
                 </span>
                 <span className="mono">{formatted}</span>
               </div>
             ))}
           </>
         )}
-      </div>
-
-      <div className="notice" style={{ marginTop: 14 }}>
-        Gas is paid by whoever submits your transaction — anyone can, because your Mina signature
-        commits to the target, the value and the calldata. A submitter cannot redirect anything, and
-        gains nothing by trying. Deposits arrive from{' '}
-        <a href={`${MINA.explorer}/account/${MINA.bridgeAccount}`} target="_blank" rel="noreferrer">
-          the escrow account
-        </a>{' '}
-        on Mina {MINA.network}.
       </div>
 
       {/* Both sides need funding and neither says so when it runs out — a
@@ -147,8 +150,14 @@ export function Portfolio({
       <div className="panel" style={{ marginTop: 14 }}>
         <h2>Out of testnet funds?</h2>
         <div className="row">
-          <span className="muted small">MINA on {MINA.network}, to pay Mina fees</span>
-          <a href="https://faucet.minaprotocol.com/" target="_blank" rel="noreferrer">
+          <span className="muted small">
+            MINA on {MINA.network}, to pay Mina fees
+          </span>
+          <a
+            href="https://faucet.minaprotocol.com/"
+            target="_blank"
+            rel="noreferrer"
+          >
             faucet.minaprotocol.com
           </a>
         </div>
@@ -156,7 +165,11 @@ export function Portfolio({
           <span className="muted small">
             C2FLR on {COSTON2.name}, for the address above
           </span>
-          <a href="https://faucet.flare.network/coston2" target="_blank" rel="noreferrer">
+          <a
+            href="https://faucet.flare.network/coston2"
+            target="_blank"
+            rel="noreferrer"
+          >
             faucet.flare.network
           </a>
         </div>
