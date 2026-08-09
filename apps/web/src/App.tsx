@@ -174,6 +174,19 @@ export function App() {
         Your Mina wallet holds and trades assets on Flare. It never needs an EVM key.
       </p>
 
+      {/* Always, connected or not. Running dry mid-flow is the common failure,
+          and it does not announce itself as one — a transaction just refuses. */}
+      <p className="muted small" style={{ marginTop: -6 }}>
+        Testnet faucets:{' '}
+        <a href="https://faucet.minaprotocol.com/" target="_blank" rel="noreferrer">
+          MINA devnet
+        </a>{' '}
+        ·{' '}
+        <a href="https://faucet.flare.network/coston2" target="_blank" rel="noreferrer">
+          Coston2 C2FLR
+        </a>
+      </p>
+
       {!session ? (
         <>
         <div className="panel">
@@ -201,11 +214,10 @@ export function App() {
           )}
           {error && <p className="status err">{error}</p>}
 
-          {/* Everything a fresh wallet needs, in the order it needs it: the
-              extension, then devnet MINA to pay a fee, then C2FLR for the Flare
-              side. Shown whether or not a wallet is detected — an installed
-              wallet with an empty account hits the second and third problems,
-              and hunting for the right faucet is where that stalls. */}
+          {/* The setup a fresh wallet needs before the faucets above are of any
+              use. Shown whether or not a wallet is detected: an installed wallet
+              left on Mainnet fails as "account not found", which reads like a
+              bug rather than a wrong network. */}
           <div className="notice" style={{ marginTop: 18 }}>
             <strong>Starting from scratch?</strong>
             <p className="small" style={{ marginBottom: 0 }}>
@@ -216,16 +228,8 @@ export function App() {
               or{' '}
               <a href="https://pallad.co" target="_blank" rel="noreferrer">
                 Pallad
-              </a>{' '}
-              and switch it to <strong>Devnet</strong>. Then top up:{' '}
-              <a href="https://faucet.minaprotocol.com/" target="_blank" rel="noreferrer">
-                MINA devnet faucet
-              </a>{' '}
-              ·{' '}
-              <a href="https://faucet.flare.network/coston2" target="_blank" rel="noreferrer">
-                Coston2 C2FLR faucet
               </a>
-              .
+              , then switch it to <strong>Devnet</strong> — it starts on Mainnet.
             </p>
             <p className="muted small" style={{ marginBottom: 0 }}>
               The Flare faucet wants the address your Mina key owns, which appears once you
