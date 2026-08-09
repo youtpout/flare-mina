@@ -38,6 +38,7 @@ import {
   PublicKey,
   UInt32,
   UInt64,
+  addCachedAccount,
   fetchAccount,
   Field,
 } from 'o1js';
@@ -107,6 +108,17 @@ type ReleaseRequest = {
   kind: 'release';
   id: number;
   range: ChainLink[];
+  /** Part of a wave: send without waiting, the caller confirms the whole run. */
+  wave?: boolean;
+  /**
+   * First of a wave: drop every prediction and re-read the chain.
+   *
+   * A transaction that `send()` accepted can still be rejected by consensus,
+   * and that failure never reaches this process — so the cursor predicted from
+   * it would be wrong with nothing to signal it. Re-anchoring once per wave
+   * bounds how long a bad prediction can survive to a single wave.
+   */
+  restart?: boolean;
 };
 
 /** One link of the shared chain, as it crosses the process boundary. */
@@ -655,12 +667,53 @@ function forgetPredictions(): void {
   predictedLockCursor.clear();
 }
 
+/**
+ * Position of `processedActionState` in the escrow's `appState`.
+ *
+ * From the declaration order in `MinaPortBridge`: root, chain, flare, processed.
+ * `predictState` asserts the slot still holds the cursor before touching it, so
+ * a reordering fails loudly here instead of proving against another field.
+ */
+const PROCESSED_SLOT = 3;
+
+/**
+ * Build against a state the chain has not applied yet.
+ *
+ * This has to run *inside* the transaction callback. `Mina.transaction` runs the
+ * callback twice, with `Fetch.fetchMissingData()` between the passes, and that
+ * refetch overwrites the account cache with what the node still reports — the
+ * state from before the transactions already sitting in the pool. Anything
+ * injected before the build is wiped; injected here it lands after the refetch,
+ * so the proof is built against the state its predecessor leaves behind.
+ *
+ * The whole account is rewritten, never a partial one: `fillPartialAccount`
+ * replaces every field left out with `type.empty()`, so an omitted `tokenId`
+ * becomes Field(0) and the entry goes under a cache key nothing reads.
+ */
+function predictState(address: PublicKey, slot: number, expected: Field, value: Field): void {
+  const account = Mina.getAccount(address);
+  if (account.zkapp === undefined) throw new Error('predictState: not a zkApp account');
+
+  const appState = [...account.zkapp.appState];
+  const held = appState[slot]!;
+  // Only the chain's own value may be replaced. On the second pass the slot
+  // already holds what we wrote, which is why this accepts either.
+  if (held.toString() !== expected.toString() && held.toString() !== value.toString()) {
+    throw new Error(`predictState: slot ${slot} holds ${held}, not the cursor`);
+  }
+
+  appState[slot] = value;
+  addCachedAccount({ ...account, zkapp: { ...account.zkapp, appState } }, graphql);
+}
+
 async function handleRelease(request: ReleaseRequest) {
   const feePayerKey = process.env.MINA_DEVNET_PRIVATE_KEY;
   if (!feePayerKey) throw new Error('MINA_DEVNET_PRIVATE_KEY is required');
 
   const feePayer = PrivateKey.fromBase58(feePayerKey);
   const sender = feePayer.toPublicKey();
+
+  if (request.restart === true) forgetPredictions();
 
   await fetchAccount({ publicKey: sender });
   await fetchAccount({ publicKey: bridge.address });
@@ -671,7 +724,8 @@ async function handleRelease(request: ReleaseRequest) {
     throw new Error('the range holds no MINA withdrawal to release');
   }
 
-  const processed = (predictedCursor as Field | undefined) ?? bridge.processedActionState.get();
+  const onChain = bridge.processedActionState.get();
+  const processed = (predictedCursor as Field | undefined) ?? onChain;
   const segment = await proveSegment(processed, Field(BigInt(fmina)), request.range);
   // Where the cursor lands: just past the withdrawal the circuit picked, having
   // stepped over any other asset's transfers before it.
@@ -683,6 +737,10 @@ async function handleRelease(request: ReleaseRequest) {
   const tx = await Mina.transaction(
     { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
     async () => {
+      // The escrow reads its cursor as a precondition. Without this the circuit
+      // would read the chain's value and every release after the first in a wave
+      // would prove against a cursor its predecessor has already moved.
+      predictState(bridge.address, PROCESSED_SLOT, onChain, processed);
       await bridge.releaseWithdrawal(segment);
     },
   );
@@ -693,6 +751,11 @@ async function handleRelease(request: ReleaseRequest) {
   // commit to.
   const pending = await tx.sign([feePayer]).send();
   predictedCursor = next;
+
+  // A release in a wave is not confirmed here. Waiting for inclusion between
+  // sends is precisely what the prediction removes, and confirming still
+  // happens — once for the whole wave, by the caller, against the cursor.
+  if (request.wave === true) return pending.hash;
 
   // Confirmed against the cursor, not against the hash. `send()` resolves for a
   // transaction that is then rejected, and the caller marks this withdrawal

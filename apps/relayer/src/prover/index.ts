@@ -261,10 +261,28 @@ const wire = (r: ChainRecord) => ({
  * the order is not a convenience, a range in the wrong order reaches a
  * different head and is refused.
  */
-export async function releaseWithdrawal(request: { range: ChainRecord[] }): Promise<string> {
+export async function releaseWithdrawal(request: {
+  range: ChainRecord[];
+  /**
+   * Send without waiting for inclusion, because more are following.
+   *
+   * The prover predicts the cursor its predecessor leaves and builds against it,
+   * so a whole wave lands in one block. The caller confirms once at the end —
+   * releases sent this way are not confirmed individually.
+   */
+  wave?: boolean;
+  /** First of a wave: the prover drops its predictions and re-reads the chain. */
+  restart?: boolean;
+}): Promise<string> {
   return submit(
     'background',
-    (id) => ({ kind: 'release', id, range: request.range.map(wire) }),
+    (id) => ({
+      kind: 'release',
+      id,
+      range: request.range.map(wire),
+      wave: request.wave,
+      restart: request.restart,
+    }),
     (built) => built.transaction,
   );
 }

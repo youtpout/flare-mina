@@ -32,13 +32,15 @@ import { acceptedHead } from './transfers.js';
  * and it is bounded on the Mina side: a release cannot exceed the escrowed
  * balance, and nonces must strictly increase.
  *
- * # Why releases are serialised
+ * # Why releases go out in waves
  *
- * `releaseWithdrawal` reads and writes `lastWithdrawalNonce`, so two releases
- * in one block conflict — one per block, unavoidably. Deposits are concurrent
- * because they read no state; withdrawals cannot be. They are therefore
- * processed oldest-first, one at a time, and a skipped nonce would strand
- * everything behind it.
+ * `releaseWithdrawal` reads the escrow's cursor as a precondition and writes the
+ * next one, so releases are ordered — but ordered is not the same as one per
+ * block, which is what this used to assume. Mina checks a precondition when the
+ * transaction is applied, so a release proved against the cursor its predecessor
+ * leaves is valid in the same block. They are still processed oldest-first and a
+ * skipped nonce still strands everything behind it; they simply no longer wait
+ * minutes between each.
  */
 
 const RPC = process.env.COSTON2_RPC_URL ?? 'https://coston2-api.flare.network/ext/C/rpc';
@@ -120,64 +122,141 @@ async function refreshCoverage(): Promise<void> {
   if (promoted > 0) console.log(`${promoted} withdrawal(s) now covered by an accepted state`);
 }
 
+/** How many releases go out before anything waits for a block. */
+const WAVE = Math.max(1, Number(process.env.RELEASE_WAVE_SIZE ?? 5));
+
+/** How long to keep watching the cursor for a wave that has been sent. */
+const CONFIRM_MS = Number(process.env.RELEASE_CONFIRM_MS ?? 8 * 60_000);
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /**
- * Release what the escrow is entitled to, oldest first and one at a time.
+ * Release what the escrow is entitled to, oldest first, in waves.
  *
  * The range is read from the shared ledger rather than from this table: a
  * segment has to replay the transfers of the other three assets too, since
  * stepping over them is exactly what lets one chain serve every rail. Which
  * record gets paid is the circuit's decision, so this only supplies the range
  * and records the outcome.
+ *
+ * # Why a wave works
+ *
+ * Mina evaluates a state precondition when the transaction is applied, not
+ * against the state at the start of the block — measured, not assumed: five
+ * chained transactions on a counter zkApp landed together, nonces 118..122
+ * (`packages/mina-contracts/scripts/bumpSpike.ts`). So the prover can build each
+ * release against the cursor its predecessor leaves, and the whole wave rides
+ * one block instead of one block each.
+ *
+ * The caller's part is the range. Every release consumes the first record of
+ * its own asset, so the next one has to start after it — the chain would not
+ * link otherwise. That record is predictable from here, which is the only reason
+ * this can hand out ranges for transactions that have not been applied.
  */
 async function release(): Promise<void> {
   const pending = await releasableWithdrawals();
   if (pending.length === 0) return;
 
-  for (const withdrawal of pending) {
-    // Re-read every iteration: the previous release moved the cursor, and a
-    // range starting where the escrow no longer is would simply be refused.
-    const state = await escrowState();
-    if (state === null || state.accepted === 0n) return;
+  const state = await escrowState();
+  if (state === null || state.accepted === 0n) return;
 
-    const range = await transferRange(state.cursor, state.accepted);
-    if (range === null) {
-      console.warn('the transfer ledger has not caught up; retrying next tick');
-      return;
-    }
-    if (range.length === 0) return;
+  const range = await transferRange(state.cursor, state.accepted);
+  if (range === null) {
+    console.warn('the transfer ledger has not caught up; retrying next tick');
+    return;
+  }
+  if (range.length === 0) return;
 
-    // A row can outlive its own release: the transaction lands, and the process
-    // dies before recording it — which a restart does routinely. The cursor is
-    // the truth, so a row the escrow has already moved past is settled, and
-    // retrying it forever only produces noise that hides real failures.
-    const cursorIndex = await transferIndexOf(state.cursor);
+  // A row can outlive its own release: the transaction lands, and the process
+  // dies before recording it — which a restart does routinely. The cursor is
+  // the truth, so a row the escrow has already moved past is settled, and
+  // retrying it forever only produces noise that hides real failures.
+  const cursorIndex = await transferIndexOf(state.cursor);
+  const fmina = (process.env.FLARE_FMINA_ADDRESS ?? '').toLowerCase();
+
+  let remaining = range;
+  const sent: { id: string; nonce: string; recipient: string; hash: string }[] = [];
+
+  for (const withdrawal of pending.slice(0, WAVE)) {
     if (cursorIndex !== null && BigInt(withdrawal.nonce) <= cursorIndex) {
       await markWithdrawalReleased(withdrawal.id, withdrawal.mina_tx_hash ?? 'recovered');
       console.log(`withdrawal ${withdrawal.nonce} was already released; catching the row up`);
       continue;
     }
 
+    // The record the circuit will pick, and where the next range must resume.
+    const at = remaining.findIndex((r) => r.token.toLowerCase() === fmina);
+    if (at === -1) break;
+
     try {
       await markWithdrawalReleasing(withdrawal.id);
       const hash = await releaseWithdrawal({
-        range: range.map((r) => ({
+        range: remaining.map((r) => ({
           index: BigInt(r.chain_index),
           token: r.token,
           recipient: r.recipient,
           amount: BigInt(r.amount),
         })),
+        wave: true,
+        restart: sent.length === 0,
       });
-      await markWithdrawalReleased(withdrawal.id, hash);
-      console.log(`released withdrawal ${withdrawal.nonce} -> ${withdrawal.recipient}`);
+      sent.push({
+        id: withdrawal.id,
+        nonce: withdrawal.nonce,
+        recipient: withdrawal.recipient,
+        hash,
+      });
+      remaining = remaining.slice(at + 1);
     } catch (e) {
-      // Stop at the first failure rather than skipping ahead: the next
-      // withdrawal sits behind this one in the chain anyway.
+      // Stop at the first failure rather than skipping ahead: everything behind
+      // it was built against a cursor that will now never arrive. The rows stay
+      // `releasing`, and the next tick rebuilds them from the chain.
       console.error(
         `withdrawal ${withdrawal.nonce} not released:`,
         e instanceof Error ? e.message : e,
       );
-      return;
+      break;
     }
+  }
+
+  if (sent.length > 0) await confirm(sent);
+}
+
+/**
+ * Settle a wave against the cursor, which is the only thing that says a release
+ * happened.
+ *
+ * `send()` resolves for a transaction that is later rejected, so a hash proves
+ * nothing. Rows are marked released as the cursor passes their index; whatever
+ * the cursor never reaches stays `releasing` and is picked up again next tick,
+ * rebuilt from the state the chain actually has. That is the whole retry: no
+ * bookkeeping about which transaction of the wave failed, because a survivor is
+ * indistinguishable from a row that was never sent once the cursor has spoken.
+ */
+async function confirm(sent: { id: string; nonce: string; recipient: string; hash: string }[]) {
+  console.log(`sent a wave of ${sent.length} release(s); waiting on the cursor`);
+
+  const outstanding = new Map(sent.map((s) => [s.id, s]));
+  const deadline = Date.now() + CONFIRM_MS;
+
+  while (outstanding.size > 0 && Date.now() < deadline) {
+    await sleep(15_000);
+
+    const state = await escrowState();
+    if (state === null) continue;
+    const index = await transferIndexOf(state.cursor);
+    if (index === null) continue;
+
+    for (const [id, row] of outstanding) {
+      if (BigInt(row.nonce) > index) continue;
+      await markWithdrawalReleased(id, row.hash);
+      console.log(`released withdrawal ${row.nonce} -> ${row.recipient}`);
+      outstanding.delete(id);
+    }
+  }
+
+  for (const row of outstanding.values()) {
+    console.warn(`withdrawal ${row.nonce} (${row.hash}) has not moved the cursor; will retry`);
   }
 }
 
