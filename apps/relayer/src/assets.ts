@@ -110,12 +110,28 @@ async function portState(port: string): Promise<{ accepted: bigint; processed: b
   }
 }
 
+/** How many mints go out per port before anything waits for a block. */
+const WAVE = Math.max(1, Number(process.env.MINT_WAVE_SIZE ?? process.env.RELEASE_WAVE_SIZE ?? 5));
+
+/** How long to keep watching a port's cursor for a wave that has been sent. */
+const CONFIRM_MS = Number(process.env.MINT_CONFIRM_MS ?? 8 * 60_000);
+
 /**
- * Mint everything a port has accepted a head for, oldest claim first.
+ * Mint everything a port has accepted a head for, oldest claim first, in waves.
  *
  * The range comes from the shared ledger, not from this table: a segment has to
  * replay the other assets' transfers too, since stepping over them is what lets
  * one chain serve four ports. Which lock gets minted is the circuit's decision.
+ *
+ * # Why a wave works
+ *
+ * Mina checks a state precondition when the transaction is applied, not against
+ * the state at the start of the block, so a mint proved against the cursor its
+ * predecessor leaves is valid in the same block. Each claim is still two
+ * transactions — arm, then mint — and those chain the same way.
+ *
+ * Per port, not across them: chains are per asset, so two ports advance
+ * independently and their waves never interfere.
  */
 async function mint(): Promise<void> {
   for (const asset of assets()) {
@@ -128,31 +144,33 @@ async function mint(): Promise<void> {
     const queue = await mintableLocks(asset.flareToken);
     if (queue.length === 0) continue;
 
-    // One at a time: the port advances a cursor, so two mints in one block
-    // conflict.
-    for (const row of queue) {
-      // Re-read: the previous mint moved the cursor, and a range starting where
-      // the port no longer is would be refused.
-      const now = await portState(asset.port);
-      if (now === null) break;
+    const range = await transferRange(state.processed, state.accepted);
+    if (range === null) {
+      console.warn(`${asset.symbol}: the transfer ledger has not caught up`);
+      continue;
+    }
+    if (range.length === 0) continue;
 
-      const range = await transferRange(now.processed, now.accepted);
-      if (range === null) {
-        console.warn(`${asset.symbol}: the transfer ledger has not caught up`);
-        break;
-      }
-      if (range.length === 0) break;
+    // A row can outlive the mint that settled it: the transaction lands, and
+    // the process dies before recording it — which a restart does routinely.
+    // The port's cursor is the truth, so a claim it has already moved past is
+    // minted, and retrying it forever only hides real failures.
+    const cursorIndex = await transferIndexOf(state.processed);
+    const flareToken = asset.flareToken.toLowerCase();
 
-      // A row can outlive the mint that settled it: the transaction lands, and
-      // the process dies before recording it — which a restart does routinely.
-      // The port's cursor is the truth, so a claim it has already moved past is
-      // minted, and retrying it forever only hides real failures.
-      const cursorIndex = await transferIndexOf(now.processed);
+    let remaining = range;
+    const sent: { id: string; claim: string; recipient: string; hash: string }[] = [];
+
+    for (const row of queue.slice(0, WAVE)) {
       if (cursorIndex !== null && BigInt(row.claim_id) <= cursorIndex) {
         await markLockMinted(row.id, row.mina_tx_hash ?? 'recovered');
         console.log(`${asset.symbol} claim ${row.claim_id} was already minted; catching the row up`);
         continue;
       }
+
+      // The lock the circuit will pick, and where the next range must resume.
+      const at = remaining.findIndex((r) => r.token.toLowerCase() === flareToken);
+      if (at === -1) break;
 
       try {
         await markLockMinting(row.id);
@@ -160,15 +178,17 @@ async function mint(): Promise<void> {
           port: asset.port,
           token: asset.token,
           asset: asset.flareToken,
-          range: range.map((r) => ({
+          range: remaining.map((r) => ({
             index: BigInt(r.chain_index),
             token: r.token,
             recipient: r.recipient,
             amount: BigInt(r.amount),
           })),
+          wave: true,
+          restart: sent.length === 0,
         });
-        await markLockMinted(row.id, hash);
-        console.log(`minted ${asset.symbol} claim ${row.claim_id} -> ${row.recipient}`);
+        sent.push({ id: row.id, claim: row.claim_id, recipient: row.recipient, hash });
+        remaining = remaining.slice(at + 1);
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
         // Left in 'minting' rather than marked failed, and 'minting' is still
@@ -176,9 +196,53 @@ async function mint(): Promise<void> {
         // not yet included, which resolves on its own. Marking it failed would
         // strand the user's tokens in the vault with nothing retrying.
         console.warn(`${asset.symbol} claim ${row.claim_id} not minted: ${reason}`);
-        return;
+        break;
       }
     }
+
+    if (sent.length > 0) await confirmMints(asset, sent);
+  }
+}
+
+/**
+ * Settle a wave of mints against the port's cursor.
+ *
+ * A hash proves nothing — `send()` resolves for a transaction consensus later
+ * rejects — so claims are marked minted as the cursor passes their index.
+ * Whatever it never reaches stays `minting`, which `mintableLocks` still
+ * returns, and the next tick rebuilds it from the state the chain has. That is
+ * the retry in full: no record of which transaction of the wave failed, because
+ * once the cursor has spoken a survivor and a claim never sent look the same.
+ */
+async function confirmMints(
+  asset: { symbol: string; port: string },
+  sent: { id: string; claim: string; recipient: string; hash: string }[],
+) {
+  console.log(`sent a wave of ${sent.length} ${asset.symbol} mint(s); waiting on the cursor`);
+
+  const outstanding = new Map(sent.map((s) => [s.id, s]));
+  const deadline = Date.now() + CONFIRM_MS;
+
+  while (outstanding.size > 0 && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 15_000));
+
+    const now = await portState(asset.port);
+    if (now === null) continue;
+    const index = await transferIndexOf(now.processed);
+    if (index === null) continue;
+
+    for (const [id, row] of outstanding) {
+      if (BigInt(row.claim) > index) continue;
+      await markLockMinted(id, row.hash);
+      console.log(`minted ${asset.symbol} claim ${row.claim} -> ${row.recipient}`);
+      outstanding.delete(id);
+    }
+  }
+
+  for (const row of outstanding.values()) {
+    console.warn(
+      `${asset.symbol} claim ${row.claim} (${row.hash}) has not moved the cursor; will retry`,
+    );
   }
 }
 

@@ -179,6 +179,10 @@ type MintRequest = {
   /** Flare address of the asset this port administers. */
   asset: string;
   range: ChainLink[];
+  /** Part of a wave: send without waiting, the caller confirms the whole run. */
+  wave?: boolean;
+  /** First of a wave: drop every prediction and re-read the chain. */
+  restart?: boolean;
 };
 
 /**
@@ -851,6 +855,8 @@ async function handleMint(request: MintRequest) {
   const feePayer = PrivateKey.fromBase58(feePayerKey);
   const sender = feePayer.toPublicKey();
 
+  if (request.restart === true) forgetPredictions();
+
   const assetPort = new AssetPort(PublicKey.fromBase58(request.port));
   const token = new FungibleToken(PublicKey.fromBase58(request.token));
 
@@ -925,6 +931,10 @@ async function handleMint(request: MintRequest) {
   );
   await mint.prove();
   const minted = await mint.sign([feePayer]).send();
+
+  // In a wave nothing is confirmed here: the caller settles the whole run
+  // against the port's cursor, which is what says a claim was paid.
+  if (request.wave === true) return minted.hash;
 
   // Same reasoning as the release: a mint whose transaction is rejected still
   // resolves here, and the caller would record the asset as delivered. What

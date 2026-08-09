@@ -201,13 +201,6 @@ export function queueDepth(): number {
 }
 
 /**
- * Release escrowed MINA for a burn that already happened on Flare.
- *
- * Queued behind deposits on the same worker: proving saturates its cores, and
- * releases are serialised anyway because `releaseWithdrawal` advances the
- * bridge's cursor along Flare's chain. Returns the Mina transaction hash.
- */
-/**
  * Push Flare's withdrawal chain state to the escrow.
  *
  * Queued on the same worker as everything else: proving saturates its cores,
@@ -328,6 +321,10 @@ export async function mintLock(request: {
   /** Flare address of the asset this port administers. */
   asset: string;
   range: ChainRecord[];
+  /** Send without waiting for inclusion; the caller confirms the whole wave. */
+  wave?: boolean;
+  /** First of a wave: the prover drops its predictions and re-reads the chain. */
+  restart?: boolean;
 }): Promise<string> {
   return submit(
     'background',
@@ -338,6 +335,8 @@ export async function mintLock(request: {
       token: request.token,
       asset: request.asset,
       range: request.range.map(wire),
+      wave: request.wave,
+      restart: request.restart,
     }),
     (built) => built.transaction,
   );
