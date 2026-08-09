@@ -200,6 +200,39 @@ export function App() {
             </p>
           )}
           {error && <p className="status err">{error}</p>}
+
+          {/* Everything a fresh wallet needs, in the order it needs it: the
+              extension, then devnet MINA to pay a fee, then C2FLR for the Flare
+              side. Shown whether or not a wallet is detected — an installed
+              wallet with an empty account hits the second and third problems,
+              and hunting for the right faucet is where that stalls. */}
+          <div className="notice" style={{ marginTop: 18 }}>
+            <strong>Starting from scratch?</strong>
+            <p className="small" style={{ marginBottom: 0 }}>
+              Install{' '}
+              <a href="https://aurowallet.com" target="_blank" rel="noreferrer">
+                Auro
+              </a>{' '}
+              or{' '}
+              <a href="https://pallad.co" target="_blank" rel="noreferrer">
+                Pallad
+              </a>{' '}
+              and switch it to <strong>Devnet</strong>. Then top up:{' '}
+              <a href="https://faucet.minaprotocol.com/" target="_blank" rel="noreferrer">
+                MINA devnet faucet
+              </a>{' '}
+              ·{' '}
+              <a href="https://faucet.flare.network/coston2" target="_blank" rel="noreferrer">
+                Coston2 C2FLR faucet
+              </a>
+              .
+            </p>
+            <p className="muted small" style={{ marginBottom: 0 }}>
+              The Flare faucet wants the address your Mina key owns, which appears once you
+              connect — nothing needs to be deployed first.
+            </p>
+          </div>
+
           {/* Visible without a wallet on purpose: the bridge's state is public,
               and someone evaluating it should not have to install an extension
               to see whether it is running. */}
