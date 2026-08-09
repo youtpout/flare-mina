@@ -469,7 +469,15 @@ async function buildAttestation(
   calls: unknown[],
   keys: unknown[],
 ) {
+  // Timed per stage: "the proof took two minutes" is not actionable, and the
+  // stages have very different costs — one ECDSA against a keccak over 1344
+  // bytes — so which one to attack is the only useful thing to know.
+  const stage = (label: string, from: number) =>
+    console.log(`    ${label.padEnd(18)} ${((Date.now() - from) / 1000).toFixed(1)}s`);
+
+  let t = Date.now();
   const { merged: policy, tree } = await proveSigningPolicy(calls, keys);
+  stage('signing policy', t);
 
   const bytes32 = (hex: string) =>
     (Bytes32 as unknown as { fromHex(h: string): unknown }).fromHex(hex);
@@ -478,6 +486,7 @@ async function buildAttestation(
   ).fromHex(responseHex);
 
   // Climb from the leaf, one level at a time.
+  t = Date.now();
   const leafDigest = keccak(responseHex);
   let segment = (await MerkleInclusion.level(
     bytes32(leafDigest) as never,
@@ -491,8 +500,16 @@ async function buildAttestation(
     segment = (await MerkleInclusion.merge(segment, next)).proof;
   }
 
+  stage('merkle inclusion', t);
+
+  t = Date.now();
   const { proof: leaf } = await FdcLeaf.read(response as never, segment);
+  stage('fdc leaf', t);
+
+  t = Date.now();
   const { proof: attestation } = await FdcAttestation.attest(leaf, policy);
+  stage('fdc attestation', t);
+
   return { attestation, tree };
 }
 
