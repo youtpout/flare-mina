@@ -576,7 +576,12 @@ async function handlePublish(request: PublishRequest) {
   // Coston2 rotates its validator set every 6 hours, so a root fixed at deploy
   // goes stale the same day. Rotate before publishing rather than leaving an
   // operator to notice.
-  if (bridge.signingPolicyRoot.get().toString() !== tree.root.toString()) {
+  // Set when this run rotated the root itself, so the publication below knows
+  // the escrow is one transaction ahead of what the chain reports.
+  let rotatedHere: { from: Field; to: Field } | undefined;
+  const onChainRoot = bridge.signingPolicyRoot.get();
+
+  if (onChainRoot.toString() !== tree.root.toString()) {
     const admin = PrivateKey.fromBase58(
       process.env.MINA_ADMIN_PRIVATE_KEY ?? feePayerKey,
     );
@@ -589,18 +594,18 @@ async function handlePublish(request: PublishRequest) {
     await rotate.prove();
     const rotated = await rotate.sign([feePayer, admin]).send();
     console.log(`rotated signing policy root -> ${rotated.hash}`);
-    // The new root becomes a precondition of the publication below, and o1js
-    // builds that precondition from the account it has read.
-    await settle(rotated, 'rotation');
-    await fetchAccount({ publicKey: bridge.address });
-    if (bridge.signingPolicyRoot.get().toString() !== tree.root.toString()) {
-      throw new Error('policy rotation has not landed yet; retrying next tick');
-    }
+    rotatedHere = { from: onChainRoot, to: tree.root };
   }
 
   const tx = await Mina.transaction(
     { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
     async () => {
+      // The new root is a precondition of this publication, so it used to wait
+      // for the rotation to be included. Built against the root the rotation
+      // leaves, the pair rides one block.
+      if (rotatedHere !== undefined) {
+        predictState(bridge.address, POLICY_ROOT_SLOT, rotatedHere.from, rotatedHere.to);
+      }
       await bridge.publishFlareActionState(attestation);
     },
   );
@@ -679,6 +684,9 @@ function forgetPredictions(): void {
  * a reordering fails loudly here instead of proving against another field.
  */
 const PROCESSED_SLOT = 3;
+
+/** First slot of both contracts, and the same field in each. */
+const POLICY_ROOT_SLOT = 0;
 
 /**
  * Slots of `AssetPort`, from its declaration order: root, flare, processed,
@@ -807,7 +815,12 @@ async function handlePublishLock(request: PublishLockRequest) {
   await fetchAccount({ publicKey: assetPort.address });
   await fetchAccount({ publicKey: admin.toPublicKey() });
 
-  if (assetPort.signingPolicyRoot.get().toString() !== tree.root.toString()) {
+  // Set when this run rotated the root itself, so the publication below knows
+  // the port is one transaction ahead of what the chain reports.
+  let rotatedHere: { from: Field; to: Field } | undefined;
+  const onChainRoot = assetPort.signingPolicyRoot.get();
+
+  if (onChainRoot.toString() !== tree.root.toString()) {
     const rotate = await Mina.transaction(
       { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
       async () => {
@@ -819,18 +832,19 @@ async function handlePublishLock(request: PublishLockRequest) {
     await rotate.prove();
     const rotated = await rotate.sign([feePayer, admin]).send();
     console.log(`rotated ${request.port} policy root -> ${rotated.hash}`);
-    // The new root becomes a precondition of the publication below, and o1js
-    // builds that precondition from the account it has read.
-    await settle(rotated, 'rotation');
-    await fetchAccount({ publicKey: assetPort.address });
-    if (assetPort.signingPolicyRoot.get().toString() !== tree.root.toString()) {
-      throw new Error('policy rotation has not landed yet; retrying next tick');
-    }
+    rotatedHere = { from: onChainRoot, to: tree.root };
   }
 
   const tx = await Mina.transaction(
     { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
     async () => {
+      // The new root is a precondition of this publication, so it used to wait
+      // for the rotation to be included — a block per port, four times a day
+      // when Flare rotates its validator set. Built against the root the
+      // rotation leaves, the pair rides one block.
+      if (rotatedHere !== undefined) {
+        predictState(assetPort.address, POLICY_ROOT_SLOT, rotatedHere.from, rotatedHere.to);
+      }
       await assetPort.publishFlareLockState(attestation);
     },
   );
