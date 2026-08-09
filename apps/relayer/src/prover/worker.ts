@@ -677,6 +677,13 @@ function forgetPredictions(): void {
 const PROCESSED_SLOT = 3;
 
 /**
+ * Slots of `AssetPort`, from its declaration order: root, flare, processed,
+ * weight, asset, authorization, chain, admin.
+ */
+const PROCESSED_LOCK_SLOT = 2;
+const MINT_AUTH_SLOT = 5;
+
+/**
  * Build against a state the chain has not applied yet.
  *
  * This has to run *inside* the transaction callback. `Mina.transaction` runs the
@@ -867,29 +874,28 @@ async function handleMint(request: MintRequest) {
     .equals(mintCommitment(recipient, amount))
     .toBoolean();
 
+  // Set when this run armed the claim itself, so the mint below knows the port's
+  // state is one transaction ahead of what the chain reports.
+  let armedHere: { cursorFrom: Field; cursorTo: Field } | undefined;
+
   if (!alreadyArmed) {
-    const processed = predictedLockCursor.get(request.port) ?? assetPort.processedLockState.get();
-    const segment = await proveSegment(
-      processed as Field,
-      Field(BigInt(request.asset)),
-      request.range,
-    );
+    const onChainCursor = assetPort.processedLockState.get();
+    const processed = (predictedLockCursor.get(request.port) as Field | undefined) ?? onChainCursor;
+    const segment = await proveSegment(processed, Field(BigInt(request.asset)), request.range);
     const next = segment.publicOutput.stateAfterFirst;
 
     const authorize = await Mina.transaction(
       { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
       async () => {
+        predictState(assetPort.address, PROCESSED_LOCK_SLOT, onChainCursor, processed);
         await assetPort.authorizeMint(segment);
       },
     );
     await authorize.prove();
     const armed = await authorize.sign([feePayer]).send();
     predictedLockCursor.set(request.port, next);
-
-    // `canMint` reads `mintAuthorization` as a precondition, and an account
-    // still showing the old value would build a mint that cannot apply.
-    await settle(armed, 'authorisation');
-    await fetchAccount({ publicKey: assetPort.address });
+    armedHere = { cursorFrom: onChainCursor, cursorTo: next };
+    console.log(`armed the claim -> ${armed.hash}`);
   }
 
   // The recipient's token account may not exist. Funding one that already
@@ -900,6 +906,19 @@ async function handleMint(request: MintRequest) {
   const mint = await Mina.transaction(
     { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
     async () => {
+      // `canMint` reads `mintAuthorization` as a precondition, so this used to
+      // wait for the authorisation to be included — a whole block per mint, on
+      // top of the one the mint itself costs. Built against the state the
+      // authorisation leaves, the pair rides one block.
+      if (armedHere !== undefined) {
+        predictState(assetPort.address, PROCESSED_LOCK_SLOT, armedHere.cursorFrom, armedHere.cursorTo);
+        predictState(
+          assetPort.address,
+          MINT_AUTH_SLOT,
+          NO_MINT_AUTHORIZED,
+          mintCommitment(recipient, amount),
+        );
+      }
       if (isNew) AccountUpdate.fundNewAccount(sender, 1);
       await token.mint(recipient, amount);
     },
