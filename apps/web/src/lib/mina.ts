@@ -26,20 +26,6 @@ export type MinaProvider = {
     signature: string | { field: string; scalar: string };
   }>;
   /**
-   * Sign a plain string.
-   *
-   * Optional: not every provider exposes it, and the app only uses it for the
-   * readable-signature preview today. Deliberately not `signJsonMessage` — that
-   * one lets the *wallet* serialise the payload, so two wallets can hash
-   * different bytes for the same intent and a contract cannot rebuild either
-   * with confidence.
-   */
-  signMessage?(args: { message: string }): Promise<{
-    data: unknown;
-    publicKey: string;
-    signature: string | { field: string; scalar: string };
-  }>;
-  /**
    * Sign and broadcast a zkApp transaction the dApp built.
    *
    * The relayer produces the proof — a zkApp method call is a proof, and
@@ -150,51 +136,6 @@ export function authorizationFields(params: {
     params.nonce,
     params.expiry,
   ].map(String);
-}
-
-/** Names for the purpose tags, for the readable message below. */
-const PURPOSE_NAME: Record<string, string> = {
-  '1': 'call',
-  '2': 'batch',
-  '3': 'deposit',
-  '4': 'release',
-};
-
-/**
- * The same authorization as text, for a wallet that can display what it signs.
- *
- * `signFields` renders in Auro as a column of raw decimals nobody can check.
- * This is the alternative: one string, signed with `signMessage`, which the
- * contract rebuilds from its own arguments the way it rebuilds the fields.
- *
- * Nothing here is prose the contract cannot verify. It is tempting to write
- * "send 1 USD₮0 to Alice", but the contract would have to be handed that
- * sentence to reconstruct the string — so the signature would cover the
- * sentence without tying it to the calldata, and a relayer could pair a
- * reassuring phrase with a different action. `action` therefore stays a digest:
- * opaque, and honest about it.
- *
- * Byte-for-byte stable, because the hash is over these exact bytes: lowercase
- * hex, decimal integers, `\n` separators, no trailing newline.
- */
-export function authorizationMessage(params: {
-  purpose: bigint;
-  chainId: bigint;
-  target: Address;
-  actionHash: Hex;
-  nonce: bigint;
-  expiry: bigint;
-}): string {
-  const purpose = PURPOSE_NAME[params.purpose.toString()] ?? params.purpose.toString();
-  return [
-    'Flare x Mina',
-    `purpose: ${purpose}`,
-    `chain: ${params.chainId}`,
-    `target: ${params.target.toLowerCase()}`,
-    `action: ${params.actionHash.toLowerCase()}`,
-    `nonce: ${params.nonce}`,
-    `expires: ${params.expiry}`,
-  ].join('\n');
 }
 
 /** Commitment to one call: `keccak256(abi.encode(target, value, keccak256(data)))`. */

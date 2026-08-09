@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import type { Session } from '@/App';
 import { readBalances, type Balance } from '@/lib/flare';
 import { COSTON2, MINA, explorerAddress } from '@/lib/config';
-import { SignaturePreview } from '@/components/SignaturePreview';
 
 const short = (s: string, head = 10, tail = 8) =>
   s.length <= head + tail + 1 ? s : `${s.slice(0, head)}…${s.slice(-tail)}`;
@@ -139,8 +138,6 @@ export function Portfolio({
         </a>{' '}
         on Mina {MINA.network}.
       </div>
-          <SignaturePreview session={session} />
-
-</>
+    </>
   );
 }
