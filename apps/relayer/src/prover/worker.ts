@@ -965,6 +965,25 @@ async function handleMint(request: MintRequest) {
   return minted.hash;
 }
 
+/**
+ * Fetch a user's account, or say plainly that it does not exist yet.
+ *
+ * o1js reports this as `getAccount: Could not find account for public key …`
+ * with the GraphQL endpoint appended, which reads like a broken relayer rather
+ * than an empty wallet. On Mina an account exists only once it has been funded,
+ * so this is what every first-time user hits — and the fix is a faucet, not a
+ * bug report.
+ */
+async function requireUserAccount(sender: PublicKey): Promise<void> {
+  const { account } = await fetchAccount({ publicKey: sender });
+  if (account === undefined) {
+    throw new Error(
+      `This Mina account does not exist yet (${sender.toBase58()}). ` +
+        'Fund it from the devnet faucet, or send it MINA from another account, then try again.',
+    );
+  }
+}
+
 port.on('message', async (request: Request) => {
   if (request.kind === 'publish') {
     try {
@@ -1028,7 +1047,7 @@ port.on('message', async (request: Request) => {
       const sender = PublicKey.fromBase58(request.sender);
       const token = new FungibleToken(PublicKey.fromBase58(request.token));
 
-      await fetchAccount({ publicKey: sender });
+      await requireUserAccount(sender);
       await fetchAccount({ publicKey: token.address });
       // The holder's token account, which is what the burn debits. Without it
       // the transaction is built against a balance o1js has not seen.
@@ -1065,7 +1084,7 @@ port.on('message', async (request: Request) => {
     // (fee-payer nonce, balance). Fetching it here rather than trusting the
     // caller means a wrong address fails now, not at broadcast time.
     let t = Date.now();
-    await fetchAccount({ publicKey: sender });
+    await requireUserAccount(sender);
     console.log(`  fetch sender: ${Date.now() - t}ms`);
     t = Date.now();
     await fetchAccount({ publicKey: bridge.address });
