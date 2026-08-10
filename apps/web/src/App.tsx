@@ -7,6 +7,7 @@ import { Portfolio } from '@/components/Portfolio';
 import { Swap } from '@/components/Swap';
 import { Bridge } from '@/components/Bridge';
 import { Network } from '@/components/Network';
+import { Faucets } from '@/components/Faucets';
 
 export type Session = {
   provider: MinaProvider;
@@ -225,6 +226,7 @@ export function App() {
           </p>
         </div>
         {showNetwork && <Network />}
+        <Faucets />
         </>
       ) : (
         <>
