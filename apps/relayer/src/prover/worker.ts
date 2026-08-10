@@ -1027,6 +1027,17 @@ function postFailure(id: number, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
   port.postMessage({ type: 'failed', id, error: message } satisfies Failed);
 
+  // `Invalid_nonce` means our counter is wrong and the chain is right, so the
+  // high-water mark has to go. It exists to stop a reseed reusing a nonce a
+  // pending transaction already claimed — but a build that failed sent nothing,
+  // so it left a gap instead, and Mina never fills a gap. Every later
+  // transaction from this key was rejected until the process restarted.
+  if (message.includes('Invalid_nonce')) {
+    console.error('nonce prediction was ahead of the chain; reseeding from it');
+    issuedNonce = undefined;
+    predictedNonce = undefined;
+  }
+
   if (message.includes('within another transaction')) {
     console.error('transaction context is stuck; exiting so a clean worker replaces this one');
     setTimeout(() => process.exit(1), 50);
