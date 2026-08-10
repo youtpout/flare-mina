@@ -179,6 +179,32 @@ async function submit<T>(
   return result;
 }
 
+/**
+ * Compile both lanes now rather than on the first request.
+ *
+ * Lanes used to start lazily, so the first deposit after a restart waited out
+ * the whole compile -- ~200s warm, most of it FdcLeaf, which the deposit path
+ * never proves but must compile to reach MinaPortBridge's verification key.
+ * A user watching a spinner should not be paying that.
+ *
+ * Sequential: two cold compiles at once would fight for the same cores and both
+ * finish later. The user lane goes first because it is the one with someone
+ * waiting behind it.
+ */
+export async function warmLanes(): Promise<void> {
+  for (const lane of ['user', 'background'] as Lane[]) {
+    const t = Date.now();
+    try {
+      await start(lane);
+      console.log(`prover[${lane}] warm in ${((Date.now() - t) / 1000).toFixed(1)}s`);
+    } catch (e) {
+      // Not fatal: the next request restarts the lane. Serving the rest of the
+      // API beats refusing to boot over a prover that may recover.
+      console.error(`prover[${lane}] failed to warm:`, e instanceof Error ? e.message : e);
+    }
+  }
+}
+
 /** Build and prove a deposit. Resolves with an unsigned transaction. */
 export async function buildDeposit(request: DepositRequest): Promise<BuiltDeposit> {
   return submit(

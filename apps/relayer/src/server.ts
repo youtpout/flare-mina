@@ -23,7 +23,7 @@ import {
   releasesFor,
   withdrawalsFor,
 } from './db/index.js';
-import { buildBurn, buildDeposit } from './prover/index.js';
+import { buildBurn, buildDeposit, warmLanes } from './prover/index.js';
 import {
   deployAccount,
   submitBatch,
@@ -511,6 +511,10 @@ async function main() {
   const server = app.listen(PORT, () => {
     console.log(`attestor API listening on :${PORT}`);
   });
+
+  // Not awaited: /health and the watchers should answer while the provers
+  // compile, and a deposit arriving mid-warm queues behind it either way.
+  void warmLanes();
 
   const shutdown = async (signal: string) => {
     console.log(`${signal} received, shutting down`);
