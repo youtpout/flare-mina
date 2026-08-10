@@ -39,17 +39,29 @@ export function chunkedCache(directory: string, debug = false) {
     if (debug) console.log('[cache]', ...args);
   };
 
+  // Whether a compile read its keys back or rebuilt them. o1js reports neither,
+  // and timing cannot tell them apart on a machine you have not measured, so
+  // the count is the only honest signal.
+  const stats = { hits: 0, misses: 0 };
+
   return {
+    stats,
     read({ persistentId, uniqueId, dataType }: Header): Uint8Array | undefined {
       const headerPath = join(directory, `${persistentId}.header`);
       const dataPath = join(directory, persistentId);
 
+      const miss = () => {
+        stats.misses++;
+        return undefined;
+      };
+
       try {
-        if (!existsSync(headerPath) || !existsSync(dataPath)) return undefined;
+        if (!existsSync(headerPath) || !existsSync(dataPath)) return miss();
         // Written last, so its presence means the data beneath it is complete.
-        if (readFileSync(headerPath, 'utf8') !== uniqueId) return undefined;
+        if (readFileSync(headerPath, 'utf8') !== uniqueId) return miss();
 
         if (dataType === 'string') {
+          stats.hits++;
           return new TextEncoder().encode(readFileSync(dataPath, 'utf8'));
         }
 
@@ -60,16 +72,17 @@ export function chunkedCache(directory: string, debug = false) {
           let read = 0;
           while (read < size) {
             const n = readSync(fd, buffer, read, Math.min(SLICE, size - read), read);
-            if (n === 0) return undefined;
+            if (n === 0) return miss();
             read += n;
           }
         } finally {
           closeSync(fd);
         }
+        stats.hits++;
         return new Uint8Array(buffer.buffer, buffer.byteOffset, size);
       } catch (e) {
         log('read failed', persistentId, e);
-        return undefined;
+        return miss();
       }
     },
 

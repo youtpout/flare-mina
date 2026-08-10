@@ -76,12 +76,19 @@ console.log(`\ntotal ${((Date.now() - started) / 1000).toFixed(1)}s`);
 // A second pass over the heaviest one, reading back what was just written. A
 // cache that writes and cannot read is the failure this script exists to
 // prevent, and it is invisible until the next restart.
+const before = { ...cache.stats };
 const verify = Date.now();
 await FdcLeaf.compile(options);
 const elapsed = (Date.now() - verify) / 1000;
-console.log(`FdcLeaf re-read ${elapsed.toFixed(1)}s`);
 
-if (elapsed > 60) {
+// Counted, not timed. This was a 60 s threshold, and a re-read that took 85.7 s
+// on a slower host — three times faster than that host's 255.6 s cold compile,
+// so plainly a hit — was reported as a failure. A ratio would have been better
+// and still a guess; the cache knows the answer.
+const misses = cache.stats.misses - before.misses;
+console.log(`FdcLeaf re-read ${elapsed.toFixed(1)}s, ${misses} cache miss(es)`);
+
+if (misses > 0) {
   console.error(
     `\nFdcLeaf recompiled instead of loading from ${CACHE_DIR}. The cache is not ` +
       'being read back — check disk space and permissions before starting the relayer.',
