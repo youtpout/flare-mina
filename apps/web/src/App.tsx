@@ -8,6 +8,7 @@ import { Swap } from '@/components/Swap';
 import { Bridge } from '@/components/Bridge';
 import { Network } from '@/components/Network';
 import { Faucets } from '@/components/Faucets';
+import { errorMessage } from '@/lib/errors';
 
 export type Session = {
   provider: MinaProvider;
@@ -90,7 +91,7 @@ export function App() {
 
       setSession(await sessionFor(provider, minaAddress));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setConnecting(false);
     }
@@ -153,7 +154,7 @@ export function App() {
           setSession(built);
           setError(null);
         })
-        .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+        .catch((e) => setError(errorMessage(e)));
     };
 
     provider.on('accountsChanged', onAccountsChanged);

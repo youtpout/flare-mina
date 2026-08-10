@@ -4,6 +4,7 @@ import { readBalances, type Balance } from '@/lib/flare';
 import { COSTON2, MINA, explorerAddress } from '@/lib/config';
 import { Faucets } from '@/components/Faucets';
 import { readJson } from '@/lib/api';
+import { errorMessage } from '@/lib/errors';
 
 const short = (s: string, head = 10, tail = 8) =>
   s.length <= head + tail + 1 ? s : `${s.slice(0, head)}…${s.slice(-tail)}`;
@@ -74,7 +75,7 @@ export function Portfolio({
       // and without reloading -- a reload would drop the session.
       await onRefresh();
     } catch (e) {
-      setDeployError(e instanceof Error ? e.message : String(e));
+      setDeployError(errorMessage(e));
     } finally {
       setDeploying(false);
     }
@@ -89,7 +90,7 @@ export function Portfolio({
         if (!live) return;
         setBalances(b);
       } catch (e) {
-        if (live) setError(e instanceof Error ? e.message : String(e));
+        if (live) setError(errorMessage(e));
       }
     })();
     return () => {

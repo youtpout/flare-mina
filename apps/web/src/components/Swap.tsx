@@ -15,6 +15,7 @@ import {
 } from '@/lib/flare';
 import { PURPOSE, batchHash, signAuthorization } from '@/lib/mina';
 import { readJson } from '@/lib/api';
+import { errorMessage } from '@/lib/errors';
 
 /** Slippage the user tolerates, in basis points. */
 const SLIPPAGE_BPS = 500n;
@@ -219,7 +220,7 @@ export function Swap({ session }: { session: Session }) {
       }
       setStatus('Swapped.');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
       setStatus(null);
     }
   }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { COSTON2, MINA, explorerAddress, explorerTx } from '@/lib/config';
 import { readJson } from '@/lib/api';
+import { errorMessage } from '@/lib/errors';
 
 /**
  * What the bridge is actually doing.
@@ -99,7 +100,7 @@ export function Network() {
       setSnapshot((await readJson(res)) as Snapshot);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     }
   }, []);
 

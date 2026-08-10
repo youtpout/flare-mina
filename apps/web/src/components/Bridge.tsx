@@ -28,6 +28,7 @@ import {
   signAuthorization,
 } from '@/lib/mina';
 import { readJson } from '@/lib/api';
+import { errorMessage } from '@/lib/errors';
 
 /**
  * Deposit status, as the API reports it.
@@ -274,7 +275,7 @@ export function Bridge({ session }: { session: Session }) {
           setSubmitting((ids) => ids.filter((id) => !settled.has(id)));
         }
       } catch (e) {
-        if (live) setError(e instanceof Error ? e.message : String(e));
+        if (live) setError(errorMessage(e));
       }
     };
     void poll();
@@ -487,7 +488,7 @@ export function Bridge({ session }: { session: Session }) {
       // turns `claimed`.
       setSubmitting((ids) => [...ids, d.id]);
     } catch (e) {
-      setClaimError(e instanceof Error ? e.message : String(e));
+      setClaimError(errorMessage(e));
     } finally {
       setClaiming(null);
     }
@@ -683,7 +684,7 @@ export function Bridge({ session }: { session: Session }) {
 
       setAmount('');
     } catch (e) {
-      setDepositError(e instanceof Error ? e.message : String(e));
+      setDepositError(errorMessage(e));
     } finally {
       setDepositing(null);
     }
@@ -756,7 +757,7 @@ export function Bridge({ session }: { session: Session }) {
       const body = (await readJson(res)) as { error?: string };
       if (!res.ok) throw new Error(body.error ?? `relayer returned ${res.status}`);
     } catch (e) {
-      setBurnError(e instanceof Error ? e.message : String(e));
+      setBurnError(errorMessage(e));
     } finally {
       setUnwrapping(null);
     }
@@ -809,7 +810,7 @@ export function Bridge({ session }: { session: Session }) {
 
       setAmount('');
     } catch (e) {
-      setReleaseError(e instanceof Error ? e.message : String(e));
+      setReleaseError(errorMessage(e));
     } finally {
       setBurningAsset(null);
     }
@@ -860,7 +861,7 @@ export function Bridge({ session }: { session: Session }) {
       const body = (await readJson(res)) as { flareTxHash?: string; error?: string };
       if (!res.ok) throw new Error(body.error ?? `relayer returned ${res.status}`);
     } catch (e) {
-      setReleaseError(e instanceof Error ? e.message : String(e));
+      setReleaseError(errorMessage(e));
     } finally {
       setClaimingRelease(null);
     }
@@ -982,7 +983,7 @@ export function Bridge({ session }: { session: Session }) {
 
       setBurnAmount('');
     } catch (e) {
-      setBurnError(e instanceof Error ? e.message : String(e));
+      setBurnError(errorMessage(e));
     } finally {
       setBurning(null);
     }
