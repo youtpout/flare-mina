@@ -1,6 +1,7 @@
 # Deployment
 
-Live on `159.195.202.103` — Debian 13, 12 vCPU (EPYC 9645), 32 GB, 1 TB.
+Live at **https://labdevn.com** on `159.195.202.103` — Debian 13, 12 vCPU
+(EPYC 9645), 32 GB, 1 TB.
 
 No Docker, no CI. The code comes from GitHub, the secrets come from `scp`, and
 systemd keeps it up. At hackathon scale every extra layer is a layer that can
@@ -18,8 +19,10 @@ break on a Sunday night.
 | Web root | `apps/web/dist`, served by Caddy |
 | Database | Postgres 17, `flarexmina/flarexmina`, localhost only |
 
-Caddy serves the SPA on `:80` and proxies `/api/*` to `127.0.0.1:8787`, stripping
-the prefix. Same origin for both, which removes CORS entirely.
+Caddy serves the SPA and proxies `/api/*` to `127.0.0.1:8787`, stripping the
+prefix. Same origin for both, which removes CORS entirely. It holds the
+Let's Encrypt certificate and renews it unattended; `www` and the bare IP
+redirect to the apex, so old links keep working.
 
 ## Updating
 
@@ -50,7 +53,5 @@ Before starting one anywhere, stop the other.
 
 ## Still to do
 
-- A domain. Caddy fetches a certificate on its own once the Caddyfile names a
-  host instead of `:80`; until then the site is plain HTTP.
 - Postgres backups. Nothing is backed up, and the DB is rebuildable from chain
   only within `*_LOOKBACK_BLOCKS`.
