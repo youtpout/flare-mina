@@ -325,11 +325,14 @@ export async function mintLock(request: {
   wave?: boolean;
   /** First of a wave: the prover drops its predictions and re-reads the chain. */
   restart?: boolean;
+  /** Claims to test against an authorisation left behind by a failed mint. */
+  candidates?: { recipient: string; amount: string }[];
 }): Promise<string> {
   return submit(
     'background',
     (id) => ({
       kind: 'mint',
+      candidates: request.candidates,
       id,
       port: request.port,
       token: request.token,

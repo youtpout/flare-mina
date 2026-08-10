@@ -5,6 +5,7 @@ import {
   markLockMinting,
   markLocksPublished,
   mintableLocks,
+  recentLocks,
   recordLock,
   transferIndexOf,
   transferRange,

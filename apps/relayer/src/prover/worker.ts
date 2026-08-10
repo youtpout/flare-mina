@@ -183,6 +183,14 @@ type MintRequest = {
   wave?: boolean;
   /** First of a wave: drop every prediction and re-read the chain. */
   restart?: boolean;
+  /**
+   * Claims to test against a leftover authorisation.
+   *
+   * The port stores only a commitment to (recipient, amount), so recovering
+   * from an authorisation whose mint never landed means recomputing that
+   * commitment over candidates until one matches.
+   */
+  candidates?: { recipient: string; amount: string }[];
 };
 
 /**
@@ -920,10 +928,44 @@ async function handleMint(request: MintRequest) {
   // transactions, so a failure between them leaves the claim armed and its
   // cursor already advanced — re-authorising would then fail forever on a
   // record the chain has moved past, stranding the user's tokens in the vault.
-  const alreadyArmed = assetPort.mintAuthorization
-    .get()
-    .equals(mintCommitment(recipient, amount))
-    .toBoolean();
+  const authorization = assetPort.mintAuthorization.get();
+  const alreadyArmed = authorization.equals(mintCommitment(recipient, amount)).toBoolean();
+
+  // A port can be left armed for *another* claim: arming advances the cursor, so
+  // a mint that never landed leaves an authorisation nothing matches, and every
+  // later claim then fails to arm — permanently, since `authorizeMint` requires
+  // an empty slot. Finish that one first; the cursor already moved past it, so
+  // the row reconciles on its own afterwards.
+  const stale = !alreadyArmed && !authorization.equals(NO_MINT_AUTHORIZED).toBoolean();
+  if (stale) {
+    const match = (request.candidates ?? []).find((c) =>
+      mintCommitment(PublicKey.fromBase58(c.recipient), UInt64.from(BigInt(c.amount)))
+        .equals(authorization)
+        .toBoolean(),
+    );
+    if (match === undefined) {
+      throw new Error(
+        `the port is armed for a claim none of the candidates match (${authorization.toString()}); ` +
+          'widen the candidate list to recover it',
+      );
+    }
+    const stuckTo = PublicKey.fromBase58(match.recipient);
+    const stuckAmount = UInt64.from(BigInt(match.amount));
+    console.log(`port armed for another claim; finishing that mint first -> ${match.recipient}`);
+
+    const held = await fetchAccount({ publicKey: stuckTo, tokenId: token.deriveTokenId() });
+    const recover = await Mina.transaction(
+      { sender, fee: Number(process.env.MINA_FEE ?? 100_000_000), nonce: claimNonce(sender) },
+      async () => {
+        if (held.account === undefined) AccountUpdate.fundNewAccount(sender, 1);
+        await token.mint(stuckTo, stuckAmount);
+      },
+    );
+    await recover.prove();
+    const done = await recover.sign([feePayer]).send();
+    await settle(done, 'recovery mint');
+    return done.hash;
+  }
 
   // Set when this run armed the claim itself, so the mint below knows the port's
   // state is one transaction ahead of what the chain reports.

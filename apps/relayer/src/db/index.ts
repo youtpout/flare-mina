@@ -334,6 +334,22 @@ export async function markLocksPublished(token: string, acceptedState: bigint): 
 }
 
 /** Locks awaiting a mint, oldest claim first — the order the port demands. */
+/**
+ * Recent claims for one asset, whatever their state.
+ *
+ * For recovering a port left armed: it stores only a Poseidon commitment to
+ * (recipient, amount), so the claim behind it is found by recomputing that
+ * commitment over candidates — and the armed one may already be recorded as
+ * minted, so this cannot filter by status.
+ */
+export async function recentLocks(token: string, limit = 25): Promise<LockRow[]> {
+  const { rows } = await pool.query<LockRow>(
+    `SELECT * FROM locks WHERE token = $1 ORDER BY claim_id DESC LIMIT $2`,
+    [token.toLowerCase(), limit],
+  );
+  return rows;
+}
+
 export async function mintableLocks(token: string): Promise<LockRow[]> {
   const { rows } = await pool.query<LockRow>(
     `SELECT * FROM locks WHERE token = $1 AND status IN ('published','minting')
