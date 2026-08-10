@@ -632,6 +632,15 @@ async function handlePublish(request: PublishRequest) {
 let predictedCursor: unknown | undefined;
 
 /**
+ * Recipients this wave has already created an account for.
+ *
+ * Chain state is read fresh for every release, but a wave sends without waiting,
+ * so two releases to the same new address would both see it missing and both pay
+ * the creation fee. Cleared when a wave re-anchors.
+ */
+const fundedThisWave = new Set<string>();
+
+/**
  * The fee payer's next nonce, predicted rather than read.
  *
  * `fetchAccount` returns what the chain has applied, which does not count the
@@ -735,16 +744,32 @@ async function handleRelease(request: ReleaseRequest) {
   // Only this rail's cursor. `forgetPredictions()` would clear every port's too,
   // and ports now run their waves concurrently — one rail re-anchoring must not
   // invalidate another's in-flight prediction.
-  if (request.restart === true) predictedCursor = undefined;
+  if (request.restart === true) {
+    predictedCursor = undefined;
+    fundedThisWave.clear();
+  }
 
   await fetchAccount({ publicKey: sender });
   await fetchAccount({ publicKey: bridge.address });
 
   const fmina = process.env.FLARE_FMINA_ADDRESS;
   if (!fmina) throw new Error('FLARE_FMINA_ADDRESS is required');
-  if (firstOf(fmina, request.range) === undefined) {
+  const claimed = firstOf(fmina, request.range);
+  if (claimed === undefined) {
     throw new Error('the range holds no MINA withdrawal to release');
   }
+
+  // A recipient who has never held MINA has no account, and a balance increase
+  // to one costs the creation fee — which nothing here was paying. The circuit
+  // picks the record, but it picks the *first* of this asset, so the same one
+  // computed here.
+  //
+  // The escrow pays, not the user: deducting it would deliver less than was
+  // burned, and the two sides of the bridge would stop matching.
+  const recipient = PublicKey.fromBase58(claimed.recipient);
+  const key = recipient.toBase58();
+  const fundRecipient =
+    !fundedThisWave.has(key) && (await fetchAccount({ publicKey: recipient })).account === undefined;
 
   const onChain = bridge.processedActionState.get();
   const processed = (predictedCursor as Field | undefined) ?? onChain;
@@ -762,6 +787,7 @@ async function handleRelease(request: ReleaseRequest) {
       // The escrow reads its cursor as a precondition. Without this the circuit
       // would read the chain's value and every release after the first in a wave
       // would prove against a cursor its predecessor has already moved.
+      if (fundRecipient) AccountUpdate.fundNewAccount(sender, 1);
       predictState(bridge.address, PROCESSED_SLOT, onChain, processed);
       await bridge.releaseWithdrawal(segment);
     },
@@ -773,6 +799,7 @@ async function handleRelease(request: ReleaseRequest) {
   // commit to.
   const pending = await tx.sign([feePayer]).send();
   predictedCursor = next;
+  if (fundRecipient) fundedThisWave.add(key);
 
   // A release in a wave is not confirmed here. Waiting for inclusion between
   // sends is precisely what the prediction removes, and confirming still
