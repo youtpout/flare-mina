@@ -984,17 +984,35 @@ async function requireUserAccount(sender: PublicKey): Promise<void> {
   }
 }
 
+/**
+ * Report a failure, and quit if this process can no longer build anything.
+ *
+ * When a `Mina.transaction` callback throws, o1js can leave its global
+ * transaction context open, and every later build then fails with "Cannot start
+ * new transaction within another transaction" — for the life of the process.
+ * One bad request would poison the worker permanently, which is how a missing
+ * account turned into a bridge that refused every deposit.
+ *
+ * There is no public way to clear that context, so the fix is to die: the parent
+ * rejects what is in flight and forks a clean worker on the next request.
+ */
+function postFailure(id: number, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  port.postMessage({ type: 'failed', id, error: message } satisfies Failed);
+
+  if (message.includes('within another transaction')) {
+    console.error('transaction context is stuck; exiting so a clean worker replaces this one');
+    setTimeout(() => process.exit(1), 50);
+  }
+}
+
 port.on('message', async (request: Request) => {
   if (request.kind === 'publish') {
     try {
       port.postMessage({ type: 'released', id: request.id, hash: await handlePublish(request) });
     } catch (error) {
       forgetPredictions();
-      port.postMessage({
-        type: 'failed',
-        id: request.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      postFailure(request.id, error);
     }
     return;
   }
@@ -1007,11 +1025,7 @@ port.on('message', async (request: Request) => {
       });
     } catch (error) {
       forgetPredictions();
-      port.postMessage({
-        type: 'failed',
-        id: request.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      postFailure(request.id, error);
     }
     return;
   }
@@ -1020,11 +1034,7 @@ port.on('message', async (request: Request) => {
       port.postMessage({ type: 'released', id: request.id, hash: await handleMint(request) });
     } catch (error) {
       forgetPredictions();
-      port.postMessage({
-        type: 'failed',
-        id: request.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      postFailure(request.id, error);
     }
     return;
   }
@@ -1033,11 +1043,7 @@ port.on('message', async (request: Request) => {
       port.postMessage({ type: 'released', id: request.id, hash: await handleRelease(request) });
     } catch (error) {
       forgetPredictions();
-      port.postMessage({
-        type: 'failed',
-        id: request.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      postFailure(request.id, error);
     }
     return;
   }
@@ -1068,11 +1074,7 @@ port.on('message', async (request: Request) => {
         provingMs: Date.now() - started,
       } satisfies Built);
     } catch (error) {
-      port.postMessage({
-        type: 'failed',
-        id: request.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      postFailure(request.id, error);
     }
     return;
   }
@@ -1111,10 +1113,6 @@ port.on('message', async (request: Request) => {
       provingMs: Date.now() - started,
     } satisfies Built);
   } catch (error) {
-    port.postMessage({
-      type: 'failed',
-      id: request.id,
-      error: error instanceof Error ? error.message : String(error),
-    } satisfies Failed);
+    postFailure(request.id, error);
   }
 });
