@@ -3,6 +3,7 @@ import type { Session } from '@/App';
 import { readBalances, type Balance } from '@/lib/flare';
 import { COSTON2, MINA, explorerAddress } from '@/lib/config';
 import { Faucets } from '@/components/Faucets';
+import { readJson } from '@/lib/api';
 
 const short = (s: string, head = 10, tail = 8) =>
   s.length <= head + tail + 1 ? s : `${s.slice(0, head)}…${s.slice(-tail)}`;
@@ -67,7 +68,7 @@ export function Portfolio({
     setDeploying(true);
     try {
       const res = await fetch(`${API}/accounts/${session.packed}/deploy`, { method: 'POST' });
-      const body = (await res.json()) as { flareTxHash?: string; error?: string };
+      const body = (await readJson(res)) as { flareTxHash?: string; error?: string };
       if (!res.ok) throw new Error(body.error ?? `relayer returned ${res.status}`);
       // Re-read from the chain rather than assuming success flipped the flag,
       // and without reloading -- a reload would drop the session.

@@ -14,6 +14,7 @@ import {
   type Balance,
 } from '@/lib/flare';
 import { PURPOSE, batchHash, signAuthorization } from '@/lib/mina';
+import { readJson } from '@/lib/api';
 
 /** Slippage the user tolerates, in basis points. */
 const SLIPPAGE_BPS = 500n;
@@ -195,7 +196,7 @@ export function Swap({ session }: { session: Session }) {
           })),
         }),
       });
-      const body = (await res.json()) as { flareTxHash?: string; error?: string };
+      const body = (await readJson(res)) as { flareTxHash?: string; error?: string };
 
       if (res.status === 501) {
         // No sponsor configured, so fall back to the user's own wallet.

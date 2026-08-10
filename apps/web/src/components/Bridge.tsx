@@ -27,6 +27,7 @@ import {
   releaseActionHash,
   signAuthorization,
 } from '@/lib/mina';
+import { readJson } from '@/lib/api';
 
 /**
  * Deposit status, as the API reports it.
@@ -260,7 +261,7 @@ export function Bridge({ session }: { session: Session }) {
       try {
         const res = await fetch(`${API}/deposits/${session.packed}`);
         if (!res.ok) throw new Error(`API returned ${res.status}`);
-        const body = (await res.json()) as { deposits: Deposit[] };
+        const body = (await readJson(res)) as { deposits: Deposit[] };
         if (live) {
           setDeposits(body.deposits);
           setError(null);
@@ -294,11 +295,11 @@ export function Bridge({ session }: { session: Session }) {
           fetch(`${API}/releases/${session.account}`),
         ]);
         if (r.ok) {
-          const body = (await r.json()) as { releases: Release[] };
+          const body = (await readJson(r)) as { releases: Release[] };
           if (live) setReleases(body.releases);
         }
         if (w.ok) {
-          const body = (await w.json()) as {
+          const body = (await readJson(w)) as {
             withdrawals: typeof withdrawals;
             publisher?: Publisher;
           };
@@ -308,7 +309,7 @@ export function Bridge({ session }: { session: Session }) {
           }
         }
         if (l.ok) {
-          const body = (await l.json()) as { locks: typeof locks };
+          const body = (await readJson(l)) as { locks: typeof locks };
           if (live) setLocks(body.locks);
         }
       } catch {
@@ -456,7 +457,7 @@ export function Bridge({ session }: { session: Session }) {
           attestation: d.attestation,
         }),
       });
-      const body = (await res.json()) as { flareTxHash?: string; error?: string };
+      const body = (await readJson(res)) as { flareTxHash?: string; error?: string };
 
       if (res.status === 501) {
         // No relayer to pay for it, so fall back to the user's own wallet.
@@ -655,7 +656,7 @@ export function Bridge({ session }: { session: Session }) {
           amountNanomina: value.toString(),
         }),
       });
-      const built = (await res.json()) as {
+      const built = (await readJson(res)) as {
         id: string;
         transaction: string;
         provingMs: number;
@@ -752,7 +753,7 @@ export function Bridge({ session }: { session: Session }) {
           })),
         }),
       });
-      const body = (await res.json()) as { error?: string };
+      const body = (await readJson(res)) as { error?: string };
       if (!res.ok) throw new Error(body.error ?? `relayer returned ${res.status}`);
     } catch (e) {
       setBurnError(e instanceof Error ? e.message : String(e));
@@ -794,7 +795,7 @@ export function Bridge({ session }: { session: Session }) {
           amount: value.toString(),
         }),
       });
-      const built = (await res.json()) as { id: string; transaction: string; error?: string };
+      const built = (await readJson(res)) as { id: string; transaction: string; error?: string };
       if (!res.ok) throw new Error(built.error ?? `relayer returned ${res.status}`);
 
       setBurningAsset('Waiting for your wallet…');
@@ -856,7 +857,7 @@ export function Bridge({ session }: { session: Session }) {
           attestation: r.attestation,
         }),
       });
-      const body = (await res.json()) as { flareTxHash?: string; error?: string };
+      const body = (await readJson(res)) as { flareTxHash?: string; error?: string };
       if (!res.ok) throw new Error(body.error ?? `relayer returned ${res.status}`);
     } catch (e) {
       setReleaseError(e instanceof Error ? e.message : String(e));
@@ -976,7 +977,7 @@ export function Bridge({ session }: { session: Session }) {
           })),
         }),
       });
-      const body = (await res.json()) as { error?: string };
+      const body = (await readJson(res)) as { error?: string };
       if (!res.ok) throw new Error(body.error ?? `relayer returned ${res.status}`);
 
       setBurnAmount('');

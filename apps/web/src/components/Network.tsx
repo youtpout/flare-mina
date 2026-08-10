@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { COSTON2, MINA, explorerAddress, explorerTx } from '@/lib/config';
+import { readJson } from '@/lib/api';
 
 /**
  * What the bridge is actually doing.
@@ -95,7 +96,7 @@ export function Network() {
     try {
       const res = await fetch(`${API}/network`);
       if (!res.ok) throw new Error(`relayer returned ${res.status}`);
-      setSnapshot((await res.json()) as Snapshot);
+      setSnapshot((await readJson(res)) as Snapshot);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
