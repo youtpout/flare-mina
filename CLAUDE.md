@@ -247,6 +247,12 @@ on-chain, not in the circuit, because they are properties of chain state.
   rejection reports as a pass, for entirely the wrong reason.
 - **`mina-fungible-token` 1.1.0 requires `canChangeVerificationKey`** on the
   admin; 1.0.0 did not.
+- **`setNumberOfWorkers` does nothing under the native backend.** It feeds
+  `wasm.initThreadPool`; `native-backend.js` defines `initThreadPool` as an
+  empty function. With `setBackend('native')` the knob is `RAYON_NUM_THREADS`,
+  read once when rayon builds its global pool — so it must be in the process's
+  environment at spawn, not set from inside. Measured on the server: threads
+  created are exactly `7 + RAYON_NUM_THREADS`.
 - **Arming advances the port's cursor before anything is minted**, so a cursor
   past a claim does NOT mean it was paid. Treating it as proof marked the row
   minted, dropped it from the queue, and left `mintAuthorization` set — which

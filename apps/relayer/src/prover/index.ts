@@ -59,6 +59,11 @@ type Lane = 'user' | 'background';
  *
  * Only the background lane is capped: a deposit is seconds, and starving it is
  * the thing this exists to prevent.
+ *
+ * NOT o1js's `setNumberOfWorkers`: that feeds `wasm.initThreadPool`, and the
+ * native backend's `initThreadPool` is an empty function. We call
+ * `setBackend('native')`, so it would be inert. Measured: threads created are
+ * exactly `7 + RAYON_NUM_THREADS`.
  */
 const BACKGROUND_THREADS = process.env.PROVER_BACKGROUND_THREADS ?? '8';
 
