@@ -160,18 +160,26 @@ async function release(): Promise<void> {
   const state = await escrowState();
   if (state === null || state.accepted === 0n) return;
 
+  // Reconcile *before* looking at the range. A row can outlive its own release
+  // — the transaction lands and the process dies before recording it, which a
+  // restart does routinely — and the cursor is the truth. This ran after the
+  // range checks, so once everything had settled the range was empty, the
+  // function returned, and a released row stayed at 'releasing' for good.
+  const cursorIndex = await transferIndexOf(state.cursor);
+  if (cursorIndex !== null) {
+    for (const row of pending) {
+      if (BigInt(row.nonce) > cursorIndex) continue;
+      await markWithdrawalReleased(row.id, row.mina_tx_hash ?? 'recovered');
+      console.log(`withdrawal ${row.nonce} was already released; catching the row up`);
+    }
+  }
+
   const range = await transferRange(state.cursor, state.accepted);
   if (range === null) {
     console.warn('the transfer ledger has not caught up; retrying next tick');
     return;
   }
   if (range.length === 0) return;
-
-  // A row can outlive its own release: the transaction lands, and the process
-  // dies before recording it — which a restart does routinely. The cursor is
-  // the truth, so a row the escrow has already moved past is settled, and
-  // retrying it forever only produces noise that hides real failures.
-  const cursorIndex = await transferIndexOf(state.cursor);
   const fmina = (process.env.FLARE_FMINA_ADDRESS ?? '').toLowerCase();
 
   let remaining = range;
