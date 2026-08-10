@@ -1,11 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- Two interlocking rings: one per chain, in the palette the header uses.
-       Rings rather than a glyph because letterforms turn to mush at 16px. -->
+  <!-- A bridge: a span over two piers, Mina orange on the left bank running to
+       Flare pink on the right. Two thick shapes and nothing else, because a
+       favicon is read at 16px where fine detail turns to grey mush. -->
+  <defs>
+    <linearGradient id="span" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff9a3c"/>
+      <stop offset="1" stop-color="#e6357a"/>
+    </linearGradient>
+  </defs>
   <rect width="32" height="32" rx="7" fill="#0b0e14"/>
-  <g fill="none" stroke-width="3.4">
-    <circle cx="12.4" cy="16" r="6.4" stroke="#ff9a3c"/>
-    <circle cx="19.6" cy="16" r="6.4" stroke="#e6357a"/>
+  <g stroke="url(#span)" stroke-width="3.2" fill="none" stroke-linecap="round">
+    <!-- The deck, and the arch carrying it. -->
+    <path d="M4.5 20.5h23"/>
+    <path d="M6.5 20.5a9.5 9.5 0 0 1 19 0"/>
+    <!-- Piers, short enough to read as thickness rather than as legs. -->
+    <path d="M10.6 20.5v5.2M21.4 20.5v5.2"/>
   </g>
-  <!-- The crossing, drawn last so the Mina ring reads as passing in front. -->
-  <path d="M14.6 10.6a6.4 6.4 0 0 0 0 10.8" fill="none" stroke="#ff9a3c" stroke-width="3.4"/>
 </svg>
