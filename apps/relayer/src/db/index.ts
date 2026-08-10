@@ -424,6 +424,15 @@ export type TransferRow = {
   flare_tx_hash: string;
 };
 
+/** One record of the shared chain by position. */
+export async function transferAt(index: bigint): Promise<TransferRow | null> {
+  const { rows } = await pool.query<TransferRow>(
+    `SELECT * FROM transfers WHERE chain_index = $1 LIMIT 1`,
+    [index.toString()],
+  );
+  return rows[0] ?? null;
+}
+
 export async function recordTransfer(input: {
   index: bigint;
   token: string;

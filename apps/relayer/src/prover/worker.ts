@@ -915,10 +915,12 @@ async function handleMint(request: MintRequest) {
 
   // The lock the circuit will pick, computed here too so the armed check below
   // can run before paying for a proof. The circuit is what enforces it.
+  // Absent is not fatal here: an armed port holds a claim already behind its
+  // cursor, so the range cannot contain it, and that is exactly the case the
+  // recovery below exists for. Only the arming path needs a lock to pick.
   const claimed = firstOf(request.asset, request.range);
-  if (claimed === undefined) throw new Error('the range holds no lock of this asset');
-  const recipient = PublicKey.fromBase58(claimed.recipient);
-  const amount = UInt64.from(BigInt(claimed.amount));
+  const recipient = claimed && PublicKey.fromBase58(claimed.recipient);
+  const amount = claimed && UInt64.from(BigInt(claimed.amount));
 
   await fetchAccount({ publicKey: sender });
   await fetchAccount({ publicKey: assetPort.address });
@@ -929,7 +931,10 @@ async function handleMint(request: MintRequest) {
   // cursor already advanced — re-authorising would then fail forever on a
   // record the chain has moved past, stranding the user's tokens in the vault.
   const authorization = assetPort.mintAuthorization.get();
-  const alreadyArmed = authorization.equals(mintCommitment(recipient, amount)).toBoolean();
+  const alreadyArmed =
+    recipient !== undefined &&
+    amount !== undefined &&
+    authorization.equals(mintCommitment(recipient, amount)).toBoolean();
 
   // A port can be left armed for *another* claim: arming advances the cursor, so
   // a mint that never landed leaves an authorisation nothing matches, and every
@@ -965,6 +970,11 @@ async function handleMint(request: MintRequest) {
     const done = await recover.sign([feePayer]).send();
     await settle(done, 'recovery mint');
     return done.hash;
+  }
+
+  // Past the recovery, everything below needs a lock to mint.
+  if (recipient === undefined || amount === undefined) {
+    throw new Error('the range holds no lock of this asset');
   }
 
   // Set when this run armed the claim itself, so the mint below knows the port's

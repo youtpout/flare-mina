@@ -7,6 +7,7 @@ import {
   mintableLocks,
   recentLocks,
   recordLock,
+  transferAt,
   transferIndexOf,
   transferRange,
 } from "./db/index.js";
@@ -99,11 +100,11 @@ const MINA_GRAPHQL =
  * A port's accepted head and cursor, read from Mina.
  *
  * `zkappState` by field order in AssetPort.ts: 0 signingPolicyRoot,
- * 1 flareLockState, 2 processedLockState.
+ * 1 flareLockState, 2 processedLockState, 5 mintAuthorization.
  */
 async function portState(
   port: string,
-): Promise<{ accepted: bigint; processed: bigint } | null> {
+): Promise<{ accepted: bigint; processed: bigint; armed: bigint } | null> {
   try {
     const res = await fetch(MINA_GRAPHQL, {
       method: "POST",
@@ -117,7 +118,11 @@ async function portState(
     };
     const state = body.data?.account?.zkappState;
     if (state === undefined) return null;
-    return { accepted: BigInt(state[1]!), processed: BigInt(state[2]!) };
+    return {
+      accepted: BigInt(state[1]!),
+      processed: BigInt(state[2]!),
+      armed: BigInt(state[5]!),
+    };
   } catch {
     return null;
   }
@@ -161,6 +166,33 @@ async function mint(): Promise<void> {
   }
 }
 
+/**
+ * Claims to test against an authorisation the port is still holding.
+ *
+ * The port stores only a Poseidon commitment to (recipient, amount), so the
+ * claim behind it is found by recomputing that commitment. The record at the
+ * cursor is the answer whenever the ledger can place it — arming is what moved
+ * the cursor there — and the recent locks cover the case where it cannot.
+ */
+async function armedCandidates(
+  token: string,
+  cursorIndex: bigint | null,
+): Promise<{ recipient: string; amount: string }[]> {
+  const out: { recipient: string; amount: string }[] = [];
+
+  if (cursorIndex !== null) {
+    const at = await transferAt(cursorIndex);
+    if (at !== null && at.token.toLowerCase() === token.toLowerCase()) {
+      out.push({ recipient: at.recipient, amount: at.amount });
+    }
+  }
+
+  for (const row of await recentLocks(token, 50)) {
+    out.push({ recipient: row.recipient, amount: row.amount });
+  }
+  return out;
+}
+
 async function mintAsset(
   asset: ReturnType<typeof assets>[number],
 ): Promise<void> {
@@ -179,7 +211,10 @@ async function mintAsset(
     console.warn(`${asset.symbol}: the transfer ledger has not caught up`);
     return;
   }
-  if (range.length === 0) return;
+  // An armed port is worth a call even with nothing new to mint: the claim it
+  // holds is behind the cursor, so it never appears in the range, and refusing
+  // to call would leave it wedged until the next unrelated lock arrived.
+  if (range.length === 0 && state.armed === 0n) return;
 
   // A row can outlive the mint that settled it: the transaction lands, and
   // the process dies before recording it — which a restart does routinely.
@@ -188,12 +223,29 @@ async function mintAsset(
   const cursorIndex = await transferIndexOf(state.processed);
   const flareToken = asset.flareToken.toLowerCase();
 
+  // What to try against an authorisation left behind by a mint that never
+  // landed. Arming advances the cursor, so the armed claim is exactly the
+  // record that produced it — everything else is a fallback for a cursor the
+  // ledger cannot place.
+  const candidates = await armedCandidates(asset.flareToken, cursorIndex);
+
   let remaining = range;
   const sent: { id: string; claim: string; recipient: string; hash: string }[] =
     [];
 
+  // Arming advances the cursor before anything is minted, so a claim the cursor
+  // has passed is only settled if nothing is still armed for it. Without this
+  // the row at the cursor was caught up as minted whenever a mint failed
+  // mid-pair — it left the queue, no later claim could arm, and the port stayed
+  // wedged with the user's tokens undelivered.
+  const armedAtCursor = state.armed !== 0n ? cursorIndex : null;
+
   for (const row of queue.slice(0, WAVE)) {
-    if (cursorIndex !== null && BigInt(row.claim_id) <= cursorIndex) {
+    if (armedAtCursor !== null && BigInt(row.claim_id) === armedAtCursor) {
+      console.log(
+        `${asset.symbol} claim ${row.claim_id} is armed but not minted; finishing it`,
+      );
+    } else if (cursorIndex !== null && BigInt(row.claim_id) <= cursorIndex) {
       await markLockMinted(row.id, row.mina_tx_hash ?? "recovered");
       console.log(
         `${asset.symbol} claim ${row.claim_id} was already minted; catching the row up`,
@@ -203,7 +255,7 @@ async function mintAsset(
 
     // The lock the circuit will pick, and where the next range must resume.
     const at = remaining.findIndex((r) => r.token.toLowerCase() === flareToken);
-    if (at === -1) break;
+    if (at === -1 && state.armed === 0n) break;
 
     try {
       await markLockMinting(row.id);
@@ -219,6 +271,7 @@ async function mintAsset(
         })),
         wave: true,
         restart: sent.length === 0,
+        candidates,
       });
       sent.push({
         id: row.id,

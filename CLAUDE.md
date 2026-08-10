@@ -247,6 +247,11 @@ on-chain, not in the circuit, because they are properties of chain state.
   rejection reports as a pass, for entirely the wrong reason.
 - **`mina-fungible-token` 1.1.0 requires `canChangeVerificationKey`** on the
   admin; 1.0.0 did not.
+- **Arming advances the port's cursor before anything is minted**, so a cursor
+  past a claim does NOT mean it was paid. Treating it as proof marked the row
+  minted, dropped it from the queue, and left `mintAuthorization` set — which
+  `authorizeMint` refuses to overwrite, wedging every later claim of that asset
+  for good. Only reconcile a passed claim when nothing is armed for it.
 
 ## Toolchain gotchas
 
