@@ -132,6 +132,31 @@ const LOCK_STAGE: Record<string, { tag: string; detail: string }> = {
   failed: { tag: 'failed', detail: 'see the reason below' },
 };
 
+type Publisher = {
+  phase: string;
+  since: string;
+  round?: number;
+  error?: string;
+  failures: number;
+};
+
+/**
+ * What the publisher is doing, for anything still awaiting one.
+ *
+ * A row sitting at "seen" waits on nothing of its own — it waits on the next
+ * cycle. Showing one static label for the whole fifteen minutes hid the
+ * difference between a quiet wait and four rejected publications in a row.
+ */
+const PUBLISHER_PHASE: Record<string, string> = {
+  idle: 'waiting for the next publication cycle',
+  requesting: 'asking the FDC to attest the Flare chain',
+  'waiting-round': 'waiting for the FDC round to finalise',
+  proving: 'building the attestation proof',
+  publishing: 'sending the head to Mina',
+  included: 'head sent, waiting for a Mina block',
+  failed: 'the last publication failed; retrying',
+};
+
 const WITHDRAWAL_STAGE: Record<string, { tag: string; detail: string }> = {
   seen: {
     tag: 'awaiting publication',
@@ -206,6 +231,7 @@ export function Bridge({ session }: { session: Session }) {
   >(null);
   /** The return leg for wrapped assets: a burn on Mina, released on Flare. */
   const [releases, setReleases] = useState<Release[] | null>(null);
+  const [publisher, setPublisher] = useState<Publisher | null>(null);
   const [burningAsset, setBurningAsset] = useState<string | null>(null);
   const [releaseError, setReleaseError] = useState<string | null>(null);
   const [claimingRelease, setClaimingRelease] = useState<string | null>(null);
@@ -272,8 +298,14 @@ export function Bridge({ session }: { session: Session }) {
           if (live) setReleases(body.releases);
         }
         if (w.ok) {
-          const body = (await w.json()) as { withdrawals: typeof withdrawals };
-          if (live) setWithdrawals(body.withdrawals);
+          const body = (await w.json()) as {
+            withdrawals: typeof withdrawals;
+            publisher?: Publisher;
+          };
+          if (live) {
+            setWithdrawals(body.withdrawals);
+            if (body.publisher) setPublisher(body.publisher);
+          }
         }
         if (l.ok) {
           const body = (await l.json()) as { locks: typeof locks };
@@ -1298,7 +1330,9 @@ export function Bridge({ session }: { session: Session }) {
                 </span>
                 <span className="muted small">
                   {' · '}
-                  {LOCK_STAGE[t.lock.status]?.detail ?? t.lock.status}
+                  {t.lock.status === 'seen' && publisher
+                    ? (PUBLISHER_PHASE[publisher.phase] ?? publisher.phase)
+                    : (LOCK_STAGE[t.lock.status]?.detail ?? t.lock.status)}
                 </span>
               </span>
               <span
@@ -1317,7 +1351,9 @@ export function Bridge({ session }: { session: Session }) {
                 </span>
                 <span className="muted small">
                   {' · '}
-                  {WITHDRAWAL_STAGE[t.withdrawal.status]?.detail ?? t.withdrawal.status}
+                  {t.withdrawal.status === 'seen' && publisher
+                    ? (PUBLISHER_PHASE[publisher.phase] ?? publisher.phase)
+                    : (WITHDRAWAL_STAGE[t.withdrawal.status]?.detail ?? t.withdrawal.status)}
                 </span>
               </span>
               <span

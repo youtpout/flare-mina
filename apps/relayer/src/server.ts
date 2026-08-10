@@ -37,6 +37,7 @@ import { startTransfers } from './transfers.js';
 import { startWithdrawals } from './withdrawals.js';
 import { assets, startAssets } from './assets.js';
 import { startReleases } from './releases.js';
+import { publisherState } from './publisherState.js';
 
 /**
  * Attestor API.
@@ -454,6 +455,7 @@ app.get('/locks/:recipient', async (req, res) => {
   try {
     const rows = await locksFor(req.params.recipient);
     res.json({
+      publisher: publisherState(),
       locks: rows.map((r) => ({
         token: r.token,
         claimId: r.claim_id,
@@ -476,6 +478,9 @@ app.get('/withdrawals/:recipient', async (req, res) => {
   try {
     const rows = await withdrawalsFor(req.params.recipient);
     res.json({
+      // Everything still awaiting a publication is waiting on this, and on
+      // nothing of its own — so it rides along rather than costing a request.
+      publisher: publisherState(),
       withdrawals: rows.map((r) => ({
         nonce: r.nonce,
         amountNanomina: r.amount_nanomina,

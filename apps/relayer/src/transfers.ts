@@ -5,6 +5,7 @@ import { publishActionState, publishLockState } from './prover/index.js';
 import { fetchAttestation, requestAttestationFor, type Attestation } from './fdc.js';
 import { policyProofInputs } from './publisher.js';
 import { assets } from './assets.js';
+import { setPublisherPhase } from './publisherState.js';
 
 /**
  * The shared Flare -> Mina chain: indexed here, published from here.
@@ -232,8 +233,10 @@ async function attestationFor(txHash: `0x${string}`): Promise<Attestation | null
   if (CHAIN === undefined) return null;
   const expected = { emitter: CHAIN, topic0: TRANSFER_TOPIC0 };
 
+  setPublisherPhase('requesting');
   const { request, round } = await requestAttestationFor(txHash, expected);
   console.log(`requested attestation for ${txHash} in round ${round}`);
+  setPublisherPhase('waiting-round', { round });
 
   const deadline = Date.now() + Number(process.env.FDC_WAIT_MS ?? 5 * 60_000);
   while (Date.now() < deadline) {
@@ -242,6 +245,7 @@ async function attestationFor(txHash: `0x${string}`): Promise<Attestation | null
     await new Promise((r) => setTimeout(r, 20_000));
   }
   console.warn(`round ${round} did not finalise in time; will retry next tick`);
+  setPublisherPhase('failed', { error: `FDC round ${round} did not finalise in time` });
   return null;
 }
 
@@ -281,6 +285,7 @@ async function publish(): Promise<void> {
   // asset moved.
   const attestation = await attestationFor(txHash);
   if (attestation === null) return;
+  setPublisherPhase('proving');
   if (attestation.event.newActionState !== head) {
     console.warn('the attested event carries a different head than the chain reports');
     return;
@@ -289,10 +294,13 @@ async function publish(): Promise<void> {
   const inputs = await policyProofInputs(attestation.round);
   if (inputs === null) return;
 
+  setPublisherPhase('publishing');
+  let sent = 0;
   for (const consumer of behind) {
     inFlight.set(consumer.address, { head, at: Date.now() });
     try {
       const hash = await consumer.publish(attestation, inputs);
+      sent += 1;
       console.log(`published head ${head} to ${consumer.label} -> ${hash}`);
     } catch (e) {
       // Retry on the next tick rather than stranding this consumer. The others
@@ -302,8 +310,15 @@ async function publish(): Promise<void> {
         `publishing to ${consumer.label} failed:`,
         e instanceof Error ? e.message : e,
       );
+      setPublisherPhase('failed', {
+        error: `publishing to ${consumer.label} failed: ${e instanceof Error ? e.message : String(e)}`,
+      });
     }
   }
+
+  // Sent, not included. The rows move when the chain says the head was accepted,
+  // which is what `refreshCoverage` reads — a hash proves nothing here either.
+  if (sent > 0) setPublisherPhase('included');
 }
 
 function loop(name: string, every: number, tick: () => Promise<void>): { stop(): void } {
