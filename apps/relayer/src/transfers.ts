@@ -294,13 +294,17 @@ async function publish(): Promise<void> {
   const inputs = await policyProofInputs(attestation.round);
   if (inputs === null) return;
 
-  setPublisherPhase('publishing');
+  // Deliberately still 'proving' here: the attestation proof is built inside the
+  // first `consumer.publish`, so announcing a send now would show "sending the
+  // head" through two minutes of arithmetic.
   let sent = 0;
+  let failed = 0;
   for (const consumer of behind) {
     inFlight.set(consumer.address, { head, at: Date.now() });
     try {
       const hash = await consumer.publish(attestation, inputs);
       sent += 1;
+      setPublisherPhase('publishing');
       console.log(`published head ${head} to ${consumer.label} -> ${hash}`);
     } catch (e) {
       // Retry on the next tick rather than stranding this consumer. The others
@@ -310,6 +314,7 @@ async function publish(): Promise<void> {
         `publishing to ${consumer.label} failed:`,
         e instanceof Error ? e.message : e,
       );
+      failed += 1;
       setPublisherPhase('failed', {
         error: `publishing to ${consumer.label} failed: ${e instanceof Error ? e.message : String(e)}`,
       });
@@ -318,7 +323,10 @@ async function publish(): Promise<void> {
 
   // Sent, not included. The rows move when the chain says the head was accepted,
   // which is what `refreshCoverage` reads — a hash proves nothing here either.
-  if (sent > 0) setPublisherPhase('included');
+  // Only when every consumer got its head. Overwriting a failure here would hide
+  // it behind a reassuring label, which is the bug this whole field exists to
+  // stop happening.
+  if (sent > 0 && failed === 0) setPublisherPhase('included');
 }
 
 function loop(name: string, every: number, tick: () => Promise<void>): { stop(): void } {
