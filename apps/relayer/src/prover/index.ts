@@ -49,6 +49,19 @@ type Pending = {
  */
 type Lane = 'user' | 'background';
 
+/**
+ * Cores the background lane may use, out of `nproc`.
+ *
+ * The native backend proves on a rayon pool sized to every core it can see, so
+ * an FDC publication — minutes of solid arithmetic — otherwise takes the whole
+ * machine and a deposit arriving mid-cycle contends for cores with it. Capping
+ * the slow lane leaves the rest for the lane a user is watching.
+ *
+ * Only the background lane is capped: a deposit is seconds, and starving it is
+ * the thing this exists to prevent.
+ */
+const BACKGROUND_THREADS = process.env.PROVER_BACKGROUND_THREADS ?? '8';
+
 type Prover = {
   child?: ChildProcess;
   ready?: Promise<void>;
@@ -83,7 +96,13 @@ function start(lane: Lane): Promise<void> {
         `--max-old-space-size=${heapMb}`,
         ...(entry.endsWith('.ts') ? ['--import', 'tsx'] : []),
       ],
-      env: process.env,
+      // rayon reads this once, when it builds its global pool — so it has to be
+      // in the child's environment from the start. Setting it in the parent
+      // would cap both lanes.
+      env:
+        lane === 'background'
+          ? { ...process.env, RAYON_NUM_THREADS: BACKGROUND_THREADS }
+          : process.env,
     });
     prover.child = child;
 
