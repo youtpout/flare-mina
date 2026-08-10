@@ -82,7 +82,7 @@ export function App() {
     setConnecting(true);
     try {
       const provider = getMinaProvider();
-      if (!provider) throw new Error('No Mina wallet found. Install Auro or Pallad.');
+      if (!provider) throw new Error('No Mina wallet found. Install Auro.');
 
       const [minaAddress] = await provider.requestAccounts();
       if (!minaAddress) throw new Error('Wallet returned no account');
@@ -191,30 +191,21 @@ export function App() {
               No Mina wallet detected. Install{' '}
               <a href="https://aurowallet.com" target="_blank" rel="noreferrer">
                 Auro
-              </a>{' '}
-              or{' '}
-              <a href="https://pallad.co" target="_blank" rel="noreferrer">
-                Pallad
               </a>
               .
             </p>
           )}
           {error && <p className="status err">{error}</p>}
 
-          {/* The setup a fresh wallet needs before the faucets above are of any
-              use. Shown whether or not a wallet is detected: an installed wallet
-              left on Mainnet fails as "account not found", which reads like a
-              bug rather than a wrong network. */}
+          {/* Shown whether or not a wallet is detected: an installed wallet left
+              on Mainnet fails as "account not found", which reads like a bug
+              rather than a wrong network. */}
           <div className="notice" style={{ marginTop: 18 }}>
             <strong>Starting from scratch?</strong>
             <p className="small" style={{ marginBottom: 0 }}>
               Install{' '}
               <a href="https://aurowallet.com" target="_blank" rel="noreferrer">
                 Auro
-              </a>{' '}
-              or{' '}
-              <a href="https://pallad.co" target="_blank" rel="noreferrer">
-                Pallad
               </a>
               , then switch it to <strong>Devnet</strong> — it starts on Mainnet.
             </p>

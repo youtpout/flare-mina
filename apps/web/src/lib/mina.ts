@@ -4,9 +4,9 @@ import { toFieldSignature } from '@minaport/shared';
 /**
  * Mina wallet access and authorization signing.
  *
- * Talks to whatever injects `window.mina` — Auro and Pallad both do, and the
- * MetaMask Mina Snap exposes the same surface. We only need two calls:
- * `requestAccounts` and `signFields`.
+ * Talks to whatever injects `window.mina` — Auro does, and the MetaMask Mina
+ * Snap exposes the same surface. We only need two calls: `requestAccounts` and
+ * `signFields`.
  */
 
 export type MinaProvider = {
