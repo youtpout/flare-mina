@@ -1,7 +1,7 @@
 # Deployment
 
-Live at **https://labdevn.com** on `159.195.202.103` — Debian 13, 12 vCPU
-(EPYC 9645), 32 GB, 1 TB.
+Live at **https://flare-mina.labdevn.com** (and `labdevn.com`) on
+`159.195.202.103` — Debian 13, 12 vCPU (EPYC 9645), 32 GB, 1 TB.
 
 No Docker, no CI. The code comes from GitHub, the secrets come from `scp`, and
 systemd keeps it up. At hackathon scale every extra layer is a layer that can
@@ -30,8 +30,10 @@ redirect to the apex, so old links keep working.
 ssh root@159.195.202.103 'bash /home/flarexmina/app/scripts/deploy.sh'
 ```
 
-`VITE_API_URL` is read **at build time**, so the web bundle must be rebuilt on
-the server whenever that URL changes. The deploy script does it every run.
+`VITE_API_URL` is `/api` — relative on purpose. It is read **at build time**, so
+an absolute URL pins the bundle to one hostname and calling it from another is
+cross-origin; a relative path is same-origin on every name Caddy serves, and
+adding a hostname needs no rebuild.
 
 ## Memory and cores
 
