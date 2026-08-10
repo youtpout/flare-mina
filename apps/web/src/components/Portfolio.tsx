@@ -1,13 +1,47 @@
 import { useEffect, useState } from 'react';
 import type { Session } from '@/App';
 import { readBalances, type Balance } from '@/lib/flare';
-import { COSTON2, explorerAddress } from '@/lib/config';
+import { COSTON2, MINA, explorerAddress } from '@/lib/config';
 import { Faucets } from '@/components/Faucets';
 
 const short = (s: string, head = 10, tail = 8) =>
   s.length <= head + tail + 1 ? s : `${s.slice(0, head)}…${s.slice(-tail)}`;
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8787';
+
+/**
+ * Copy an address to the clipboard.
+ *
+ * Both addresses are shown truncated, so selecting one by hand copies the
+ * ellipsis with it — the button is the only way to get the real value out of
+ * this page.
+ */
+function Copy({ value, label }: { value: string; label: string }) {
+  const [done, setDone] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setDone(true);
+      setTimeout(() => setDone(false), 1200);
+    } catch {
+      // Denied permission or an insecure origin. Saying nothing is wrong, but a
+      // red banner for a copy is worse; the unchanged icon is the signal.
+    }
+  }
+
+  return (
+    <button
+      className="tab"
+      style={{ padding: '0 6px', lineHeight: 1 }}
+      title={`Copy ${label}`}
+      aria-label={`Copy ${label}`}
+      onClick={() => void copy()}
+    >
+      {done ? '✓' : '⧉'}
+    </button>
+  );
+}
 
 export function Portfolio({
   session,
@@ -69,19 +103,32 @@ export function Portfolio({
 
         <div className="row">
           <span className="muted small">Mina wallet</span>
-          <span className="mono">{short(session.minaAddress)}</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <a
+              className="mono"
+              href={`${MINA.explorer}/account/${session.minaAddress}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {short(session.minaAddress)}
+            </a>
+            <Copy value={session.minaAddress} label="your Mina address" />
+          </span>
         </div>
 
         <div className="row">
           <span className="muted small">Flare account it owns</span>
-          <a
-            className="mono"
-            href={explorerAddress(session.account)}
-            target="_blank"
-            rel="noreferrer"
-          >
-            {short(session.account)}
-          </a>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <a
+              className="mono"
+              href={explorerAddress(session.account)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {short(session.account)}
+            </a>
+            <Copy value={session.account} label="your Flare address" />
+          </span>
         </div>
 
         <div className="row">
@@ -94,7 +141,7 @@ export function Portfolio({
 
       {!session.deployed && (
         <div className="notice">
-          <strong>This address already belongs to you.</strong> It is derived from your Mina public
+          <strong>This Flare address already belongs to you.</strong> It is derived from your Mina public
           key with CREATE2, so it is fixed before any transaction exists — the bridge can pay into
           it today. Deploying is only needed before you send something out.
           <div style={{ marginTop: 12 }}>
