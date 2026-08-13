@@ -79,38 +79,62 @@ Solidity · Auro Wallet · BlazeSwap
 
 ## Deployments
 
-**Coston2** — `MinaAccountFactory` `0x2a2AcdD54B93675828028fb8108fACc0A387fe23` ·
-`MinaAuthRegistry` `0xcf12aCe3f7D13EE714D57ee22EfA14cbb662fc56` ·
-`TransferChain` `0xB0a3Ab9dE1527Ca617995b51E1548B40E0c9fe4b` ·
-`MinaPortBridge` `0x871493412EDCcfE0d24f127E6Deb2B20AE5497aB` ·
-`FMINA` `0x4aFce36d468136eD9d880E28C99373F0C3d3f046` ·
-`AssetVault` `0xa179E908C3F1156Edda0BD5f1A0B3b3f419f9F90`
+### Coston2 (chain 114)
 
-An example account, source verified:
-[`0x6fC68C6d…D542`](https://coston2-explorer.flare.network/address/0x6fC68C6d69c252F57586d2159a5bf6D2BA65D542?tab=contract)
-— a contract owned by a Mina key that cannot sign for it.
+| Contract | Address |
+|---|---|
+| `MinaAccountFactory` | [`0x2a2AcdD5…fe23`](https://coston2-explorer.flare.network/address/0x2a2AcdD54B93675828028fb8108fACc0A387fe23) |
+| `MinaAuthRegistry` | [`0xcf12aCe3…fc56`](https://coston2-explorer.flare.network/address/0xcf12aCe3f7D13EE714D57ee22EfA14cbb662fc56) |
+| `TransferChain` | [`0xB0a3Ab9d…fe4b`](https://coston2-explorer.flare.network/address/0xB0a3Ab9dE1527Ca617995b51E1548B40E0c9fe4b) |
+| `MinaPortBridge` (proxy) | [`0x87149341…97aB`](https://coston2-explorer.flare.network/address/0x871493412EDCcfE0d24f127E6Deb2B20AE5497aB) |
+| `AssetVault` (proxy) | [`0xa179E908…9F90`](https://coston2-explorer.flare.network/address/0xa179E908C3F1156Edda0BD5f1A0B3b3f419f9F90) |
+| `FMINA` | [`0x4aFce36d…F046`](https://coston2-explorer.flare.network/address/0x4aFce36d468136eD9d880E28C99373F0C3d3f046) |
+| An example account, source verified | [`0x6fC68C6d…D542`](https://coston2-explorer.flare.network/address/0x6fC68C6d69c252F57586d2159a5bf6D2BA65D542?tab=contract) |
 
-**Mina devnet** — escrow `B62qpRkbjE5wH6nFmZnVUN7yrjfAhpJPP2qXxn6z7KQsL6RojmkaDr6`,
-plus one `FungibleToken` and one `AssetPort` per bridged asset. Full list in the
-repository.
+That last one is the whole claim in a single link: a contract owned by a Mina
+key that cannot sign for it.
+
+### Mina devnet
+
+| | Address |
+|---|---|
+| Bridge escrow | [`B62qpRkb…mkaDr6`](https://minascan.io/devnet/account/B62qpRkbjE5wH6nFmZnVUN7yrjfAhpJPP2qXxn6z7KQsL6RojmkaDr6) |
+| bFXRP token | [`B62qnmNC…mP3XVN`](https://minascan.io/devnet/account/B62qnmNChAeU6SpLDdze7FvVjoT4LsWCcHntiqmFx1aBvrd52mP3XVN) |
+| bFXRP port | [`B62qqvnf…HEPvZAM`](https://minascan.io/devnet/account/B62qqvnfG24NDLd3Byi6et85MPztrrCbTRKCN8vsoMP19konHEPvZAM) |
+| bUSDT token | [`B62qjhVg…EH6Bg3`](https://minascan.io/devnet/account/B62qjhVgqAbso6g8wsLNosuUMTyySicoqtgEbGGPYqWJXDCdQEH6Bg3) |
+| bUSDT port | [`B62qrQ8v…xscMfY`](https://minascan.io/devnet/account/B62qrQ8v16mWqmt5sY8MEDdeLyjPqU1JE2Cg6qcvpxUuMhomZxscMfY) |
+| bC2FLR token | [`B62qiVgu…ukdQHQ`](https://minascan.io/devnet/account/B62qiVguTBzDp5vaHyTatzaQ2zTyhfU22tTi3VQ9MKfcnbnePukdQHQ) |
+| bC2FLR port | [`B62qk3V1…Bd5nrc`](https://minascan.io/devnet/account/B62qk3V13bN1DfkGPRYj8zAuzuCxGitxfHwTuwAswZ4wA3GiEBd5nrc) |
 
 ## Honest about the limits
 
-The deposit path settles against a mock verifier rather than a real SP1 one,
-and that is cost rather than capability. Verifying a Mina blockchain SNARK in a
-zkVM is **4.38 billion cycles**: roughly **40 minutes** on an RTX 5090, or
-**3 minutes** on the Succinct prover network — which bills per proof. Forty
-minutes per deposit is not a bridge, so the real path runs on the network, and
-running it continuously on a testnet means paying for every demonstration.
+The deposit path settles against a mock verifier rather than a real SP1 one.
+The reason is budget, and nothing else.
 
-The guest and its cycle counts are in the repository, and the verifier is
-swappable behind a two-day timelock. The full list of trust assumptions is in
+Verifying a Mina blockchain SNARK inside a zkVM is **4.38 billion cycles** —
+about **40 minutes** on an RTX 5090, or **3 minutes** on the Succinct prover
+network. Forty minutes is fine for a bridge; latency was never the obstacle.
+What we do not have is a way to pay for it: the network bills per proof, and the
+local route means dedicated GPU hardware running continuously. Either way, a
+testnet demonstration would cost real money on every single deposit.
+
+So the verifier was left swappable instead of faked further. The guest, its
+cycle counts and the host CLI are in the repository; replacing the mock is a
+`proposeVerifier` / `executeVerifierUpdate` pair behind a two-day timelock — no
+redeploy, no migration. The full list of trust assumptions is in
 `docs/threat-model.md`.
 
 ## Next
 
-Reimburse the transaction submitter out of the account's own FMINA balance,
-which removes the last reason to hold an EVM account at all. More protocol flows
-in the interface. And, further out, the same rail carrying **proofs** rather than
-assets: a Mina zkApp proving something expensive off-chain, verified on Flare for
-a fraction of running it there.
+- **Real Mina proving, verified on Flare.** Replace the mock with the SP1
+  settlement verifier, so the deposit path stops depending on a trusted attestor
+  and a Mina state transition is proven rather than asserted.
+- **Charge a fee for using our relayer**, so the service pays for its own
+  proving and gas instead of being subsidised — the same fee that makes the
+  point above affordable.
+- **Reimburse the transaction submitter** out of the account's own FMINA
+  balance, which removes the last reason to hold an EVM account at all.
+- **More protocol flows in the interface** — lending, staking, governance. The
+  account already executes them; only the frontend is missing.
+- **Proofs on the same rail as assets**: a Mina zkApp proving something
+  expensive off-chain, verified on Flare for a fraction of running it there.

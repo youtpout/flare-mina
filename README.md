@@ -493,11 +493,12 @@ At that size, where you prove decides whether it is usable at all:
 | Local GPU (RTX 5090) | **~40 minutes** per proof |
 | Succinct prover network | **~3 minutes** — and billed, per proof |
 
-Forty minutes per deposit is not a bridge, so in practice the settlement proof
-only exists on the prover network, **which charges real money every time**. For
-a testnet demonstration that means paying per deposit, continuously — while the
-thing being demonstrated, the Mina signature verification, is already done
-on-chain for three tenths of a cent and needs no prover at all.
+Forty minutes is fine for a bridge — latency was never the obstacle. The
+obstacle is that **both columns cost money**: the network bills per proof, and
+the local route means dedicated GPU hardware running continuously. A testnet
+demonstration would therefore pay real money on every deposit, to demonstrate a
+path whose headline claim — verifying a Mina signature on Flare — is already
+done on-chain for three tenths of a cent and needs no prover at all.
 
 So the choice was deliberate: spend the hackathon on the path that is cheap
 enough to actually run, and leave the verifier swappable. Replacing the mock is
