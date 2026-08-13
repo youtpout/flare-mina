@@ -129,14 +129,15 @@ redeploy, no migration. The full list of trust assumptions is in
 - **Real Mina proving, verified on Flare.** Replace the mock with the SP1
   settlement verifier, so the deposit path stops depending on a trusted attestor
   and a Mina state transition is proven rather than asserted.
-- **Charge a fee for using our relayer**, so the service pays for its own
-  proving and gas instead of being subsidised — the same fee that makes the
-  point above affordable.
 - **Real account abstraction, with fees paid in MINA.** `MinaAccount` is already
   a smart account; the missing half is ERC-4337 support and a paymaster that
   takes FMINA. A user would then pay transaction fees in the asset they actually
   hold, never touching native C2FLR — and the bridge would stop depending on us
   running a relayer for free.
+- **A bridge fee**, taken on each crossing. Not for gas — the paymaster above
+  covers that — but for the proving: the FDC attestation today, the SP1
+  settlement proof tomorrow. That is the cost nobody else absorbs, and it is
+  what decides whether real settlement proving is affordable at all.
 - **More protocol flows in the interface** — lending, staking, governance. The
   account already executes them; only the frontend is missing.
 - **Proofs on the same rail as assets**: a Mina zkApp proving something
