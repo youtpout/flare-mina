@@ -164,6 +164,30 @@ What the owner still needs is someone to pay gas. Reimbursing the submitter out
 of the account's own FMINA balance — which removes the last reason to hold an
 EVM account at all — is the next step and deliberately not in this version.
 
+### The demo shows a swap. The account is not a swap contract.
+
+Only one integration is wired into the interface — `approve` + `swap` on
+BlazeSwap — because a demo has to show *something* concrete. That choice is in
+the frontend, not in the contract.
+
+`MinaAccount.executeBatch` takes an **ordered list of arbitrary calls** and runs it
+against a signature over their hash. It has no allowlist, no adapter, no notion
+of a DEX. Nothing in it knows what BlazeSwap is:
+
+- it works with **any** Flare protocol, deployed today or next year, with no
+  upgrade to the account and no change to the verifier;
+- a batch can mix protocols — lend, then borrow, then swap the proceeds — under
+  one signature, so no intermediate approval is ever left live between two
+  transactions;
+- adding a new action to the product is frontend work: build the calldata, hash
+  it, ask the wallet to sign.
+
+So the honest way to read the demo is that the swap is one instance of a general
+mechanism, not the feature. Anything a Flare address can do, a Mina key can now
+authorise — lending, staking, governance votes, NFT mints. What limits the
+product today is how many flows the interface builds, not what the account can
+execute.
+
 ## Layout
 
 ```
