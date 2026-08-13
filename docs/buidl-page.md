@@ -1,24 +1,10 @@
-# DoraHacks BUIDL page — content to paste
+# Flare × Mina
 
-Written for https://dorahacks.io/buidl/47445, which still describes the earlier
-MetaMask-Snap design. Shorter and less technical than the README on purpose: a
-reviewer reads this in a minute and follows a link if convinced.
-
----
-
-## Tagline
-
-> A Mina wallet that holds and trades assets on Flare — and never needs an EVM key.
-
----
-
-## Links
+**A Mina wallet that holds and trades assets on Flare — and never needs an EVM key.**
 
 - **Live app** — https://flare-mina.labdevn.com
 - **Demo video** — https://youtu.be/aYyipLVi2R8
 - **Code** — https://github.com/youtpout/flare-mina
-
----
 
 ## About
 
@@ -108,7 +94,7 @@ An example account, source verified:
 plus one `FungibleToken` and one `AssetPort` per bridged asset. Full list in the
 repository.
 
-## What is honest about the limits
+## Honest about the limits
 
 The deposit path settles against a mock verifier rather than a real SP1 one.
 That is cost, not capability: a core proof is free and runs in under two minutes
