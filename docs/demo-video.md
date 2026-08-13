@@ -1,6 +1,6 @@
 # Demo video — shot script
 
-Target length **4:00**. Everything on screen is in English.
+Target length **4:15**. Everything on screen is in English.
 
 Timings below are the ones measured on the live server, not guesses. Where a
 step is slower than the film can afford, the script says so and gives the cut.
@@ -26,19 +26,30 @@ with a cut; the timer in the corner is the honest way to show it.
 
 ---
 
-## Shot 1 — The problem (0:00–0:20)
+## Shot 1 — The problem (0:00–0:30)
 
-*Screen: title card 1.*
+*Screen: title card 1, then card 2.*
 
-> **On screen:** Mina has assets. It has almost no DeFi.
-> Flare has DeFi. It has no MINA.
+> **On screen:** Mina has world-class proving, one asset, and almost no liquidity.
+> Flare has the liquidity, and no MINA.
 
 **Narration:**
 
-> A Mina private key is a Pallas key. It cannot sign an Ethereum transaction —
-> not because of a missing library, but because the curve is different. So a Mina
-> holder cannot touch Flare's liquidity, and Flare cannot list MINA.
-> We fixed both, and the second one is the interesting half.
+> Be precise about this: Mina does not have an asset problem you can wave away.
+> It has essentially one asset and very little liquidity. What it does have is a
+> proof system nobody else has.
+
+*Card 2 — the two directions.*
+
+> Flare has the opposite. So the bridge runs both ways, and both are live today.
+> MINA becomes a fully collateralized ERC-20 on Flare. And FXRP, USD₮0 and C2FLR
+> become tokens a Mina wallet can hold — assets Mina has never had.
+
+**Narration, over the cut to card 3:**
+
+> One obstacle stands in front of all of it. A Mina private key is a Pallas key.
+> It cannot sign an Ethereum transaction — not for want of a library, but because
+> the curve is different.
 
 ---
 
@@ -207,6 +218,19 @@ prove        9 720 ms
 > It's deployed and public. Both directions work, on four assets, on Coston2 and
 > Mina devnet. The link is in the description, and the state on that page is read
 > from the two chains, not from a database.
+
+*Screen: title card — where this goes next.*
+
+**Narration:**
+
+> One last thing, because it's where this leads. Mina is a proof system with a
+> chain attached. Today we move assets across that rail. The same rail can carry
+> proofs: a Mina zkApp proving something expensive off-chain, verified on Flare
+> for a fraction of what running it there would cost. Flare gains an asset today,
+> and a proving layer to draw on tomorrow.
+
+*Keep this to one card. It is a roadmap claim, not a demo — say it once, do not
+dress it up as something that already works.*
 
 > **Final card:** flare-mina.labdevn.com · github.com/youtpout/flare-mina
 
