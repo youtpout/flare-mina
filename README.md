@@ -165,7 +165,12 @@ its own transaction, so a third party submits it and spends C2FLR doing so —
 today that is our relayer, at its own expense. Until the account reimburses that
 submitter out of the FMINA it already holds, "no EVM key required" holds for
 *signing* but not for *sending*: without a willing relayer the owner would need
-a funded EVM account after all. Closing that is the next step and deliberately
+a funded EVM account after all.
+
+The fix is **real account abstraction**: `MinaAccount` is already a smart
+account, so what is missing is ERC-4337 support and a paymaster that accepts
+FMINA. Fees would then be paid in the asset the user holds, native gas would
+never enter the picture, and no free relayer would be load-bearing. Deliberately
 not in this version.
 
 ### The demo shows a swap. The account is not a swap contract.

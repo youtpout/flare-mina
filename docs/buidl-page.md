@@ -132,11 +132,11 @@ redeploy, no migration. The full list of trust assumptions is in
 - **Charge a fee for using our relayer**, so the service pays for its own
   proving and gas instead of being subsidised — the same fee that makes the
   point above affordable.
-- **Pay gas in FMINA.** A contract cannot send its own transaction, so somebody
-  has to submit it and pay the C2FLR — today that is our relayer, for free. The
-  account should reimburse whoever submits, out of the FMINA it already holds.
-  Anyone then has a reason to do it, and the user never needs native gas or an
-  EVM account of their own.
+- **Real account abstraction, with fees paid in MINA.** `MinaAccount` is already
+  a smart account; the missing half is ERC-4337 support and a paymaster that
+  takes FMINA. A user would then pay transaction fees in the asset they actually
+  hold, never touching native C2FLR — and the bridge would stop depending on us
+  running a relayer for free.
 - **More protocol flows in the interface** — lending, staking, governance. The
   account already executes them; only the frontend is missing.
 - **Proofs on the same rail as assets**: a Mina zkApp proving something
