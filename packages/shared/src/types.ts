@@ -59,7 +59,7 @@ export type SignedAccountLink = {
   payload: LinkAccounts;
   /** EIP-712 signature produced by the Flare account. */
   flareSignature: Hex;
-  /** Mina Schnorr signature (field/scalar pair) produced by the Snap. */
+  /** Mina Schnorr signature (field/scalar pair) produced by the wallet. */
   minaSignature: { field: string; scalar: string };
 };
 

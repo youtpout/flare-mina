@@ -472,18 +472,28 @@ Stated plainly so they are never mistaken for solved problems. Each one is
 analysed in full — bound, mitigation, and what removes it — in
 [docs/threat-model.md](docs/threat-model.md).
 
-- **The Flare → Mina return path uses a trusted attestor**, not FDC + Relay
-  signing-policy verification. Full trust-minimisation of the return path is out
-  of reach in the hackathon window.
+The four legs do not carry the same assumptions, so they are listed separately.
+
+**Flare → Mina is trust-minimised.** `publishFlareActionState` verifies an FDC
+attestation against the signing-policy root and the required weight held in the
+zkApp's own state, and `releaseWithdrawal` takes nothing but a chain proof —
+there is no attestor signature anywhere in that path. The same holds for minting
+bFXRP, bUSDT and bC2FLR through their `AssetPort`s. This is live, not roadmap.
+
+The remaining assumptions are on the other direction and on settlement:
+
 - **The Mina → Flare deposit path uses a trusted escrow attestor.** It cannot
   choose a recipient or an amount — the depositor's Schnorr signature covers
   both — but it can attest to an escrow that never happened. On-chain per-deposit
   and cumulative mint ceilings bound what that is worth.
+- **The Mina → Flare wrapped-asset release uses a trusted attestor too**, the
+  mirror of the same gap. It cannot redirect or inflate a release — token,
+  recipient and amount are inside the holder's Schnorr signature, which
+  `AssetVault` verifies — but it can sign for a burn that never happened, bounded
+  by the per-token ceiling.
 - **`MockSettlementVerifier` accepts any proof.** It exists so the bridge tests
   can exercise the deposit flow, and must never be deployed to a network holding
   value. The reason it is still there is cost, not capability — see below.
-- **Bridging Flare assets toward Mina** (FXRP, USD₮0, WETH) depends on the
-  trustless return path, and is roadmap rather than MVP.
 
 ## Why on-chain SP1 verification is not in the demo
 

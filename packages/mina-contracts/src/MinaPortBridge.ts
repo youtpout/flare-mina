@@ -20,7 +20,7 @@ import { FdcAttestationProof } from './FdcAttestation.js';
 import { FDC_PROTOCOL_ID } from './RelayMessage.js';
 
 /**
- * MinaPort bridge zkApp — the Mina side of the MINA <-> wMINA bridge.
+ * MinaPort bridge zkApp — the Mina side of the MINA <-> FMINA bridge.
  *
  * Responsibilities:
  *   - Mina -> Flare: escrow native MINA and dispatch a canonical deposit action

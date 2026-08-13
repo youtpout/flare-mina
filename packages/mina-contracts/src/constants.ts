@@ -16,5 +16,5 @@ export const WITHDRAWAL_DOMAIN = Field(0x4d494e41504f5744n);
 /** An EVM address is 160 bits; every recipient field is range-checked to this. */
 export const EVM_ADDRESS_BITS = 160;
 
-/** 1 MINA = 1e9 nanomina. wMINA uses the same base unit (see shared/constants). */
+/** 1 MINA = 1e9 nanomina. FMINA uses the same base unit (see shared/constants). */
 export const NANOMINA_PER_MINA = 1_000_000_000n;
