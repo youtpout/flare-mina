@@ -16,7 +16,7 @@
     {
       "id": "03-cannot-read",
       "hold": 1.4,
-      "text": "Now the hard half. A Mina zkApp cannot look at Flare. Someone has to tell it what happened over there — and the entire security of a bridge is the answer to who, and what that claim is worth. Most bridges answer with a multisig you are asked to trust."
+      "text": "Now the hard half. A Mina zkApp cannot look at Flare. Someone has to tell it what happened over there — and the entire security of a bridge is the answer to who, and whether you had to take their word for it. Our answer is nobody we chose."
     },
     {
       "id": "04-fdc",
