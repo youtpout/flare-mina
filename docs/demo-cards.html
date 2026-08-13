@@ -82,6 +82,28 @@
 </section>
 
 <section class="card">
+  <h2>The problem a bridge cannot avoid</h2>
+  <h1>Mina cannot read Flare.</h1>
+  <p class="lede">A zkApp has no way to look at another chain. Someone must tell it what
+     happened — and the whole security of the bridge is <em>who</em>, and what that claim
+     is worth.</p>
+  <p class="lede" style="font-size:clamp(17px,1.8vw,22px);margin-top:22px;color:#5d6879">
+     Most bridges answer with a multisig you are asked to trust.
+     Flare answers with its validator set.</p>
+</section>
+
+<section class="card">
+  <h2>Flare Data Connector</h2>
+  <h1>The chain attests to<br/>its own history.</h1>
+  <p class="lede">Flare's validators vote on an attestation request each round and sign the
+     Merkle root of the result. We take that root, the Merkle proof, and the signatures —
+     and verify all of it <b>inside the Mina zkApp</b>, against the signing policy Mina
+     holds on-chain.</p>
+  <p class="lede" style="font-size:clamp(17px,1.8vw,22px);margin-top:22px;color:#5d6879">
+     Mina never trusts our relayer. It checks Flare's validator signatures itself.</p>
+</section>
+
+<section class="card">
   <h2>One attestation, four assets</h2>
   <div class="flow">Flare                                  Mina
 ─────                                  ────

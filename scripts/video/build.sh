@@ -84,8 +84,9 @@ group() {
 
 echo "==> pieces"
 group opening 01 02
-group closing 05 06 07
-for id in 03 04; do
+group fdc 03 04 05
+group closing 07 08 09
+for id in 06; do
   cp "$OUT/seg/$id.mp4" "$OUT/cutaway-$id.mp4"
   export LC_NUMERIC=C
   printf "    %-14s %5.1fs\n" "cutaway-$id.mp4" \

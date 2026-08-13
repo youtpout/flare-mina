@@ -1,7 +1,7 @@
 {
   "voice": "en-US-AndrewMultilingualNeural",
   "rate": "+6%",
-  "note": "One entry per title card, in card order. `hold` is trailing silence, so a table can be read before the cut. Cards 3 and 4 are cutaways to drop into the live demo, not part of the opening minute — see docs/demo-video.md for where each lands.",
+  "note": "One entry per title card, in card order. `hold` is trailing silence so a table can be read before the cut. Cards 3-6 are cutaways for the live demo; 1-2 open, 7-9 close. See docs/demo-video.md.",
   "segments": [
     {
       "id": "01-problem",
@@ -14,27 +14,37 @@
       "text": "So we made a Flare contract verify a Mina signature directly. No proof, no prover. Eight hundred thousand gas — three tenths of a cent. The same call on Ethereum is seventeen cents today, and thirty dollars on a busy afternoon. Ethereum isn't always expensive; it's unpredictable. A wallet you use daily can't be hostage to that."
     },
     {
-      "id": "03-attestation",
+      "id": "03-cannot-read",
       "hold": 1.4,
-      "text": "Every transfer appends to one chain on Flare. The Flare Data Connector attests to its head once, and the escrow and all three token ports reuse that single proof."
+      "text": "Now the hard half. A Mina zkApp cannot look at Flare. Someone has to tell it what happened over there — and the entire security of a bridge is the answer to who, and what that claim is worth. Most bridges answer with a multisig you are asked to trust."
     },
     {
-      "id": "04-account",
+      "id": "04-fdc",
+      "hold": 2.0,
+      "text": "We answer with the Flare Data Connector. Each voting round, Flare's validators vote on an attestation request and sign the Merkle root of the result. We take that root, the Merkle proof for our event, and the validator signatures — and we verify all of it inside the Mina zkApp, against the signing policy Mina holds in its own state. Mina never trusts our relayer. It checks Flare's validators itself, and refuses anything they did not sign."
+    },
+    {
+      "id": "05-attestation",
+      "hold": 1.6,
+      "text": "That check is what takes time. Waiting for the round to finalise, then proving the whole thing — the signatures, the Merkle path, the chain link — is three and a half minutes of arithmetic. It is not slow engineering; it is the cost of not asking you to trust us. And we pay it once: every transfer appends to one chain, so the escrow and all three token ports reuse that single proof."
+    },
+    {
+      "id": "06-account",
       "hold": 1.0,
       "text": "No EVM key anywhere. The Flare address is derived from the Mina public key, so it exists before anything is deployed."
     },
     {
-      "id": "05-built",
+      "id": "07-built",
       "hold": 1.6,
       "text": "Everything here was built during the program. The verifier is two point two times faster than what we started from, measured at every step — including two optimisations we tried and rejected."
     },
     {
-      "id": "06-next",
+      "id": "08-next",
       "hold": 1.4,
       "text": "And it points somewhere. Mina is a proof system with a chain attached. The same rail that carries assets can carry proofs — verified on Flare for a fraction of running them there."
     },
     {
-      "id": "07-close",
+      "id": "09-close",
       "hold": 2.2,
       "text": "Deployed, public, running. Both directions, four assets, on Coston 2 and Mina devnet."
     }

@@ -177,21 +177,26 @@ prove        9 720 ms
 > Burning emits a canonical event. Now Mina has to learn about it — and this is
 > where Flare does the work that makes the return path tractable.
 
-*Screen: title card 3 — the chain diagram.*
+**Action:** **Cut to `fdc.mp4` (77 s, pre-rendered).** This is the segment that
+answers *Flare integration quality*, so it gets the most screen time of any
+explanation in the film — and it covers the wait, which is real.
 
-> **On screen:**
-> One append-only chain on Flare, four ports on Mina.
-> One FDC attestation proves the head. Every asset reads the same proof.
+It runs three cards:
 
-**Narration:**
+1. **Mina cannot read Flare.** A zkApp cannot look at another chain. Someone has
+   to tell it what happened, and the whole security of a bridge is *who* — most
+   answer with a multisig you are asked to trust.
+2. **Flare Data Connector.** Flare's validators vote on an attestation request
+   each round and sign the Merkle root of the result. We verify that root, the
+   Merkle proof, and the signatures **inside the Mina zkApp**, against the
+   signing policy Mina holds in its own state. Mina never trusts our relayer.
+3. **One attestation, four assets.** Why it takes three and a half minutes, and
+   why it is paid once rather than four times.
 
-> Every transfer — MINA, FXRP, USD₮0, C2FLR — appends to one chain. The Flare
-> Data Connector attests to its head once, and that single proof is reused by the
-> escrow and all three token ports. Proving it costs about three and a half
-> minutes; paying that once instead of four times is the difference between a
-> four-minute cycle and a fifteen-minute one.
+*Do not apologise for the wait on camera. Name it as the cost of not being asked
+to trust a multisig — that is the strongest thirty seconds in the video.*
 
-**Action:** **Cut.** Return with the release visible on screen.
+**Action:** Return with the release visible on screen.
 
 > **On screen caption:** attestation proof 209.5 s · reused ×4 · elapsed 6 min
 
