@@ -10,9 +10,9 @@ export function Notice() {
     <div className="notice-bar">
       <span className="notice-dot" aria-hidden="true" />
       <span>
-        <strong>Mina devnet upgrades on 19 August</strong> and is unavailable that day —
-        deposits and releases will not settle. Flare <span className="grad">×</span> Mina
-        follows on <strong>20 August</strong>.{' '}
+        <strong>Mina devnet upgrades on 19 August</strong> and will be down for part of
+        the day — deposits and releases will not settle while it is. Flare{' '}
+        <span className="grad">×</span> Mina follows on <strong>20 August</strong>.{' '}
         <a
           href="https://x.com/MinaProtocol/status/2085719449986814291"
           target="_blank"

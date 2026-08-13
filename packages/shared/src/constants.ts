@@ -56,10 +56,6 @@ export const BATCH_DOMAIN: Hex = keccak256(toHex(BATCH_DOMAIN_STRING));
  */
 export const MINA_BRIDGE_DOMAIN_POSEIDON = 0x4d494e41504f5254n; // ASCII "MINAPORT"
 
-/** EIP-712 domain name / version for the account-linking payload. */
-export const LINK_DOMAIN_NAME = 'MinaPort';
-export const LINK_DOMAIN_VERSION = '1';
-
 /** Supported networks for the hackathon MVP. */
 export const FLARE_CHAINS = {
   coston2: 114,
@@ -87,5 +83,3 @@ export const PALLAS_FIELD_ORDER =
 /** Maximum depth of the deposit Merkle tree (=> at most 1024 deposits/batch). */
 export const MAX_DEPOSIT_TREE_DEPTH = 10;
 
-/** Account-link signature validity window, in seconds. */
-export const LINK_EXPIRY_WINDOW_SECONDS = 15 * 60;

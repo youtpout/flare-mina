@@ -44,25 +44,6 @@ export type WithdrawalRecord = {
   amountNanomina: bigint;
 };
 
-/** Canonical payload signed by BOTH accounts to link them off-chain. */
-export type LinkAccounts = {
-  flareAddress: Address;
-  minaPublicKey: string; // base58 "B62..."
-  flareChainId: bigint;
-  minaNetworkId: string; // e.g. "mina:devnet"
-  nonce: bigint;
-  expiry: bigint; // unix seconds
-};
-
-/** A link proven by one signature from each side. */
-export type SignedAccountLink = {
-  payload: LinkAccounts;
-  /** EIP-712 signature produced by the Flare account. */
-  flareSignature: Hex;
-  /** Mina Schnorr signature (field/scalar pair) produced by the wallet. */
-  minaSignature: { field: string; scalar: string };
-};
-
 export type BridgeStatus =
   | 'idle'
   | 'awaiting-wallet-signature'
