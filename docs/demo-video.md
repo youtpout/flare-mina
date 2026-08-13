@@ -1,6 +1,6 @@
 # Demo video — shot script
 
-Target length **4:00**. Everything on screen is in English.
+Target length **3:55**. Everything on screen is in English.
 
 Timings below are the ones measured on the live server, not guesses. Where a
 step is slower than the film can afford, the script says so and gives the cut.
@@ -52,38 +52,30 @@ with a cut; the timer in the corner is the honest way to show it.
 
 ---
 
-## Shot 2 — The insight (0:25–1:00)
+## Shot 2 — What it costs (0:25–0:50)
 
-*Screen: title card 2, then the gas table.*
+*Screen: one card. The number, then the two prices.*
 
-> **On screen:**
-> Pallas base field: a 255-bit prime.
-> An EVM word: 256 bits.
-> → `mulmod` and `addmod` run natively. 8 gas each.
+> **On screen:** A Mina signature, verified on Flare — **808,891 gas**
+> On Flare ~$0.009 · On Ethereum @20 gwei ~$48
 
 **Narration:**
 
-> The usual answer is a zero-knowledge proof. We don't need one. The Pallas base
-> field fits inside a single EVM word, so a Mina Schnorr signature can be
-> verified directly in Solidity. We got it to **808,891 gas** — about nine tenths
-> of a cent on Flare.
+> So we made a Flare contract check a Mina signature directly. No proof, no
+> prover, no trusted setup. It costs **808,891 gas** — about nine tenths of a
+> cent on Flare, and roughly forty-eight dollars on Ethereum.
 
-*Cut to the comparison, hold 4 s:*
+> That gap is the whole product. The same contract is something you ship on
+> Flare and something nobody would ever call anywhere else. Flare's economics
+> aren't a convenience here; they're why this design is possible at all.
 
-| | Gas | On Flare | On Ethereum |
-|---|---|---|---|
-| Reference implementation | ~1.79M | — | ~$107 |
-| **This project** | **808,891** | **~$0.009** | ~$48 |
-
-**Narration:**
-
-> The same contract is a product on Flare and an impossibility on Ethereum.
-> Flare's economics aren't a convenience here. They're why the simple design is
-> the right one.
+*Do not explain the mechanism on camera — how the curve fits an EVM word is in
+the README for whoever wants it. On screen it costs twenty seconds and loses
+everyone who is not a cryptographer.*
 
 ---
 
-## Shot 3 — A Flare account owned by a Mina key (1:00–1:45)
+## Shot 3 — A Flare account owned by a Mina key (0:50–1:40)
 
 *Screen: https://flare-mina.labdevn.com, disconnected.*
 
@@ -115,7 +107,7 @@ with a cut; the timer in the corner is the honest way to show it.
 
 ---
 
-## Shot 4 — Bridging MINA in (1:45–2:35)
+## Shot 4 — Bridging MINA in (1:40–2:30)
 
 *Screen: Bridge tab.*
 
@@ -155,7 +147,7 @@ prove        9 720 ms
 
 ---
 
-## Shot 5 — The return path, and Flare's attestation layer (2:35–3:20)
+## Shot 5 — The return path, and Flare's attestation layer (2:30–3:15)
 
 *Screen: Bridge tab, withdraw form.*
 
@@ -192,7 +184,7 @@ prove        9 720 ms
 
 ---
 
-## Shot 6 — What is actually new, and where it runs (3:20–4:00)
+## Shot 6 — What is actually new, and where it runs (3:15–3:55)
 
 *Screen: title card 4.*
 

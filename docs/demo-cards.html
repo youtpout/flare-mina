@@ -67,21 +67,15 @@
 </section>
 
 <section class="card">
-  <h2>Why this works on Flare and nowhere else</h2>
-  <h1>The Pallas base field is a<br/>255-bit prime.</h1>
-  <p class="lede">An EVM word is 256 bits — so <span class="mono">mulmod</span> and
-     <span class="mono">addmod</span> run on it natively, at 8 gas each.<br/>
-     A Mina signature can be verified directly in Solidity. No proof. No prover.</p>
-</section>
-
-<section class="card">
-  <h2>Verifying one Mina Schnorr signature</h2>
+  <h2>A Mina signature, verified on Flare</h2>
+  <h1><span class="big grad">808,891</span> gas</h1>
   <table>
-    <tr><th>Implementation</th><th class="n">Gas</th><th class="n">On Flare</th><th class="n">On Ethereum</th></tr>
-    <tr><td>Reference</td><td class="n">~1,790,000</td><td class="n">—</td><td class="n">~$107</td></tr>
-    <tr data-hi><td>This project</td><td class="n">808,891</td><td class="n">~$0.009</td><td class="n">~$48</td></tr>
+    <tr><th>The same verification costs</th><th class="n">Per signature</th></tr>
+    <tr data-hi><td>On Flare</td><td class="n">~$0.009</td></tr>
+    <tr><td>On Ethereum @20 gwei</td><td class="n">~$48</td></tr>
   </table>
-  <p class="lede">The same contract is a product on Flare and an impossibility on Ethereum.</p>
+  <p class="lede">No proof, no prover, no trusted setup — the signature is checked
+     on-chain, directly. A product on Flare. Unusable anywhere gas is expensive.</p>
 </section>
 
 <section class="card">
