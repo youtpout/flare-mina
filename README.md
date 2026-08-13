@@ -481,17 +481,23 @@ analysed in full — bound, mitigation, and what removes it — in
 The deposit path settles against `MockSettlementVerifier` rather than a real SP1
 verifier, and the reason is money rather than missing code.
 
-`packages/prover` produces a **core** proof today — generated and verified in
-1m43s on a laptop, at no cost. But a core proof cannot be checked by a Solidity
-contract. On-chain verification needs the proof wrapped into Groth16 or PLONK,
-and that wrapping step is the expensive one: it wants far more memory than a
-development machine has, so in practice it runs on the Succinct prover network,
-**which charges real money for every proof**.
+The settlement proof is not the small one. Verifying a Mina blockchain SNARK
+inside a zkVM costs **4.38 billion cycles** (measured — see the table below) —
+a different order entirely from
+the ~2M-cycle Schnorr guest that runs in 1m43s on a laptop.
 
-For a testnet bridge that would mean paying per deposit, continuously, for a
-demonstration — while the thing being demonstrated, the Mina signature
-verification, is already done on-chain for three tenths of a cent and needs no
-prover at all.
+At that size, where you prove decides whether it is usable at all:
+
+| | |
+|---|---|
+| Local GPU (RTX 5090) | **~40 minutes** per proof |
+| Succinct prover network | **~3 minutes** — and billed, per proof |
+
+Forty minutes per deposit is not a bridge, so in practice the settlement proof
+only exists on the prover network, **which charges real money every time**. For
+a testnet demonstration that means paying per deposit, continuously — while the
+thing being demonstrated, the Mina signature verification, is already done
+on-chain for three tenths of a cent and needs no prover at all.
 
 So the choice was deliberate: spend the hackathon on the path that is cheap
 enough to actually run, and leave the verifier swappable. Replacing the mock is

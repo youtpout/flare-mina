@@ -96,12 +96,15 @@ repository.
 
 ## Honest about the limits
 
-The deposit path settles against a mock verifier rather than a real SP1 one.
-That is cost, not capability: a core proof is free and runs in under two minutes
-on a laptop, but Solidity cannot check a core proof — on-chain verification needs
-the Groth16 wrap, which in practice means paying a prover network per proof. The
-guest and its cycle counts are in the repository; the verifier is swappable
-behind a two-day timelock. The full list of trust assumptions is in
+The deposit path settles against a mock verifier rather than a real SP1 one,
+and that is cost rather than capability. Verifying a Mina blockchain SNARK in a
+zkVM is **4.38 billion cycles**: roughly **40 minutes** on an RTX 5090, or
+**3 minutes** on the Succinct prover network — which bills per proof. Forty
+minutes per deposit is not a bridge, so the real path runs on the network, and
+running it continuously on a testnet means paying for every demonstration.
+
+The guest and its cycle counts are in the repository, and the verifier is
+swappable behind a two-day timelock. The full list of trust assumptions is in
 `docs/threat-model.md`.
 
 ## Next
