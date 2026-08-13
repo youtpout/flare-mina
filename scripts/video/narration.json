@@ -6,12 +6,12 @@
     {
       "id": "01-problem",
       "hold": 1.0,
-      "text": "Mina has world-class proving. It also has one asset and almost no liquidity. Flare is the mirror image: a mature DeFi market, with no MINA in it."
+      "text": "Mina has world-class proving. It also has one asset and almost no liquidity. Flare has a mature DeFi market, with no MINA in it."
     },
     {
       "id": "02-cost",
       "hold": 1.8,
-      "text": "So we made a Flare contract verify a Mina signature directly. No proof, no prover. Eight hundred thousand gas — three tenths of a cent. The same call on Ethereum is seventeen cents today, and thirty dollars on a busy afternoon. Ethereum isn't always expensive; it's unpredictable. A wallet you use daily can't be hostage to that."
+      "text": "So we made a Flare contract verify a Mina signature directly. No proof. Eight hundred thousand gas — three tenths of a cent. The same call on Ethereum is seventeen cents today, and thirty dollars on a busy afternoon. Ethereum isn't always expensive; it's unpredictable. A wallet you use daily can't be hostage to that."
     },
     {
       "id": "03-cannot-read",

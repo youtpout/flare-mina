@@ -10,17 +10,20 @@
       "slide": "opening"
     },
     {
+      "slide": "cutaway-06"
+    },
+    {
+      "slide": "fdc"
+    },
+    {
       "cut": "f1",
       "in": 3.0,
       "out": 8.0,
-      "say": "This is a Mina wallet, connected to the app. And this is the Flare account it owns.",
+      "say": "So here it is, running. A Mina wallet connected to the app, and the Flare account it owns.",
       "caption": {
-        "text": "A Mina wallet. No EVM key anywhere.",
+        "text": "flare-mina.labdevn.com — live",
         "sub": ""
       }
-    },
-    {
-      "slide": "cutaway-06"
     },
     {
       "cut": "f1",
@@ -89,13 +92,10 @@
       }
     },
     {
-      "slide": "fdc"
-    },
-    {
       "cut": "f2",
       "in": 24.0,
       "out": 30.6,
-      "say": "This is the validator set the zkApp checks against — five recovered keys, and the policy root Mina holds itself.",
+      "say": "And the validator set it all rests on, read live from Flare — five recovered keys, and the policy root Mina holds itself.",
       "caption": {
         "text": "Flare validator set, read live",
         "sub": "FDC protocol 200 · required weight 32767"
