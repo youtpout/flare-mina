@@ -1,0 +1,138 @@
+{
+  "note": "The film, in order. `slide` pulls a pre-rendered segment from out/; `cut` takes in/out seconds from a raw recording and speaks the `say` line over it. Timestamps were read off contact sheets of the three takes — see docs/demo-video.md.",
+  "sources": {
+    "f1": "/Users/eddy/Downloads/flare1.mp4",
+    "f2": "/Users/eddy/Downloads/flare2.mp4",
+    "f3": "/Users/eddy/Downloads/flare3.mp4"
+  },
+  "timeline": [
+    {
+      "slide": "opening"
+    },
+    {
+      "cut": "f1",
+      "in": 3.0,
+      "out": 8.0,
+      "say": "This is a Mina wallet, connected to the app. And this is the Flare account it owns.",
+      "caption": {
+        "text": "A Mina wallet. No EVM key anywhere.",
+        "sub": ""
+      }
+    },
+    {
+      "slide": "cutaway-06"
+    },
+    {
+      "cut": "f1",
+      "in": 9.4,
+      "out": 13.2,
+      "say": "Fifty MINA, bridged to Flare.",
+      "caption": {
+        "text": "50 MINA → Flare",
+        "sub": ""
+      }
+    },
+    {
+      "cut": "f1",
+      "in": 17.0,
+      "out": 25.4,
+      "say": "The relayer builds and proves the zkApp transaction, then hands it back unsigned. Nothing moves until this wallet signs it.",
+      "caption": {
+        "text": "The relayer proves — and returns it unsigned",
+        "sub": "prove 9.7 s · build 0.3 s"
+      }
+    },
+    {
+      "cut": "f1",
+      "in": 31.0,
+      "out": 39.6,
+      "say": "Then a second signature claims the FMINA on Flare. A Mina Schnorr signature, verified by a Solidity contract.",
+      "caption": {
+        "text": "Claimed with a Mina signature",
+        "sub": "808,891 gas · $0.003"
+      }
+    },
+    {
+      "cut": "f1",
+      "in": 49.6,
+      "out": 53.4,
+      "say": "There it is on Flare. Fifty FMINA minted, authorised only by a Mina key.",
+      "caption": {
+        "text": "claimWithMinaSignature — success",
+        "sub": "50 FMINA minted on Coston2"
+      }
+    },
+    {
+      "cut": "f1",
+      "in": 71.0,
+      "out": 82.0,
+      "say": "Now trade it. Ten FMINA for FXRP on BlazeSwap, a real DEX with real liquidity. Approve and swap go out as one signature over an ordered batch, so no live approval ever sits between two transactions.",
+      "caption": {
+        "text": "approve + swap, one Mina signature",
+        "sub": "BlazeSwap — a real DEX"
+      }
+    },
+    {
+      "cut": "f1",
+      "in": 94.6,
+      "out": 101.4,
+      "say": "Swapped. The account knows nothing about BlazeSwap — it just executes a signed list of calls."
+    },
+    {
+      "cut": "f1",
+      "in": 111.0,
+      "out": 116.2,
+      "say": "And back the other way. Burning the wrapped asset releases the original.",
+      "caption": {
+        "text": "Burn to bridge back",
+        "sub": "The burn is the authorisation"
+      }
+    },
+    {
+      "slide": "fdc"
+    },
+    {
+      "cut": "f2",
+      "in": 24.0,
+      "out": 30.6,
+      "say": "This is the validator set the zkApp checks against — five recovered keys, and the policy root Mina holds itself.",
+      "caption": {
+        "text": "Flare validator set, read live",
+        "sub": "FDC protocol 200 · required weight 32767"
+      }
+    },
+    {
+      "cut": "f3",
+      "in": 15.0,
+      "out": 19.0,
+      "say": "The burn, on the Flare explorer.",
+      "caption": {
+        "text": "Burn confirmed on Coston2",
+        "sub": ""
+      }
+    },
+    {
+      "cut": "f3",
+      "in": 19.4,
+      "out": 23.0,
+      "say": "And released on Mina.",
+      "caption": {
+        "text": "Released from the escrow",
+        "sub": ""
+      }
+    },
+    {
+      "cut": "f2",
+      "in": 0.4,
+      "out": 4.8,
+      "say": "Three assets, both directions, all delivered.",
+      "caption": {
+        "text": "Both directions, four assets, delivered",
+        "sub": ""
+      }
+    },
+    {
+      "slide": "closing"
+    }
+  ]
+}
