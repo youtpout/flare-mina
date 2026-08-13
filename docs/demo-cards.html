@@ -56,6 +56,9 @@
 
   .n-of { position: fixed; bottom: 26px; right: 32px; color: #2a3242; font-size: 15px; font-family: ui-monospace, Menlo, monospace; }
   .hint { position: fixed; bottom: 26px; left: 32px; color: #2a3242; font-size: 15px; }
+  /* `?video` strips the operator furniture — nothing but the card in frame. */
+  body[data-video] .n-of, body[data-video] .hint { display: none; }
+  body[data-video] .card { animation: none; }
 </style>
 </head>
 <body>
@@ -132,6 +135,7 @@
 <div class="hint">← →  ·  F fullscreen</div>
 
 <script>
+  if (location.search.includes('video')) document.body.setAttribute('data-video', '');
   const cards = [...document.querySelectorAll('.card')];
   const counter = document.querySelector('.n-of');
   let i = 0;
@@ -156,7 +160,12 @@
     }
   });
   addEventListener('click', () => show(i + 1));
-  show(0);
+
+  // `#3` opens card 4. Lets the video build shoot each card headlessly instead
+  // of synthesising keystrokes.
+  const fromHash = () => show(parseInt(location.hash.slice(1), 10) || 0);
+  addEventListener('hashchange', fromHash);
+  fromHash();
 </script>
 </body>
 </html>

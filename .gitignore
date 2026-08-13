@@ -17,3 +17,6 @@ coverage/
 packages/flare-contracts/lib/
 packages/flare-contracts/out/
 packages/flare-contracts/cache/
+
+# Rendered video: large binaries, rebuildable with scripts/video/build.sh
+scripts/video/out/
