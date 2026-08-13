@@ -64,9 +64,8 @@ with a cut; the timer in the corner is the honest way to show it.
 > prover, no trusted setup. It costs **808,891 gas** — three tenths of a cent on
 > Flare, and it stays there, because Flare's fees are cheap and predictable.
 
-> That is what makes the simple design the right one. Where gas is expensive or
-> volatile you can't call this, and you end up building a zero-knowledge proof
-> system instead — far more machinery for the same result.
+> Cheap and predictable is what matters — it means a Mina wallet can act on
+> Flare as often as it likes, and the cost never becomes the reason not to.
 
 *Do not explain the mechanism on camera — how the curve fits an EVM word is in
 the README for whoever wants it. On screen it costs twenty seconds and loses
