@@ -1,0 +1,45 @@
+{
+  "note": "Lower-third captions burned onto the live-demo footage. `at` and `until` are seconds into the clip they belong to. Edit freely — re-running caption.py is cheap.",
+  "clips": {
+    "demo": [
+      {
+        "at": 1.0,
+        "until": 6.0,
+        "text": "A Mina wallet. No EVM key anywhere.",
+        "sub": ""
+      },
+      {
+        "at": 8.0,
+        "until": 14.0,
+        "text": "This Flare address is CREATE2 over the Mina public key",
+        "sub": "It exists before anything is deployed"
+      },
+      {
+        "at": 20.0,
+        "until": 26.0,
+        "text": "The relayer proves — and returns the transaction unsigned",
+        "sub": "Nothing moves until the wallet signs it"
+      },
+      {
+        "at": 30.0,
+        "until": 36.0,
+        "text": "prove 9.7 s",
+        "sub": "fetch 0.3 s · build 0.3 s"
+      },
+      {
+        "at": 44.0,
+        "until": 50.0,
+        "text": "approve + swap under one Mina signature",
+        "sub": "BlazeSwap — a real DEX, real liquidity"
+      }
+    ],
+    "release": [
+      {
+        "at": 1.0,
+        "until": 7.0,
+        "text": "attestation proof 209.5 s · reused ×4",
+        "sub": "The MINA is released from the escrow"
+      }
+    ]
+  }
+}
