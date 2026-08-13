@@ -44,14 +44,25 @@ That is possible because the Pallas base field is a 255-bit prime: it fits in on
 EVM word, so `mulmod` and `addmod` handle it natively at 8 gas each. We measured
 the result and then optimised it:
 
-| | Gas | Cost on Flare | Cost on Ethereum @20 gwei |
-|---|---|---|---|
-| Reference implementation | ~1.79M | — | ~$107 |
-| **This project** | **808,891** | **~$0.009** | ~$48 |
+| | Gas | Cost on Flare |
+|---|---|---|
+| Reference implementation | ~1.79M | — |
+| **This project** | **808,891** | **~$0.003** |
 
-**The same contract is a product on Flare and an impossibility on Ethereum.**
-Flare's economics are not a convenience here; they are the reason the design is
-viable at all. A judge can verify this by comparing the two right-hand columns.
+Priced 11 August 2026 against Flare mainnet: 650 gwei, FLR at $0.0060. Verify with
+`eth_gasPrice` on `https://flare-api.flare.network/ext/C/rpc`.
+
+**Flare's economics are what make the simple design the right one.** The contract
+needs gas that is cheap *and* predictable, which is what lets us verify a signature
+directly instead of building a proof system around it.
+
+We are deliberately not quoting a headline dollar comparison against Ethereum.
+On the day of writing Ethereum sat at 0.111 gwei with ETH at $1,881, which prices
+the same call at **$0.17** — 54x Flare, not the thousands-fold gap a 20 gwei
+assumption would suggest. Ethereum's fees are volatile: the same call is ~$30 at
+20 gwei. The honest statement is about the *design*, not a ratio that changes
+weekly — at high or unpredictable gas the answer is a ~200k-gas Groth16 proof
+instead, with a prover, a trusted setup and proving artifacts to ship.
 
 Measured against live Coston2 state, one full account operation costs **865,845
 gas — 3% of a block** (block gas limit 28,000,000, base fee 500 gwei).
@@ -165,7 +176,7 @@ than stranding funds.
 |--------|-------|-------------|
 | Sign a deposit intent | Mina wallet | instant |
 | Prove a deposit on Mina | o1js + `@o1js/native` | **2.1 s** |
-| Move tokens on Flare | Coston2 | **~890k gas, ~$0.009** |
+| Move tokens on Flare | Coston2 | **~890k gas, ~$0.003** |
 | Swap on Flare | Coston2 | **~1.08M gas**, one signature |
 
 No step in the product costs a user minutes. That is the point of verifying

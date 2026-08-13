@@ -56,22 +56,38 @@ with a cut; the timer in the corner is the honest way to show it.
 
 *Screen: one card. The number, then the two prices.*
 
-> **On screen:** A Mina signature, verified on Flare — **808,891 gas**
-> On Flare ~$0.009 · On Ethereum @20 gwei ~$48
+> **On screen:** A Mina signature, verified on Flare — **808,891 gas · $0.003**
 
 **Narration:**
 
 > So we made a Flare contract check a Mina signature directly. No proof, no
-> prover, no trusted setup. It costs **808,891 gas** — about nine tenths of a
-> cent on Flare, and roughly forty-eight dollars on Ethereum.
+> prover, no trusted setup. It costs **808,891 gas** — three tenths of a cent on
+> Flare, and it stays there, because Flare's fees are cheap and predictable.
 
-> That gap is the whole product. The same contract is something you ship on
-> Flare and something nobody would ever call anywhere else. Flare's economics
-> aren't a convenience here; they're why this design is possible at all.
+> That is what makes the simple design the right one. Where gas is expensive or
+> volatile you can't call this, and you end up building a zero-knowledge proof
+> system instead — far more machinery for the same result.
 
 *Do not explain the mechanism on camera — how the curve fits an EVM word is in
 the README for whoever wants it. On screen it costs twenty seconds and loses
 everyone who is not a cryptographer.*
+
+**Check these two numbers on the day you record.** They move.
+
+```bash
+# Flare gas price
+curl -s -X POST https://flare-api.flare.network/ext/C/rpc \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"eth_gasPrice","params":[]}'
+```
+
+Measured 11 August 2026: Flare 650 gwei with FLR at $0.0060 → **$0.0031**.
+Ethereum was 0.111 gwei with ETH at $1,881 → **$0.17** for the same call.
+
+Do **not** quote the "~$48 on Ethereum" figure that earlier drafts carried. It
+assumed 20 gwei and ETH near $3,000, and both are wrong today — it overstates the
+gap by roughly 280x. A judge checks that in ten seconds, and then disbelieves
+every other number in the video.
 
 ---
 

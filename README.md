@@ -29,15 +29,17 @@ decomposition, no bigint library. A Mina Schnorr signature can therefore be
 verified *directly in Solidity*:
 
 ```
-809,000 gas  ≈  0.40 FLR  ≈  under one cent on Flare
+809,000 gas  ≈  0.53 FLR  ≈  $0.003 on Flare  (650 gwei, 11 Aug 2026)
 ```
 
 No prover. No relayer. No trusted setup. No proving artifacts. The user signs in
 their Mina wallet, the frontend submits the signature, the contract verifies it.
 
 This is a **Flare** answer rather than a general one, and deliberately so. The
-identical code on Ethereum mainnet would cost tens of dollars per verification,
-where a Groth16 proof at ~200k gas wins instead. Flare's cheap gas is what makes
+design needs gas that is cheap *and* predictable. Ethereum's is neither: the same
+call is $0.17 at the 0.111 gwei of 11 August 2026, and about $30 at 20 gwei — so
+you cannot build a product on it, and a Groth16 proof at ~200k gas wins instead,
+with a prover, a trusted setup and artifacts to ship. Flare's fees are what make
 the simple design the right one.
 
 ## Two rails
