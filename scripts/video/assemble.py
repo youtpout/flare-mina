@@ -157,11 +157,20 @@ async def main() -> None:
             print(f"  {i:02d} cut   {item['cut']} {item['in']:>6.1f}-{item['out']:<6.1f} {probe(p):5.1f}s")
         pieces.append(p)
 
-    listing = work / "list.txt"
-    listing.write_text("".join(f"file '{p}'\n" for p in pieces))
-    run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
-         "-i", str(listing), "-c:v", "libx264", "-crf", "19", "-preset", "slow",
-         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", str(dest)])
+    # The concat *filter*, not the demuxer. The demuxer re-encodes each piece's
+    # audio separately, and AAC's encoder priming eats a few dozen milliseconds
+    # at every join — across sixteen joins that clips the leading consonant of a
+    # line often enough to hear. Decoding everything and concatenating inside the
+    # graph gives one continuous stream and one encode.
+    inputs: list[str] = []
+    for p in pieces:
+        inputs += ["-i", str(p)]
+    chain = "".join(f"[{i}:v][{i}:a]" for i in range(len(pieces)))
+    run(["ffmpeg", "-y", "-loglevel", "error", *inputs,
+         "-filter_complex", f"{chain}concat=n={len(pieces)}:v=1:a=1[v][a]",
+         "-map", "[v]", "-map", "[a]",
+         "-c:v", "libx264", "-crf", "19", "-preset", "slow", "-pix_fmt", "yuv420p",
+         "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str(dest)])
 
     total = probe(dest)
     print(f"\n{dest}  {int(total // 60)}:{total % 60:04.1f}")
