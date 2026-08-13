@@ -8,6 +8,7 @@ import { Swap } from '@/components/Swap';
 import { Bridge } from '@/components/Bridge';
 import { Network } from '@/components/Network';
 import { Faucets } from '@/components/Faucets';
+import { Notice } from '@/components/Notice';
 import { errorMessage } from '@/lib/errors';
 
 export type Session = {
@@ -175,6 +176,8 @@ export function App() {
       <p className="sub">
         Your Mina wallet holds and trades assets on Flare. It never needs an EVM key.
       </p>
+
+      <Notice />
 
       {!session ? (
         <>
