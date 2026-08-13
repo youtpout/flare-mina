@@ -332,6 +332,8 @@ those three changes took the bridge from an undeployable 39,693 bytes to 19,323.
 path can be exercised end to end before the SP1 pipeline is wired in. The deploy
 script refuses to run on Flare mainnet for this reason, and replacing it is a
 `proposeVerifier` / `executeVerifierUpdate` pair behind a two-day timelock.
+Why it is still a mock is answered in
+[Why on-chain SP1 verification is not in the demo](#why-on-chain-sp1-verification-is-not-in-the-demo).
 
 Third-party contracts this deployment uses, all resolved from the chain rather
 than from documentation:
@@ -446,9 +448,32 @@ analysed in full — bound, mitigation, and what removes it — in
   and cumulative mint ceilings bound what that is worth.
 - **`MockSettlementVerifier` accepts any proof.** It exists so the bridge tests
   can exercise the deposit flow, and must never be deployed to a network holding
-  value.
+  value. The reason it is still there is cost, not capability — see below.
 - **Bridging Flare assets toward Mina** (FXRP, USD₮0, WETH) depends on the
   trustless return path, and is roadmap rather than MVP.
+
+## Why on-chain SP1 verification is not in the demo
+
+The deposit path settles against `MockSettlementVerifier` rather than a real SP1
+verifier, and the reason is money rather than missing code.
+
+`packages/prover` produces a **core** proof today — generated and verified in
+1m43s on a laptop, at no cost. But a core proof cannot be checked by a Solidity
+contract. On-chain verification needs the proof wrapped into Groth16 or PLONK,
+and that wrapping step is the expensive one: it wants far more memory than a
+development machine has, so in practice it runs on the Succinct prover network,
+**which charges real money for every proof**.
+
+For a testnet bridge that would mean paying per deposit, continuously, for a
+demonstration — while the thing being demonstrated, the Mina signature
+verification, is already done on-chain for three tenths of a cent and needs no
+prover at all.
+
+So the choice was deliberate: spend the hackathon on the path that is cheap
+enough to actually run, and leave the verifier swappable. Replacing the mock is
+a `proposeVerifier` / `executeVerifierUpdate` pair behind a two-day timelock —
+no redeploy, no migration. The guest, the cycle counts and the host CLI are in
+the repository and can be checked; what is missing is a budget, not a design.
 
 ## Roadmap: where proving earns its place
 
