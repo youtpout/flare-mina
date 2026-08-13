@@ -1,6 +1,6 @@
 # Demo video — shot script
 
-Target length **4:15**. Everything on screen is in English.
+Target length **4:00**. Everything on screen is in English.
 
 Timings below are the ones measured on the live server, not guesses. Where a
 step is slower than the film can afford, the script says so and gives the cut.
@@ -26,26 +26,25 @@ with a cut; the timer in the corner is the honest way to show it.
 
 ---
 
-## Shot 1 — The problem (0:00–0:30)
+## Shot 1 — The problem (0:00–0:25)
 
-*Screen: title card 1, then card 2.*
+*Screen: title card 1. One card, held.*
 
-> **On screen:** Mina has world-class proving, one asset, and almost no liquidity.
-> Flare has the liquidity, and no MINA.
+> **On screen:** Mina has world-class proving. One asset. Almost no liquidity.
+> Flare has a mature DeFi market. And no MINA.
+> *Each chain has what the other lacks — so the bridge runs both ways.*
 
 **Narration:**
 
-> Be precise about this: Mina does not have an asset problem you can wave away.
-> It has essentially one asset and very little liquidity. What it does have is a
-> proof system nobody else has.
+> Be precise about this, because a judge who knows Mina will be. Mina has
+> essentially one asset and very little liquidity. What it has instead is a proof
+> system nobody else has. Flare is the mirror image: a working DeFi market with
+> real depth, and no MINA in it.
 
-*Card 2 — the two directions.*
+> So this runs both ways. MINA gains a market it has never had. And Mina gains
+> Flare's assets — you'll see three of them held in a Mina wallet later.
 
-> Flare has the opposite. So the bridge runs both ways, and both are live today.
-> MINA becomes a fully collateralized ERC-20 on Flare. And FXRP, USD₮0 and C2FLR
-> become tokens a Mina wallet can hold — assets Mina has never had.
-
-**Narration, over the cut to card 3:**
+**Narration, over the cut to the next card:**
 
 > One obstacle stands in front of all of it. A Mina private key is a Pallas key.
 > It cannot sign an Ethereum transaction — not for want of a library, but because
@@ -53,7 +52,7 @@ with a cut; the timer in the corner is the honest way to show it.
 
 ---
 
-## Shot 2 — The insight (0:20–0:55)
+## Shot 2 — The insight (0:25–1:00)
 
 *Screen: title card 2, then the gas table.*
 
@@ -84,7 +83,7 @@ with a cut; the timer in the corner is the honest way to show it.
 
 ---
 
-## Shot 3 — A Flare account owned by a Mina key (0:55–1:45)
+## Shot 3 — A Flare account owned by a Mina key (1:00–1:45)
 
 *Screen: https://flare-mina.labdevn.com, disconnected.*
 
