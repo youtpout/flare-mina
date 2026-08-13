@@ -56,9 +56,14 @@ for png in "$OUT/png"/*.png; do
     ffmpeg -y -loglevel error -loop 1 -i "$png" -f lavfi -i anullsrc=r=48000:cl=stereo \
       -t 3 -c:v libx264 -pix_fmt yuv420p -r 30 -c:a aac -shortest "$OUT/seg/$id.mp4"
   else
+    # -t rather than -shortest: with a looped still, -shortest lets the video
+    # run to the end of its GOP and leaves ~1.8s of silence welded onto every
+    # card. Take the length from the narration and state it.
+    export LC_NUMERIC=C
+    len=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$mp3")
     ffmpeg -y -loglevel error -loop 1 -i "$png" -i "$mp3" \
-      -c:v libx264 -pix_fmt yuv420p -r 30 -tune stillimage \
-      -c:a aac -b:a 160k -shortest "$OUT/seg/$id.mp4"
+      -t "$len" -c:v libx264 -pix_fmt yuv420p -r 30 -tune stillimage \
+      -c:a aac -b:a 160k "$OUT/seg/$id.mp4"
   fi
   echo "file '$OUT/seg/$id.mp4'" >> "$OUT/list.txt"
 done
