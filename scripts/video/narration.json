@@ -26,7 +26,7 @@
     {
       "id": "05-attestation",
       "hold": 1.6,
-      "text": "That check is what takes time. Waiting for the round to finalise, then proving the whole thing — the signatures, the Merkle path, the chain link — is three and a half minutes of arithmetic. It is not slow engineering; it is the cost of not asking you to trust us. And we pay it once: every transfer appends to one chain, so the escrow and all three token ports reuse that single proof."
+      "text": "That check is what takes time, and it is worth being exact about it. A Flare voting round takes about fifteen minutes to finalise — we wait for the validators, we do not hurry them. Then proving the whole thing, the signatures, the Merkle path and the chain link, is another three and a half minutes of arithmetic. That is not slow engineering; it is the cost of not asking you to trust us. And we pay it once: every transfer appends to one chain, so the escrow and all three token ports reuse that single proof."
     },
     {
       "id": "06-account",

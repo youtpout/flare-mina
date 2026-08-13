@@ -20,8 +20,9 @@ The demo fails in the edit, not in the take, so stage this first.
 | Browser at 1280×800, zoom 100% | Wider viewports shrink the text past legibility on a phone. |
 | One tab only, no bookmarks bar | Nothing on screen you have to apologise for. |
 
-**Do not film a publication cycle in real time.** The FDC attestation proof takes
-**~210 s** on this host and the publisher runs every 15 minutes. Shot 5 covers it
+**Do not film a publication cycle in real time.** A burn is ~20 minutes from the
+release landing: the Flare voting round needs ~15 minutes to finalise before the
+~210 s proof can even start. Shot 5 covers it
 with a cut; the timer in the corner is the honest way to show it.
 
 ---
@@ -190,8 +191,9 @@ It runs three cards:
    each round and sign the Merkle root of the result. We verify that root, the
    Merkle proof, and the signatures **inside the Mina zkApp**, against the
    signing policy Mina holds in its own state. Mina never trusts our relayer.
-3. **One attestation, four assets.** Why it takes three and a half minutes, and
-   why it is paid once rather than four times.
+3. **One attestation, four assets.** Where the time actually goes — about
+   fifteen minutes waiting for the Flare voting round to finalise, then three
+   and a half minutes of proving — and why it is paid once, not four times.
 
 *Do not apologise for the wait on camera. Name it as the cost of not being asked
 to trust a multisig — that is the strongest thirty seconds in the video.*
