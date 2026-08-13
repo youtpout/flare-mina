@@ -11,7 +11,7 @@
     {
       "id": "02-cost",
       "hold": 1.8,
-      "text": "So we made a Flare contract verify a Mina signature directly. No proof. Eight hundred thousand gas — three tenths of a cent. The same call on Ethereum is seventeen cents today, and thirty dollars on a busy afternoon. Ethereum isn't always expensive; it's unpredictable. A wallet you use daily can't be hostage to that."
+      "text": "So we made a Flare contract verify a Mina signature directly. No proving. Eight hundred thousand gas — three tenths of a cent. The same call on Ethereum is seventeen cents today, and thirty dollars on a busy afternoon. Ethereum isn't always expensive; it's unpredictable. A wallet you use daily can't be hostage to that."
     },
     {
       "id": "03-cannot-read",

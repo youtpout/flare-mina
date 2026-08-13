@@ -20,3 +20,6 @@ packages/flare-contracts/cache/
 
 # Rendered video: large binaries, rebuildable with scripts/video/build.sh
 scripts/video/out/
+
+# Throwaway devnet identity for the demo recording. Never commit.
+scripts/video/.demo-key.env
