@@ -56,16 +56,20 @@ with a cut; the timer in the corner is the honest way to show it.
 
 *Screen: one card. The number, then the two prices.*
 
-> **On screen:** A Mina signature, verified on Flare — **808,891 gas · $0.003**
+> **On screen:** A Mina signature, verified on Flare — **808,891 gas**
+> Flare $0.003 · Ethereum $0.17 today · Ethereum ~$30 at 20 gwei
 
 **Narration:**
 
 > So we made a Flare contract check a Mina signature directly. No proof, no
 > prover, no trusted setup. It costs **808,891 gas** — three tenths of a cent on
-> Flare, and it stays there, because Flare's fees are cheap and predictable.
+> Flare.
 
-> Cheap and predictable is what matters — it means a Mina wallet can act on
-> Flare as often as it likes, and the cost never becomes the reason not to.
+> The same call on Ethereum is seventeen cents today, and about thirty dollars
+> on a busy afternoon at twenty gwei. That's the point: not that Ethereum is
+> always expensive, but that it is *unpredictable*, and a wallet you use every
+> day can't be hostage to that. Flare is cheap and it stays cheap — which is what
+> makes it the place a Mina wallet can actually live.
 
 *Do not explain the mechanism on camera — how the curve fits an EVM word is in
 the README for whoever wants it. On screen it costs twenty seconds and loses
