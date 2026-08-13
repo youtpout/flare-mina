@@ -160,9 +160,13 @@ transaction — target, value and calldata are all committed to by the signed
 `actionHash`, so the submitter cannot redirect anything and gains nothing by
 trying. One honest submitter is enough, and there is no privileged relayer.
 
-What the owner still needs is someone to pay gas. Reimbursing the submitter out
-of the account's own FMINA balance — which removes the last reason to hold an
-EVM account at all — is the next step and deliberately not in this version.
+What the owner still needs is someone to **pay the gas**. A contract cannot send
+its own transaction, so a third party submits it and spends C2FLR doing so —
+today that is our relayer, at its own expense. Until the account reimburses that
+submitter out of the FMINA it already holds, "no EVM key required" holds for
+*signing* but not for *sending*: without a willing relayer the owner would need
+a funded EVM account after all. Closing that is the next step and deliberately
+not in this version.
 
 ### The demo shows a swap. The account is not a swap contract.
 
