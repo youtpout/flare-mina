@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Flare x Mina — demo cards</title>
+<style>
+  /* Title cards for the demo video. Open, press F for fullscreen, then use
+     the arrow keys. Colours are the site's own so the cuts do not jar. */
+  :root {
+    --bg: #0b0e14;
+    --text: #e8ecf3;
+    --muted: #8b96a8;
+    --flare: #e6357a;
+    --mina: #ff9a3c;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 400 20px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, system-ui, sans-serif;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    cursor: none;
+  }
+  .card {
+    display: none;
+    width: min(1100px, 88vw);
+    animation: in .5s ease both;
+  }
+  .card[data-on] { display: block; }
+  @keyframes in { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+
+  h1 { font-size: clamp(34px, 5.2vw, 62px); line-height: 1.12; font-weight: 650; letter-spacing: -0.02em; }
+  h2 { font-size: clamp(22px, 2.6vw, 30px); font-weight: 550; color: var(--muted); margin-bottom: 26px; letter-spacing: -0.01em; }
+  .grad { background: linear-gradient(90deg, var(--mina), var(--flare)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lede { font-size: clamp(20px, 2.2vw, 27px); color: var(--muted); margin-top: 26px; line-height: 1.45; }
+  .big { font-size: clamp(46px, 8vw, 104px); font-weight: 700; letter-spacing: -0.03em; }
+  .mono { font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace; }
+
+  ul { list-style: none; margin-top: 30px; }
+  li { font-size: clamp(19px, 2.1vw, 26px); padding: 11px 0 11px 34px; position: relative; }
+  li::before { content: '→'; position: absolute; left: 0; color: var(--flare); }
+
+  table { border-collapse: collapse; width: 100%; margin-top: 34px; font-size: clamp(17px, 1.9vw, 23px); }
+  th, td { text-align: left; padding: 15px 18px; border-bottom: 1px solid #1c2230; }
+  th { color: var(--muted); font-weight: 500; }
+  tr[data-hi] td { color: var(--text); font-weight: 650; }
+  tr[data-hi] { background: #131926; }
+  td.n { text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  .flow { margin-top: 36px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+          font-size: clamp(14px, 1.6vw, 20px); line-height: 1.85; color: var(--muted); white-space: pre; }
+  .flow b { color: var(--text); font-weight: 500; }
+
+  .n-of { position: fixed; bottom: 26px; right: 32px; color: #2a3242; font-size: 15px; font-family: ui-monospace, Menlo, monospace; }
+  .hint { position: fixed; bottom: 26px; left: 32px; color: #2a3242; font-size: 15px; }
+</style>
+</head>
+<body>
+
+<section class="card" data-on>
+  <h1>Mina has assets.<br/>It has almost no DeFi.</h1>
+  <h1 style="margin-top:26px">Flare has DeFi.<br/>It has no <span class="grad">MINA</span>.</h1>
+</section>
+
+<section class="card">
+  <h2>Why this works on Flare and nowhere else</h2>
+  <h1>The Pallas base field is a<br/>255-bit prime.</h1>
+  <p class="lede">An EVM word is 256 bits — so <span class="mono">mulmod</span> and
+     <span class="mono">addmod</span> run on it natively, at 8 gas each.<br/>
+     A Mina signature can be verified directly in Solidity. No proof. No prover.</p>
+</section>
+
+<section class="card">
+  <h2>Verifying one Mina Schnorr signature</h2>
+  <table>
+    <tr><th>Implementation</th><th class="n">Gas</th><th class="n">On Flare</th><th class="n">On Ethereum</th></tr>
+    <tr><td>Reference</td><td class="n">~1,790,000</td><td class="n">—</td><td class="n">~$107</td></tr>
+    <tr data-hi><td>This project</td><td class="n">808,891</td><td class="n">~$0.009</td><td class="n">~$48</td></tr>
+  </table>
+  <p class="lede">The same contract is a product on Flare and an impossibility on Ethereum.</p>
+</section>
+
+<section class="card">
+  <h2>One attestation, four assets</h2>
+  <div class="flow">Flare                                  Mina
+─────                                  ────
+<b>TransferChain</b>  ── append ──┐
+   MINA · FXRP · USD₮0 · C2FLR   │
+                                 │
+        <b>FDC attests the head</b>  ──────┼──▶  <b>escrow</b>   (MINA)
+        proved once, 209.5 s     ├──▶  <b>bFXRP</b>    port
+                                 ├──▶  <b>bUSDT</b>    port
+                                 └──▶  <b>bC2FLR</b>   port</div>
+  <p class="lede">Paying for that proof once instead of four times is the difference
+     between a four-minute cycle and a fifteen-minute one.</p>
+</section>
+
+<section class="card">
+  <h2>A Flare account owned by a Mina key</h2>
+  <h1>No EVM key.<br/>Anywhere.</h1>
+  <p class="lede">The address is <span class="mono">CREATE2</span> over the Mina public key,
+     so it is known before anything is deployed.<br/>
+     <span class="mono">approve</span> + <span class="mono">swap</span> execute under a single
+     Mina signature over an ordered batch.</p>
+</section>
+
+<section class="card">
+  <h2>Built during the program</h2>
+  <ul>
+    <li>Signature verification: 1.79M → <b>808,891 gas</b>, measured at every step</li>
+    <li>A Flare account owned by a Mina key — deployed, funded, swapping on BlazeSwap</li>
+    <li>One append-only transfer chain serving four assets from one attestation</li>
+    <li>Four wrapped assets live, both directions, Coston2 ↔ Mina devnet</li>
+    <li>Deployed and public — not a localhost demo</li>
+  </ul>
+</section>
+
+<section class="card">
+  <h1><span class="grad">Flare x Mina</span></h1>
+  <p class="lede mono" style="margin-top:34px">flare-mina.labdevn.com<br/>github.com/youtpout/flare-mina</p>
+</section>
+
+<div class="n-of"></div>
+<div class="hint">← →  ·  F fullscreen</div>
+
+<script>
+  const cards = [...document.querySelectorAll('.card')];
+  const counter = document.querySelector('.n-of');
+  let i = 0;
+
+  function show(n) {
+    i = Math.max(0, Math.min(cards.length - 1, n));
+    cards.forEach((c, k) => k === i ? c.setAttribute('data-on', '') : c.removeAttribute('data-on'));
+    // Restart the entrance animation, which does not replay on display alone.
+    cards[i].style.animation = 'none';
+    void cards[i].offsetWidth;
+    cards[i].style.animation = '';
+    counter.textContent = `${i + 1} / ${cards.length}`;
+  }
+
+  addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); show(i + 1); }
+    if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); show(i - 1); }
+    if (e.key === 'Home') show(0);
+    if (e.key === 'End') show(cards.length - 1);
+    if (e.key.toLowerCase() === 'f') {
+      document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+    }
+  });
+  addEventListener('click', () => show(i + 1));
+  show(0);
+</script>
+</body>
+</html>

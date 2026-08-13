@@ -1,7 +1,8 @@
 # Flare Summer Signal — Submission
 
 > Working document. Placeholders are marked `TODO` and must be filled before the
-> 14 August deadline.
+> 14 August deadline. The demo script is in [demo-video.md](demo-video.md);
+> deployment details are in [deployment.md](deployment.md).
 
 ## Project name
 
@@ -257,8 +258,8 @@ allowlist, and no upgrade when the next one launches.
 
 ## Demo
 
+- Live app: **https://flare-mina.labdevn.com** — deployed, public, both rails running
 - Video: TODO
-- Live app: TODO
 - Repository: https://github.com/youtpout/flare-mina
 - On-chain evidence: the three transactions above, on a public explorer
 
