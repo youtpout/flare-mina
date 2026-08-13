@@ -2,10 +2,23 @@
 
 **Native MINA liquidity on Flare, and Mina wallets with authority on Flare.**
 
-> Mina has assets but little DeFi. Flare has DeFi but no MINA. Flare x Mina
-> bridges native MINA into a fully collateralized FMINA on Flare and lets a Mina
-> wallet authorize Flare transactions directly — so Mina users trade on Flare's
-> liquidity without ever needing an EVM key.
+> Mina has world-class proving, one asset and almost no liquidity. Flare has a
+> mature DeFi market and no MINA. Flare x Mina bridges native MINA into a fully
+> collateralized FMINA on Flare, brings Flare's assets back to Mina, and lets a
+> Mina wallet authorize Flare transactions directly — without ever needing an
+> EVM key.
+
+## See it running
+
+| | |
+|---|---|
+| **Live app** | **https://flare-mina.labdevn.com** — Coston2 + Mina devnet, both directions |
+| **Demo video** | **https://youtu.be/aYyipLVi2R8** (4 min) |
+| **A deployed account** | [`0x6fC68C6d…D542`](https://coston2-explorer.flare.network/address/0x6fC68C6d69c252F57586d2159a5bf6D2BA65D542?tab=contract) — a `MinaAccount`, source verified, owned by a Mina key that cannot sign for it |
+
+Bring an [Auro](https://aurowallet.com) wallet on **Devnet** and some faucet
+funds; the app links to both faucets. Nothing needs deploying before you connect
+— your Flare address is derived from your Mina public key and shown immediately.
 
 Two problems, one answer:
 
@@ -14,6 +27,28 @@ Two problems, one answer:
 - **DeFi on Mina is thin and proving is expensive.** So instead of building DeFi
   on Mina, let a Mina wallet act on Flare's DeFi directly, and bridge back when
   it wants to.
+
+## Who it is for
+
+- **MINA holders** who want a working market. Mina's DeFi is thin and every
+  interaction there costs a proof; Flare has liquidity and cheap execution.
+- **Flare users and protocols**, who gain an asset and a user base that could
+  not reach them before.
+- **Wallet and bridge developers** who need a worked reference for verifying
+  Mina signatures on an EVM chain — the verifier is standalone and reusable.
+
+## What is new here
+
+Everything in this repository was built during the program. The parts a reviewer
+should weigh:
+
+| | |
+|---|---|
+| **A faster verifier** | 1.79M → **808,891 gas**, measured at every step. Two optimisations were tried and **rejected on measurement** — hand-written Yul ran 1.83x slower, and deriving the public key's `y` on-chain is impossible because Pallas has `P ≡ 1 (mod 4)`. Both are written up so nobody repeats them. |
+| **A Flare account owned by a Mina key** | Deployed, funded, and swapping on BlazeSwap under a single signature over an ordered batch. |
+| **One chain, four assets** | Every transfer appends to one `TransferChain`; a single FDC attestation serves the escrow and all three token ports, instead of paying for four. |
+| **Both directions, live** | MINA in, and FXRP, USD₮0 and C2FLR out to Mina — assets Mina could not hold before. |
+| **Deployed and public** | Not a localhost demo: a server, a domain, TLS, and a relayer under systemd. |
 
 ## The constraint everything follows from
 
@@ -274,6 +309,7 @@ nothing to trust.
 |----------|---------|
 | `MinaAuthRegistry` | `0xcf12aCe3f7D13EE714D57ee22EfA14cbb662fc56` |
 | `MinaAccountFactory` | `0x2a2AcdD54B93675828028fb8108fACc0A387fe23` |
+| `TransferChain` | `0xB0a3Ab9dE1527Ca617995b51E1548B40E0c9fe4b` |
 | `MinaPortBridge` (proxy) | `0x871493412EDCcfE0d24f127E6Deb2B20AE5497aB` |
 | ↳ implementation | `0xf171a25Dc8fbED4a312eE690728E22634A1EcF14` |
 | `FMINA` | `0x4aFce36d468136eD9d880E28C99373F0C3d3f046` |
