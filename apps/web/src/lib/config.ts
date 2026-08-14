@@ -137,7 +137,27 @@ export type InboundAsset = {
   live: boolean;
 };
 
-export const INBOUND_ASSETS: InboundAsset[] = [
+/**
+ * Mesa carries its own zkApps and therefore its own token ids: a token id is
+ * derived from the token account, and the accounts are redeployed per network.
+ * Reading a balance with the wrong one returns the holder's MINA, as zero.
+ */
+const MESA_INBOUND: Record<string, { token: string; tokenId: string }> = {
+  bFXRP: {
+    token: 'B62qmjL7PuoW8yxM4y51HarCQRH3mAzCtBXocFrAVYdeH1eHmFHjpng',
+    tokenId: 'wpnE6S86LdbaLEw1vaW1t3adsTZSmqtfhh9yWyrxXYGyYTFjSu',
+  },
+  bUSDT: {
+    token: 'B62qoQ3iGmVhfw5ebEErHXbXHLybU5XvJuBLHAENT2V781G73JvNqDR',
+    tokenId: 'y4ArcY7GAzD4yejMQWXxf7MeqtFKfSzuYzRJYT4V55vTZwwuR9',
+  },
+  bC2FLR: {
+    token: 'B62qjBSNZv2FEP1Ey6VokZga2H4Do96VYuEuBXFLJvrQhfs73BtvbhJ',
+    tokenId: 'xRKh3ZoGhKvshUpYhAM5oHFh3GCmoGKxnrgEqgxkx9Uo9SsGia',
+  },
+};
+
+const DEVNET_INBOUND: InboundAsset[] = [
   { symbol: 'MINA', decimals: 9, flareSymbol: 'FMINA', live: true },
   {
     symbol: 'bC2FLR',
@@ -206,6 +226,17 @@ const MINA_NETWORK =
   import.meta.env.VITE_MINA_NETWORK === 'mesa' ? 'mesa' : 'devnet';
 
 export const MINA = MINA_NETWORKS[MINA_NETWORK];
+
+/**
+ * Mesa redeploys its zkApps, so it carries its own token accounts and token
+ * ids. Everything else about an asset — decimals, its Flare counterpart — is
+ * the same on both networks.
+ */
+export const INBOUND_ASSETS: InboundAsset[] =
+  MINA_NETWORK === 'mesa'
+    ? DEVNET_INBOUND.map((a) => ({ ...a, ...(MESA_INBOUND[a.symbol] ?? {}) }))
+    : DEVNET_INBOUND;
+
 
 /** Mesa has no explorer, so a link there would 404. */
 export const minaAccountUrl = (address: string): string | null =>
