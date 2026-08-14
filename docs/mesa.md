@@ -94,6 +94,13 @@ under o1js 3 that fails with *"depends on flare-relay-message, but we cannot
 find compilation output"*, then again for `fdc-attestation`. The script now uses
 the worker's order, which satisfies the whole graph. o1js 2 tolerated the gap.
 
+**The port admin defaults to the deployer.** `deployWrappedAsset` reads
+`MINA_LOCK_ADMIN ?? MINA_WITHDRAWAL_ATTESTOR ?? deployer`, and with neither
+exported the ports were left admin'd by the Mesa deployer — while the relayer
+falls back to `MINA_WITHDRAWAL_ATTESTOR_PRIVATE_KEY`, copied from devnet. Every
+lock publication then fails with *"not the admin key"*, and it fails **after**
+the attestation proof has been paid for. Set `MINA_LOCK_ADMIN_PRIVATE_KEY`.
+
 **Deploys cannot be chained without waiting.** Sending the second asset while
 the first is still in the mempool reuses its nonce and fails with
 `Insufficient_replace_fee`. Wait for the payer's nonce to advance between each —
