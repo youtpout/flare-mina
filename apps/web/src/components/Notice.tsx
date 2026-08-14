@@ -1,3 +1,5 @@
+import { CONTRACTS, MINA } from '@/lib/config';
+
 /**
  * Standing notice above the tabs.
  *
@@ -7,6 +9,20 @@
  */
 export function Notice() {
   return (
+    <>
+      {/* Which chain and which bridge this build actually talks to. Added after
+          an afternoon of stale-bundle debugging: a wallet signs over the bridge
+          address, so a page serving yesterday's constant produces a valid
+          signature for the wrong contract and the chain rejects it with nothing
+          more useful than InvalidMinaSignature. */}
+      <div className="notice-bar" style={{ background: '#0f1620', borderColor: '#1f2635' }}>
+        <span className="notice-dot" style={{ background: '#4ade80' }} aria-hidden="true" />
+        <span className="mono" style={{ fontSize: 12.5 }}>
+          Mina <strong style={{ color: '#e8ecf3' }}>{MINA.network}</strong>
+          {' · bridge '}
+          <strong style={{ color: '#e8ecf3' }}>{CONTRACTS.bridge}</strong>
+        </span>
+      </div>
     <div className="notice-bar">
       <span className="notice-dot" aria-hidden="true" />
       <span>
@@ -22,5 +38,6 @@ export function Notice() {
         </a>
       </span>
     </div>
+    </>
   );
 }

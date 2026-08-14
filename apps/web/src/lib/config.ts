@@ -31,7 +31,11 @@ const OWN = {
   devnet: {
     authRegistry: '0xcf12aCe3f7D13EE714D57ee22EfA14cbb662fc56',
     accountFactory: '0x2a2AcdD54B93675828028fb8108fACc0A387fe23',
-          },
+    bridge: '0x871493412EDCcfE0d24f127E6Deb2B20AE5497aB',
+    fmina: '0x4aFce36d468136eD9d880E28C99373F0C3d3f046',
+    assetVault: '0xa179E908C3F1156Edda0BD5f1A0B3b3f419f9F90',
+    wrapperFactory: '0x98f0CA385dBe0724b4D9211fA4e515eB4d6848b7',
+  },
   mesa: {
     authRegistry: '0x7481da09d9BC643D6da75185B2b023f22A8a10bE',
     accountFactory: '0x427e51eE63be082c5Ee813ae5ADbB94D79Ff8A0D',
@@ -43,20 +47,21 @@ const OWN = {
 } as const;
 
 export const CONTRACTS = {
-  ...OWN[import.meta.env.VITE_MINA_NETWORK === 'mesa' ? 'mesa' : 'devnet'],
-  /** Locks Flare assets so they can be minted as fungible tokens on Mina. */
-  assetVault: '0xa179E908C3F1156Edda0BD5f1A0B3b3f419f9F90',
   /**
-   * C2FLR, rounded from 18 decimals to 9 so Mina's `UInt64` can hold a real
-   * supply of it. The native token is not an ERC-20 and `WNat` is 18 decimals,
-   * which caps at ~18.4 whole tokens on Mina.
+   * Third-party Coston2 contracts first, so nothing below can shadow the
+   * per-network spread. An earlier version had the spread first and a stale
+   * `bridge:` literal after it — which silently won, and the wallet went on
+   * signing for the wrong bridge through three rounds of cache-clearing.
+   *
+   * C2FLR rounded from 18 decimals to 9, because a `UInt64` on Mina caps at
+   * ~18.4 whole tokens otherwise. `wnat` is its ERC-20 form; `withdraw` turns
+   * it back into the coin.
    */
   wrappedC2flr: '0x6C790956D728ed82A75d2ec8D5c37F2e2F36b978',
-  /** WNat, the ERC-20 form of C2FLR. `withdraw` turns it back into the coin. */
   wnat: '0xC67DCE33D7A8efA5FfEB961899C73fe01bCe9273',
-  bridge: '0x871493412EDCcfE0d24f127E6Deb2B20AE5497aB',
-  fmina: '0x4aFce36d468136eD9d880E28C99373F0C3d3f046',
-  wrapperFactory: '0x98f0CA385dBe0724b4D9211fA4e515eB4d6848b7',
+
+  // Ours, and therefore per network. Last, so it always wins.
+  ...OWN[import.meta.env.VITE_MINA_NETWORK === 'mesa' ? 'mesa' : 'devnet'],
 } as const satisfies Record<string, Address>;
 
 /**
