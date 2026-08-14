@@ -39,6 +39,7 @@ const NETWORKS: Record<MinaNetworkName, NetworkConfig> = {
     node: 'https://mesa.minataur.net/graphql',
     reads: 'https://mesa.minataur.net/graphql',
     archive: 'https://archive-node-api.mesa-rc.minaprotocol.com/',
+    explorer: 'https://minascan.io/mesa',
   },
 };
 

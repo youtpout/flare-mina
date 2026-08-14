@@ -176,8 +176,9 @@ export const INBOUND_ASSETS: InboundAsset[] = [
  * exist across networks, they are redeployed, so `VITE_MINA_BRIDGE_ACCOUNT`
  * must be set for Mesa or the app reads an account that is not there.
  *
- * Mesa has no block explorer yet. `MINA.explorer` is empty for it, and callers
- * must check before building a link.
+ * `MinaLink` still guards on `explorer` being set: a future network may land
+ * before its explorer does, and an empty base builds a relative link onto the
+ * app's own 404.
  */
 const MINA_NETWORKS = {
   devnet: {
@@ -195,7 +196,7 @@ const MINA_NETWORKS = {
   },
   mesa: {
     network: 'mesa',
-    explorer: '',
+    explorer: 'https://minascan.io/mesa',
     bridgeAccount: import.meta.env.VITE_MINA_BRIDGE_ACCOUNT ?? '',
     graphql: 'https://mesa.minataur.net/graphql',
   },
