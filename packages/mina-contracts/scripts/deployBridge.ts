@@ -104,7 +104,10 @@ async function main() {
   const pending = await tx.sign([deployerKey, zkAppKey]).send();
 
   console.log('tx hash :', pending.hash);
-  console.log('explorer: https://minascan.io/devnet/tx/' + pending.hash);
+  // The network is a setting now, so hardcoding devnet here printed a link
+  // to the wrong chain for every Mesa deployment.
+  const explorer = process.env.MINA_NETWORK === 'mesa' ? 'mesa' : 'devnet';
+  console.log(`explorer: https://minascan.io/${explorer}/tx/${pending.hash}`);
   console.log('\nWaiting for inclusion — this takes a few minutes on devnet.');
 }
 

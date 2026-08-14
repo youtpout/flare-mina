@@ -33,47 +33,54 @@ The frontend switches on `VITE_MINA_NETWORK=mesa`. Minascan serves Mesa at
 set, because interpolating an empty one builds `/account/B62…`, a relative link
 onto the app's own 404, and the next network may arrive before its explorer.
 
-## The blocker: o1js must move to 3.0.0-mesa
+## o1js 3.0.0-mesa.rc2 — resolved
 
-Deploying the escrow fails at `send()` with a bare `502 Bad Gateway`, and the
-error is misleading — nothing is wrong with the endpoint.
-
-What was ruled out, in order:
+Deploying the escrow first failed at `send()` with a bare `502 Bad Gateway`, and
+the error pointed nowhere useful. What was ruled out, in order:
 
 | Hypothesis | Test | Result |
 |---|---|---|
 | Endpoint down | `{ syncStatus }` | `SYNCED`, height 306818 |
-| Mutations unsupported | `sendZkapp` with an empty input | GraphQL validation error, HTTP 200 — the field exists |
+| Mutations unsupported | `sendZkapp` with an empty input | GraphQL validation error, HTTP 200 |
 | Body too large | 200 KB POST | HTTP 200 |
-| That one provider | Retried on `api.minascan.io/node/mesa/v1/graphql` | identical 502 |
-| Transaction landed anyway | account lookup, payer nonce | account null, nonce still 0, balance untouched |
+| That one provider | retried on `api.minascan.io/node/mesa/v1/graphql` | identical 502 |
+| Landed anyway | account lookup, payer nonce | account null, nonce 0, balance untouched |
 
-Two independent providers rejecting the same payload is not an infrastructure
-problem. **Mesa is a protocol change, and o1js 2.15.0 (May 2026) predates it.**
-npm carries a whole `3.0.0-mesa.*` line, `@o1js/native` included:
+Two independent providers rejecting the same payload is not infrastructure.
+**Mesa is a protocol change and o1js 2.15.0 (May 2026) predates it** — the node
+was handed an old-format zkApp command and refused it in a way the gateway
+reported as 502.
 
-```
-o1js          3.0.0-mesa.final, 3.0.0-mesa.rc2, 3.0.0-mesa.89164, …
-@o1js/native  3.0.0-mesa.final, 3.0.0-mesa.rc2, …
-```
+Upgrading `o1js` and `@o1js/native` to **3.0.0-mesa.rc2** fixed it, and the
+transaction went through on the first attempt afterwards.
 
-The node is handed a zkApp command in the old format and refuses it in a way the
-gateway reports as 502.
+What the upgrade cost, which was less than feared:
 
-So the Mina half of this branch is blocked on a **major version upgrade**, not a
-configuration change:
+- **No source changes.** `packages/mina-contracts`, `packages/shared` and the
+  relayer all typecheck at zero errors against o1js 3.
+- **`mina-fungible-token` 1.1.0 still resolves**, with an unmet peer warning
+  (`o1js@^2.1.0` against 3.0.0-mesa.rc2) and no observed breakage. If it does
+  break, `action-dex` vendors the two files for exactly this reason and that is
+  the escape hatch.
+- **Verification keys change**, as expected: the bridge went from
+  `11711286639348513012986112061990663846097941521680299234457020552929721151304`
+  to `11216428838033659006439281404822944761910303879649649802808410393201267236433`.
+  Anything holding the old hash on chain is not upgradeable to this — it is a
+  fresh deployment, which is what this environment is.
+- The proving-key cache rebuilds from zero, so the first prover start is cold.
 
-- `o1js` 2.15 → 3.0.0-mesa across `packages/mina-contracts` and the relayer
-- `@o1js/native` in step, or the prover loses its backend
-- `mina-fungible-token` 1.1.0 is built against o1js 2.x and has published nothing
-  for Mesa — the three `AssetPort`s depend on it, so the asset rail may need it
-  vendored or replaced
-- every circuit recompiles, so the 7 GB proving-key cache is rebuilt from zero
-- the verification keys change, which is what `deployBridge` writes on chain
+**This is on the `mesa` branch only.** `main` and the live server stay on
+o1js 2.15: the verification keys of the deployed devnet zkApps are the old ones.
 
-None of that is hard, but it is a day's work with real regression risk, and it
-touches the code that is currently live on devnet. It does not belong in the
-same push as a hackathon deadline.
+## Deployed on Mesa
+
+| | Address |
+|---|---|
+| Escrow zkApp | [`B62qrethR1rquZpRA19v72jYyWvQq55wkQXCSeNDrR1u4EmC42Xxxic`](https://minascan.io/mesa/account/B62qrethR1rquZpRA19v72jYyWvQq55wkQXCSeNDrR1u4EmC42Xxxic) |
+
+Its state carries the signing-policy root and the Mesa `TransferChain` address,
+so the FDC path is wired. The three `AssetPort`s and their `FungibleToken`s are
+still to deploy.
 
 ## What still has to happen, and cannot be done from a config file
 

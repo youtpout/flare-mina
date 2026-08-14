@@ -14,11 +14,11 @@
   "dependencies": {
     "@minaport/mina-contracts": "workspace:*",
     "@minaport/shared": "workspace:*",
-    "@o1js/native": "^2.15.0",
+    "@o1js/native": "3.0.0-mesa.rc2",
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "mina-fungible-token": "^1.1.0",
-    "o1js": "^2.15.0",
+    "o1js": "3.0.0-mesa.rc2",
     "pg": "^8.13.1",
     "viem": "^2.21.54"
   },

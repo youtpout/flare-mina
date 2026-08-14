@@ -109,7 +109,10 @@ async function main() {
 
   const pending = await tx.sign([feePayerKey, zkAppKey]).send();
   console.log('tx hash :', pending.hash);
-  console.log('explorer: https://minascan.io/devnet/tx/' + pending.hash);
+  // The network is a setting now, so hardcoding devnet here printed a link
+  // to the wrong chain for every Mesa deployment.
+  const explorer = process.env.MINA_NETWORK === 'mesa' ? 'mesa' : 'devnet';
+  console.log(`explorer: https://minascan.io/${explorer}/tx/${pending.hash}`);
 
   // Waited on: the next transaction against this account has to be proved
   // against the new circuit, and sending it early wastes a proof.
