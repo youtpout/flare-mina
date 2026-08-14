@@ -71,8 +71,28 @@ a second factory would hand every user a different Flare account for the same
 key, with their funds on the other one. The registry only consumes nonces per
 key, which two environments can share.
 
-Neither is deployed yet: no key in the project holds enough C2FLR. The submitter
-has 0.8, and the bridge alone cost 9.8 when it was first deployed.
+### Deployed, 14 August 2026
+
+| Contract | Address |
+|---|---|
+| `MinaPortBridge` (proxy) | [`0x06E584e7…3517`](https://coston2-explorer.flare.network/address/0x06E584e72b36494Bb84A2C1df34E665Cf7673517) |
+| `FMINA` | [`0x05b5e850…1C7f`](https://coston2-explorer.flare.network/address/0x05b5e8505e35505233955080f02b7351747B1C7f) |
+| `AssetVault` (proxy) | [`0x669BDaa9…3EeC`](https://coston2-explorer.flare.network/address/0x669BDaa9B9802Ca92A4Ed5a29933805B09E33EeC) |
+| `TransferChain` | [`0x56Ae0044…57E1`](https://coston2-explorer.flare.network/address/0x56Ae0044E5115A84137908006eC24994896157E1) |
+| `BridgeWrapperFactory` | [`0x45d401A5…Fe38`](https://coston2-explorer.flare.network/address/0x45d401A560853b71C6546124F0AA8553cE59Fe38) |
+| `MockSettlementVerifier` | `0x1BCb4d07dCa6d07402d6b6395B350777DE4CEb4D` ⚠️ |
+
+9.13 C2FLR for the three deployments. Bytecode verified present at every
+address afterwards — which matters, because the first attempt printed all five
+addresses and deployed nothing.
+
+**`--private-key` is not optional.** The scripts call `vm.startBroadcast()` with
+no argument, so without it forge signs with its default sender, prints the
+addresses it *would* have used, exits 1, and broadcasts nothing. The simulated
+addresses are indistinguishable from real ones until you check `eth_getCode`.
+
+Order is forced by the wiring: `TransferChain` reads the bridge and the vault to
+register each as an appender for the tokens it may record, so both exist first.
 
 ## What does not break
 

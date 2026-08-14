@@ -26,23 +26,39 @@ cd "$(dirname "$0")/../packages/flare-contracts"
 
 : "${COSTON2_RPC_URL:?set COSTON2_RPC_URL}"
 : "${PRIVATE_KEY:?set PRIVATE_KEY to a funded deployer}"
+: "${ESCROW_ATTESTOR:?set ESCROW_ATTESTOR — DeployBridge reads it}"
 
-# Both flags are required on Coston2. Without --with-gas-price forge estimates
-# at roughly four times the real cost and refuses to broadcast on an ample
-# balance; without --legacy the send fails with "max priority fee per gas higher
-# than max fee per gas", because --with-gas-price caps the max fee only.
-FLAGS="--rpc-url $COSTON2_RPC_URL --with-gas-price 700gwei --legacy --broadcast"
+# --private-key explicitly: the scripts call vm.startBroadcast() with no
+# argument, so without it forge signs with its default sender, prints the
+# addresses it *would* have used, and exits 1 having broadcast nothing. The
+# simulated addresses look exactly like real ones.
+#
+# The other two flags are required on Coston2. Without --with-gas-price forge
+# estimates at roughly four times the real cost and refuses to broadcast on an
+# ample balance; without --legacy the send fails with "max priority fee per gas
+# higher than max fee per gas", because --with-gas-price caps the max fee only.
+FLAGS="--rpc-url $COSTON2_RPC_URL --private-key $PRIVATE_KEY \
+  --with-gas-price 700gwei --legacy --broadcast"
 
-echo "==> TransferChain"
-forge script script/DeployTransferChain.s.sol $FLAGS
+# Order is forced by the wiring: TransferChain reads the bridge and the vault to
+# register each as an appender for the tokens it may record, so both must exist
+# and be owned by this deployer first.
 
-echo
 echo "==> MinaPortBridge + FMINA + wrapper factory"
 forge script script/DeployBridge.s.sol $FLAGS
 
 echo
 echo "==> AssetVault"
 forge script script/DeployAssetVault.s.sol $FLAGS
+
+echo
+echo "==> TransferChain (needs FLARE_BRIDGE_ADDRESS and FLARE_ASSET_VAULT_ADDRESS"
+echo "    from the two above — export them, then run this last step)"
+if [[ -n "${FLARE_BRIDGE_ADDRESS:-}" && -n "${FLARE_ASSET_VAULT_ADDRESS:-}" ]]; then
+  forge script script/DeployTransferChain.s.sol $FLAGS
+else
+  echo "    skipped: export both and re-run."
+fi
 
 cat <<'NEXT'
 
