@@ -17,9 +17,24 @@ export const COSTON2 = {
   nativeSymbol: 'C2FLR',
 } as const;
 
+/**
+ * The Mesa environment runs its own auth registry and factory, so a Mina key
+ * derives a *different* Flare address on each. That is deliberate: sharing them
+ * meant testing on Mesa consumed the production registry's nonces.
+ */
+const AUTH = {
+  devnet: {
+    authRegistry: '0xcf12aCe3f7D13EE714D57ee22EfA14cbb662fc56',
+    accountFactory: '0x2a2AcdD54B93675828028fb8108fACc0A387fe23',
+  },
+  mesa: {
+    authRegistry: '0x7481da09d9BC643D6da75185B2b023f22A8a10bE',
+    accountFactory: '0x427e51eE63be082c5Ee813ae5ADbB94D79Ff8A0D',
+  },
+} as const;
+
 export const CONTRACTS = {
-  authRegistry: '0xcf12aCe3f7D13EE714D57ee22EfA14cbb662fc56',
-  accountFactory: '0x2a2AcdD54B93675828028fb8108fACc0A387fe23',
+  ...AUTH[import.meta.env.VITE_MINA_NETWORK === 'mesa' ? 'mesa' : 'devnet'],
   /** Locks Flare assets so they can be minted as fungible tokens on Mina. */
   assetVault: '0xa179E908C3F1156Edda0BD5f1A0B3b3f419f9F90',
   /**

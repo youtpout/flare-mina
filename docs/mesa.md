@@ -131,11 +131,15 @@ export PRIVATE_KEY=0x...        # ~25 C2FLR
 bash scripts/deploy-mesa-flare.sh
 ```
 
-`MinaAuthRegistry` and `MinaAccountFactory` are deliberately **not** redeployed.
-The factory derives an account address with `CREATE2` over a Mina public key, so
-a second factory would hand every user a different Flare account for the same
-key, with their funds on the other one. The registry only consumes nonces per
-key, which two environments can share.
+`MinaAuthRegistry` and `MinaAccountFactory` **are** redeployed, after a first
+draft argued they should be shared. Sharing keeps one Flare address per Mina key
+across both environments, which is convenient — but it also means testing on
+Mesa consumes the production registry's nonces, and a hackathon environment
+should not be able to disturb the deployment being judged.
+
+The cost, stated plainly: a Mina key derives a **different** Flare address on
+each environment. Funds sent to the devnet-derived address do not appear on
+Mesa. That is what isolation means here.
 
 ### Deployed, 14 August 2026
 
@@ -146,6 +150,8 @@ key, which two environments can share.
 | `AssetVault` (proxy) | [`0x669BDaa9…3EeC`](https://coston2-explorer.flare.network/address/0x669BDaa9B9802Ca92A4Ed5a29933805B09E33EeC) |
 | `TransferChain` | [`0x56Ae0044…57E1`](https://coston2-explorer.flare.network/address/0x56Ae0044E5115A84137908006eC24994896157E1) |
 | `BridgeWrapperFactory` | [`0x45d401A5…Fe38`](https://coston2-explorer.flare.network/address/0x45d401A560853b71C6546124F0AA8553cE59Fe38) |
+| `MinaAuthRegistry` | [`0x7481da09…10bE`](https://coston2-explorer.flare.network/address/0x7481da09d9BC643D6da75185B2b023f22A8a10bE) |
+| `MinaAccountFactory` | [`0x427e51eE…8A0D`](https://coston2-explorer.flare.network/address/0x427e51eE63be082c5Ee813ae5ADbB94D79Ff8A0D) |
 | `MockSettlementVerifier` | `0x1BCb4d07dCa6d07402d6b6395B350777DE4CEb4D` ⚠️ |
 
 9.13 C2FLR for the three deployments. Bytecode verified present at every

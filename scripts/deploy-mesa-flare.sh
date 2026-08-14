@@ -12,14 +12,13 @@
 # network, and each would advance a cursor the other never sees. The Mesa
 # relayer must watch its own chain, its own vault and its own bridge.
 #
-# # What is NOT redeployed, and why
+# # Including the auth pair
 #
-# MinaAuthRegistry and MinaAccountFactory are shared on purpose. The factory
-# derives an account address with CREATE2 over a Mina public key, so deploying a
-# second one would give every user a *different* Flare account for the same
-# key — and their funds would be on the wrong one. The registry only consumes
-# nonces per Mina key; two environments using it is one account signing twice,
-# which is what it is for.
+# MinaAuthRegistry and MinaAccountFactory are redeployed too. Sharing them would
+# keep one Flare address per Mina key across both environments, which is
+# convenient — but testing here would then consume the production registry's
+# nonces, and a test environment must not be able to disturb the one being
+# judged. The cost is that a Mina key derives a different Flare address on each.
 set -euo pipefail
 
 cd "$(dirname "$0")/../packages/flare-contracts"
@@ -44,6 +43,10 @@ FLAGS="--rpc-url $COSTON2_RPC_URL --private-key $PRIVATE_KEY \
 # register each as an appender for the tokens it may record, so both must exist
 # and be owned by this deployer first.
 
+echo "==> MinaAuthRegistry + MinaAccountFactory"
+forge script script/DeployAuth.s.sol $FLAGS
+
+echo
 echo "==> MinaPortBridge + FMINA + wrapper factory"
 forge script script/DeployBridge.s.sol $FLAGS
 
@@ -70,9 +73,7 @@ packages/flare-contracts/broadcast/ and put them in apps/relayer/.env.mesa:
   FLARE_FMINA_ADDRESS=
   FLARE_ASSET_VAULT_ADDRESS=       # the proxy
 
-Leave FLARE_ACCOUNT_FACTORY and the auth registry pointing at the existing ones:
-a second factory would hand every user a different Flare account for the same
-Mina key.
+  FLARE_ACCOUNT_FACTORY=           # this environment's own, from DeployAuth
 
 Then the Mina side on Mesa — see docs/mesa.md.
 NEXT
