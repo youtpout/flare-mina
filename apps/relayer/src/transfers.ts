@@ -1,3 +1,4 @@
+import { MINA_READ_GRAPHQL } from './minaNetwork.js';
 import { createPublicClient, http, parseAbi, parseEventLogs } from 'viem';
 import { decodeMinaRecipient, formatMinaAddress } from '@minaport/shared';
 import { recordLock, recordTransfer, recordWithdrawal, transferTxFor } from './db/index.js';
@@ -60,8 +61,7 @@ const TRANSFER_TOPIC0 =
 
 const FMINA = process.env.FLARE_FMINA_ADDRESS?.toLowerCase();
 
-const MINA_GRAPHQL =
-  process.env.MINA_DEVNET_GRAPHQL ?? 'https://api.minascan.io/node/devnet/v1/graphql';
+const MINA_GRAPHQL = MINA_READ_GRAPHQL;
 const ESCROW = process.env.MINA_BRIDGE_ACCOUNT;
 
 /** Last block scanned, so a restart does not re-read the whole chain. */

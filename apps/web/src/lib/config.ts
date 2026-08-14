@@ -168,21 +168,47 @@ export const INBOUND_ASSETS: InboundAsset[] = [
   },
 ];
 
-/** Mina side. */
-export const MINA = {
-  network: 'devnet',
-  explorer: 'https://minascan.io/devnet',
-  /** Escrow account. Deposits are plain payments here, with the Flare recipient in the memo. */
-  bridgeAccount: 'B62qpRkbjE5wH6nFmZnVUN7yrjfAhpJPP2qXxn6z7KQsL6RojmkaDr6',
-  /**
-   * Read-only. Used for balances; the wallet has its own endpoint for sending.
-   *
-   * Not minscan's node, which answers most token accounts in ~200ms and then
-   * times out on others every single time — measured 2/2 on bC2FLR while this
-   * one answered in under 180ms on every attempt.
-   */
-  graphql: 'https://mina-devnet-graphql.aurowallet.com/graphql',
+/**
+ * Mina side.
+ *
+ * `VITE_MINA_NETWORK=mesa` switches the endpoint and the escrow, so a Mesa
+ * build needs no code change — but note the addresses differ: zkApps do not
+ * exist across networks, they are redeployed, so `VITE_MINA_BRIDGE_ACCOUNT`
+ * must be set for Mesa or the app reads an account that is not there.
+ *
+ * Mesa has no block explorer yet. `MINA.explorer` is empty for it, and callers
+ * must check before building a link.
+ */
+const MINA_NETWORKS = {
+  devnet: {
+    network: 'devnet',
+    explorer: 'https://minascan.io/devnet',
+    bridgeAccount: 'B62qpRkbjE5wH6nFmZnVUN7yrjfAhpJPP2qXxn6z7KQsL6RojmkaDr6',
+    /**
+     * Read-only. Used for balances; the wallet has its own endpoint for sending.
+     *
+     * Not minascan's node, which answers most token accounts in ~200ms and then
+     * times out on others every single time — measured 2/2 on bC2FLR while this
+     * one answered in under 180ms on every attempt.
+     */
+    graphql: 'https://mina-devnet-graphql.aurowallet.com/graphql',
+  },
+  mesa: {
+    network: 'mesa',
+    explorer: '',
+    bridgeAccount: import.meta.env.VITE_MINA_BRIDGE_ACCOUNT ?? '',
+    graphql: 'https://mesa.minataur.net/graphql',
+  },
 } as const;
+
+const MINA_NETWORK =
+  import.meta.env.VITE_MINA_NETWORK === 'mesa' ? 'mesa' : 'devnet';
+
+export const MINA = MINA_NETWORKS[MINA_NETWORK];
+
+/** Mesa has no explorer, so a link there would 404. */
+export const minaAccountUrl = (address: string): string | null =>
+  MINA.explorer ? `${MINA.explorer}/account/${address}` : null;
 
 /**
  * A Mina GraphQL read that cannot hang the page.

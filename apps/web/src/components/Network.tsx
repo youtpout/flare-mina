@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { COSTON2, MINA, explorerAddress, explorerTx } from '@/lib/config';
+import { MinaLink } from '@/components/MinaLink';
 import { readJson } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
 
@@ -227,14 +228,9 @@ export function Network() {
         )}
         <div className="row">
           <span className="small muted">Escrow (Mina)</span>
-          <a
-            className="mono"
-            href={`${MINA.explorer}/account/${mina?.address ?? MINA.bridgeAccount}`}
-            target="_blank"
-            rel="noreferrer"
-          >
+          <MinaLink kind="account" id={mina?.address ?? MINA.bridgeAccount}>
             {(mina?.address ?? MINA.bridgeAccount).slice(0, 12)}…
-          </a>
+          </MinaLink>
         </div>
         <div className="row">
           <span className="small muted">Escrowed on Mina</span>
@@ -265,9 +261,9 @@ export function Network() {
               </span>
               <span className="small" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                 {row.minaTxHash && (
-                  <a className="mono" href={`${MINA.explorer}/tx/${row.minaTxHash}`} target="_blank" rel="noreferrer">
+                  <MinaLink kind="tx" id={row.minaTxHash}>
                     Mina
-                  </a>
+                  </MinaLink>
                 )}
                 {row.flareTxHash && (
                   <a className="mono" href={explorerTx(row.flareTxHash)} target="_blank" rel="noreferrer">

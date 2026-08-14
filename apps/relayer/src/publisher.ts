@@ -1,3 +1,4 @@
+import { MINA_READ_GRAPHQL } from './minaNetwork.js';
 import { createPublicClient, http, parseAbi, decodeEventLog, type Hex } from 'viem';
 import {
   harvestPolicyKeys,
@@ -55,8 +56,7 @@ const client = createPublicClient({ chain: COSTON2, transport: http(RPC) });
 
 let relayAddress: `0x${string}` | undefined;
 
-const MINA_GRAPHQL =
-  process.env.MINA_DEVNET_GRAPHQL ?? 'https://api.minascan.io/node/devnet/v1/graphql';
+const MINA_GRAPHQL = MINA_READ_GRAPHQL;
 const ESCROW = process.env.MINA_BRIDGE_ACCOUNT;
 
 /**

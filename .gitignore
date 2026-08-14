@@ -23,3 +23,6 @@ scripts/video/out/
 
 # Throwaway devnet identity for the demo recording. Never commit.
 scripts/video/.demo-key.env
+
+# Archives: a .env has been zipped into one before. Never commit either.
+*.zip

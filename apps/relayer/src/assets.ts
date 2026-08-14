@@ -1,3 +1,4 @@
+import { MINA_READ_GRAPHQL } from "./minaNetwork.js";
 import { createPublicClient, http, parseAbi, parseEventLogs } from "viem";
 import { decodeMinaRecipient, formatMinaAddress } from "@minaport/shared";
 import {
@@ -92,9 +93,7 @@ export function assets(): Asset[] {
   }
 }
 
-const MINA_GRAPHQL =
-  process.env.MINA_DEVNET_GRAPHQL ??
-  "https://api.minascan.io/node/devnet/v1/graphql";
+const MINA_GRAPHQL = MINA_READ_GRAPHQL;
 
 /**
  * A port's accepted head and cursor, read from Mina.

@@ -293,7 +293,16 @@ FungibleToken.AdminContract = AssetPort as never;
 const bridgeAddress = process.env.MINA_BRIDGE_ACCOUNT;
 if (!bridgeAddress) throw new Error('MINA_BRIDGE_ACCOUNT is not set');
 
-const graphql = process.env.MINA_GRAPHQL ?? 'https://mina-devnet-graphql.aurowallet.com/graphql';
+// Resolved here rather than imported from `../minaNetwork.ts`: this file is a
+// worker entry, and its loader does not rewrite `.js` specifiers to `.ts` —
+// the same constraint that forced resilientFetch to be inlined above. Keep the
+// two in step.
+const MESA = process.env.MINA_NETWORK === 'mesa';
+const graphql =
+  process.env.MINA_GRAPHQL ??
+  (MESA
+    ? 'https://mesa.minataur.net/graphql'
+    : 'https://mina-devnet-graphql.aurowallet.com/graphql');
 // Both endpoints, explicitly. Given only a node URL, o1js leaves the archive
 // endpoint at its default and something in transaction building reaches for
 // it — which cost a flat 60s per deposit, the exact timeout of the public
@@ -302,7 +311,11 @@ const graphql = process.env.MINA_GRAPHQL ?? 'https://mina-devnet-graphql.aurowal
 //
 // Nothing here needs archive data: the relayer builds its own deposits, so it
 // has no actions to read back.
-Mina.setActiveInstance(Mina.Network({ mina: graphql, archive: graphql }));
+// MINA_ARCHIVE only when someone sets it deliberately: Mesa publishes a real
+// archive, but nothing in this worker reads action history, and a reachable
+// archive is one more endpoint that can stall.
+const archive = process.env.MINA_ARCHIVE ?? graphql;
+Mina.setActiveInstance(Mina.Network({ mina: graphql, archive }));
 
 // Compile once, at start-up. A cold compile rebuilds the SRS and Lagrange
 // bases and costs seconds; a warm one reads them back. Mount O1JS_CACHE_DIR on

@@ -1,3 +1,4 @@
+import { MINA_NODE_GRAPHQL, describeMinaNetwork } from './minaNetwork.js';
 import { installResilientFetch } from './resilientFetch.js';
 
 // Bounds the public Mina endpoint's intermittent 60s stalls. Must run before
@@ -54,8 +55,7 @@ import { publisherState } from './publisherState.js';
 
 const PORT = Number(process.env.PORT ?? 8787);
 
-const MINA_GRAPHQL =
-  process.env.MINA_GRAPHQL ?? 'https://mina-devnet-graphql.aurowallet.com/graphql';
+const MINA_GRAPHQL = MINA_NODE_GRAPHQL;
 
 /**
  * A holder's balance of one wrapped asset.

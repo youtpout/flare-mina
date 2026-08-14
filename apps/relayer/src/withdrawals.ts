@@ -1,3 +1,4 @@
+import { MINA_READ_GRAPHQL } from './minaNetwork.js';
 import { createPublicClient, http, parseAbi, parseEventLogs } from 'viem';
 import { decodeMinaRecipient, formatMinaAddress } from '@minaport/shared';
 import {
@@ -79,8 +80,7 @@ const bridgeAbi = parseAbi([
 
 const client = createPublicClient({ chain: COSTON2, transport: http(RPC) });
 
-const MINA_GRAPHQL =
-  process.env.MINA_DEVNET_GRAPHQL ?? 'https://api.minascan.io/node/devnet/v1/graphql';
+const MINA_GRAPHQL = MINA_READ_GRAPHQL;
 const ESCROW = process.env.MINA_BRIDGE_ACCOUNT;
 
 /**

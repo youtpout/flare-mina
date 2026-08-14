@@ -1,3 +1,4 @@
+import { MINA_NODE_GRAPHQL } from './minaNetwork.js';
 import { privateKeyToAccount } from 'viem/accounts';
 import { encodeMinaRecipient, parseMinaAddress } from '@minaport/shared';
 import { intentDigest } from './attestor.js';
@@ -32,7 +33,7 @@ import { markAttested, markFailed, submittedDeposits, type DepositRow } from './
  * this was written, so this is the honest substitute.
  */
 
-const GRAPHQL = process.env.MINA_GRAPHQL ?? 'https://mina-devnet-graphql.aurowallet.com/graphql';
+const GRAPHQL = MINA_NODE_GRAPHQL;
 const POLL_MS = Number(process.env.WATCH_INTERVAL_MS ?? 20_000);
 const CHAIN_ID = BigInt(process.env.FLARE_CHAIN_ID ?? 114);
 const BRIDGE = process.env.MINA_BRIDGE_ACCOUNT ?? '';

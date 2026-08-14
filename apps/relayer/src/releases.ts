@@ -1,3 +1,4 @@
+import { MINA_NODE_GRAPHQL } from './minaNetwork.js';
 import { keccak256, encodeAbiParameters, toHex, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { decodeMinaRecipient, formatMinaAddress } from '@minaport/shared';
@@ -38,7 +39,7 @@ import { assets } from './assets.js';
  * only asks that the escrow holds enough.
  */
 
-const GRAPHQL = process.env.MINA_GRAPHQL ?? 'https://mina-devnet-graphql.aurowallet.com/graphql';
+const GRAPHQL = MINA_NODE_GRAPHQL;
 const POLL_MS = Number(process.env.RELEASE_INTERVAL_MS ?? 20_000);
 const CHAIN_ID = BigInt(process.env.FLARE_CHAIN_ID ?? 114);
 const VAULT = process.env.FLARE_ASSET_VAULT_ADDRESS as Address | undefined;

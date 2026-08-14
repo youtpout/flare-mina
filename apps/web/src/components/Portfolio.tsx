@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import type { Session } from '@/App';
 import { readBalances, type Balance } from '@/lib/flare';
-import { COSTON2, MINA, explorerAddress } from '@/lib/config';
+import { COSTON2, explorerAddress } from '@/lib/config';
 import { Faucets } from '@/components/Faucets';
 import { readJson } from '@/lib/api';
+import { MinaLink } from '@/components/MinaLink';
 import { errorMessage } from '@/lib/errors';
 
 const short = (s: string, head = 10, tail = 8) =>
@@ -106,14 +107,9 @@ export function Portfolio({
         <div className="row">
           <span className="muted small">Mina wallet</span>
           <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <a
-              className="mono"
-              href={`${MINA.explorer}/account/${session.minaAddress}`}
-              target="_blank"
-              rel="noreferrer"
-            >
+            <MinaLink kind="account" id={session.minaAddress}>
               {short(session.minaAddress)}
-            </a>
+            </MinaLink>
             <Copy value={session.minaAddress} label="your Mina address" />
           </span>
         </div>

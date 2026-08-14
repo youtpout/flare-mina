@@ -1,3 +1,4 @@
+import { MINA_READ_GRAPHQL } from './minaNetwork.js';
 import { createPublicClient, http, parseAbi } from 'viem';
 import { pool } from './db/index.js';
 import { assets } from './assets.js';
@@ -18,8 +19,7 @@ const VAULT = process.env.FLARE_ASSET_VAULT_ADDRESS as `0x${string}` | undefined
 const CHAIN = process.env.FLARE_TRANSFER_CHAIN_ADDRESS as `0x${string}` | undefined;
 const REGISTRY = '0xaD67FE66660Fb8dFE9d6b1b4240d8650e30F6019' as const;
 
-const MINA_GRAPHQL =
-  process.env.MINA_DEVNET_GRAPHQL ?? 'https://api.minascan.io/node/devnet/v1/graphql';
+const MINA_GRAPHQL = MINA_READ_GRAPHQL;
 const ESCROW = process.env.MINA_BRIDGE_ACCOUNT;
 
 const COSTON2 = {
