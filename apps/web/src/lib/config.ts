@@ -18,23 +18,32 @@ export const COSTON2 = {
 } as const;
 
 /**
- * The Mesa environment runs its own auth registry and factory, so a Mina key
- * derives a *different* Flare address on each. That is deliberate: sharing them
- * meant testing on Mesa consumed the production registry's nonces.
+ * Every contract this environment owns, per network.
+ *
+ * All of them, not just the auth pair: a deposit signature commits to the
+ * bridge address as its `target`, so signing against devnet's bridge and
+ * claiming on Mesa's fails with `InvalidMinaSignature` — correctly, and
+ * opaquely. Anything the user signs over must come from here.
+ *
+ * The third-party tokens below are Coston2's own and are the same on both.
  */
-const AUTH = {
+const OWN = {
   devnet: {
     authRegistry: '0xcf12aCe3f7D13EE714D57ee22EfA14cbb662fc56',
     accountFactory: '0x2a2AcdD54B93675828028fb8108fACc0A387fe23',
-  },
+          },
   mesa: {
     authRegistry: '0x7481da09d9BC643D6da75185B2b023f22A8a10bE',
     accountFactory: '0x427e51eE63be082c5Ee813ae5ADbB94D79Ff8A0D',
+    bridge: '0x06E584e72b36494Bb84A2C1df34E665Cf7673517',
+    fmina: '0x05b5e8505e35505233955080f02b7351747B1C7f',
+    assetVault: '0x669BDaa9B9802Ca92A4Ed5a29933805B09E33EeC',
+    wrapperFactory: '0x45d401A560853b71C6546124F0AA8553cE59Fe38',
   },
 } as const;
 
 export const CONTRACTS = {
-  ...AUTH[import.meta.env.VITE_MINA_NETWORK === 'mesa' ? 'mesa' : 'devnet'],
+  ...OWN[import.meta.env.VITE_MINA_NETWORK === 'mesa' ? 'mesa' : 'devnet'],
   /** Locks Flare assets so they can be minted as fungible tokens on Mina. */
   assetVault: '0xa179E908C3F1156Edda0BD5f1A0B3b3f419f9F90',
   /**
