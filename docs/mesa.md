@@ -74,13 +74,30 @@ o1js 2.15: the verification keys of the deployed devnet zkApps are the old ones.
 
 ## Deployed on Mesa
 
+All seven zkApps, verified present on chain afterwards. 10.8 MINA of the 99.
+
 | | Address |
 |---|---|
-| Escrow zkApp | [`B62qrethR1rquZpRA19v72jYyWvQq55wkQXCSeNDrR1u4EmC42Xxxic`](https://minascan.io/mesa/account/B62qrethR1rquZpRA19v72jYyWvQq55wkQXCSeNDrR1u4EmC42Xxxic) |
+| Escrow | [`B62qrethR…42Xxxic`](https://minascan.io/mesa/account/B62qrethR1rquZpRA19v72jYyWvQq55wkQXCSeNDrR1u4EmC42Xxxic) |
+| bFXRP token | [`B62qmjL7P…eHmFHjpng`](https://minascan.io/mesa/account/B62qmjL7PuoW8yxM4y51HarCQRH3mAzCtBXocFrAVYdeH1eHmFHjpng) |
+| bFXRP port | [`B62qpWtTf…81i3fZb`](https://minascan.io/mesa/account/B62qpWtTfJHhmaqkdAs3RbajmbnsVxshnKp46DJPzbwuTGq981i3fZb) |
+| bUSDT token | [`B62qoQ3iG…3JvNqDR`](https://minascan.io/mesa/account/B62qoQ3iGmVhfw5ebEErHXbXHLybU5XvJuBLHAENT2V781G73JvNqDR) |
+| bUSDT port | [`B62qr818X…JpLygR9`](https://minascan.io/mesa/account/B62qr818Xf8gf9dnDULFo9pD6Rhk9iUzrx77LGJHMes2ESNnJpLygR9) |
+| bC2FLR token | [`B62qjBSNZ…3BtvbhJ`](https://minascan.io/mesa/account/B62qjBSNZv2FEP1Ey6VokZga2H4Do96VYuEuBXFLJvrQhfs73BtvbhJ) |
+| bC2FLR port | [`B62qqUNri…JPJWfyXn`](https://minascan.io/mesa/account/B62qqUNriRtpDpjKPLRmPTMBTbS66NwMnDqCZ5iQW3cjLeGJPJWfyXn) |
 
-Its state carries the signing-policy root and the Mesa `TransferChain` address,
-so the FDC path is wired. The three `AssetPort`s and their `FungibleToken`s are
-still to deploy.
+### Two things o1js 3 changed
+
+**Dependencies must be compiled before their dependents.** `deployWrappedAsset`
+compiled `TransferChain`, `SigningPolicyFold`, `AssetPort` and stopped there;
+under o1js 3 that fails with *"depends on flare-relay-message, but we cannot
+find compilation output"*, then again for `fdc-attestation`. The script now uses
+the worker's order, which satisfies the whole graph. o1js 2 tolerated the gap.
+
+**Deploys cannot be chained without waiting.** Sending the second asset while
+the first is still in the mempool reuses its nonce and fails with
+`Insufficient_replace_fee`. Wait for the payer's nonce to advance between each —
+about 30s here.
 
 ## What still has to happen, and cannot be done from a config file
 

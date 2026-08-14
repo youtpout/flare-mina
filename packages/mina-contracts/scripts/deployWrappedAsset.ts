@@ -13,6 +13,9 @@ import { FungibleToken } from 'mina-fungible-token';
 import { AssetPort } from '../src/AssetPort.js';
 import { TransferChain } from '../src/TransferChain.js';
 import { SigningPolicyFold } from '../src/SigningPolicyFold.js';
+import { RelayMessage } from '../src/RelayMessage.js';
+import { MerkleInclusion } from '../src/MerkleInclusion.js';
+import { FdcLeaf, FdcAttestation } from '../src/FdcAttestation.js';
 
 /**
  * Deploy a wrapped Flare asset on Mina: one `FungibleToken` plus the `AssetPort`
@@ -111,9 +114,17 @@ async function main() {
   FungibleToken.AdminContract = AssetPort as never;
 
   console.log('compiling…');
-  // The port verifies both proof systems, so both must be compiled before it.
+  // o1js 3 requires every dependency to be compiled before its dependent, and
+  // reports the missing one rather than pulling it in. This is the worker's
+  // order, which is the one known to satisfy the whole graph:
+  // AssetPort needs FdcAttestation, which needs FdcLeaf and MerkleInclusion;
+  // SigningPolicyFold needs RelayMessage.
   await TransferChain.compile();
+  await RelayMessage.compile();
+  await MerkleInclusion.compile();
   await SigningPolicyFold.compile();
+  await FdcLeaf.compile();
+  await FdcAttestation.compile();
   await AssetPort.compile();
   await FungibleToken.compile();
 
