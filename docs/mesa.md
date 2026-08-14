@@ -33,6 +33,48 @@ The frontend switches on `VITE_MINA_NETWORK=mesa`. Minascan serves Mesa at
 set, because interpolating an empty one builds `/account/B62…`, a relative link
 onto the app's own 404, and the next network may arrive before its explorer.
 
+## The blocker: o1js must move to 3.0.0-mesa
+
+Deploying the escrow fails at `send()` with a bare `502 Bad Gateway`, and the
+error is misleading — nothing is wrong with the endpoint.
+
+What was ruled out, in order:
+
+| Hypothesis | Test | Result |
+|---|---|---|
+| Endpoint down | `{ syncStatus }` | `SYNCED`, height 306818 |
+| Mutations unsupported | `sendZkapp` with an empty input | GraphQL validation error, HTTP 200 — the field exists |
+| Body too large | 200 KB POST | HTTP 200 |
+| That one provider | Retried on `api.minascan.io/node/mesa/v1/graphql` | identical 502 |
+| Transaction landed anyway | account lookup, payer nonce | account null, nonce still 0, balance untouched |
+
+Two independent providers rejecting the same payload is not an infrastructure
+problem. **Mesa is a protocol change, and o1js 2.15.0 (May 2026) predates it.**
+npm carries a whole `3.0.0-mesa.*` line, `@o1js/native` included:
+
+```
+o1js          3.0.0-mesa.final, 3.0.0-mesa.rc2, 3.0.0-mesa.89164, …
+@o1js/native  3.0.0-mesa.final, 3.0.0-mesa.rc2, …
+```
+
+The node is handed a zkApp command in the old format and refuses it in a way the
+gateway reports as 502.
+
+So the Mina half of this branch is blocked on a **major version upgrade**, not a
+configuration change:
+
+- `o1js` 2.15 → 3.0.0-mesa across `packages/mina-contracts` and the relayer
+- `@o1js/native` in step, or the prover loses its backend
+- `mina-fungible-token` 1.1.0 is built against o1js 2.x and has published nothing
+  for Mesa — the three `AssetPort`s depend on it, so the asset rail may need it
+  vendored or replaced
+- every circuit recompiles, so the 7 GB proving-key cache is rebuilt from zero
+- the verification keys change, which is what `deployBridge` writes on chain
+
+None of that is hard, but it is a day's work with real regression risk, and it
+touches the code that is currently live on devnet. It does not belong in the
+same push as a hackathon deadline.
+
 ## What still has to happen, and cannot be done from a config file
 
 **Every zkApp must be redeployed.** A zkApp is an account on one chain; escrow,
