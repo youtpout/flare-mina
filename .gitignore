@@ -26,3 +26,7 @@ scripts/video/.demo-key.env
 
 # Archives: a .env has been zipped into one before. Never commit either.
 *.zip
+
+# Deployer key for the Mesa environment. Testnet, but never commit a key.
+scripts/.mesa-deployer.env
+scripts/.mesa-mina.env
