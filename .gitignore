@@ -30,3 +30,6 @@ scripts/video/.demo-key.env
 # Deployer key for the Mesa environment. Testnet, but never commit a key.
 scripts/.mesa-deployer.env
 scripts/.mesa-mina.env
+# zkApp keys written by deployWrappedAsset. Anchored with ** because the
+# scripts live under packages/, and a mid-pattern slash is root-relative.
+**/.deployed-*.env

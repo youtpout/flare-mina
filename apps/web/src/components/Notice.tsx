@@ -3,9 +3,9 @@ import { CONTRACTS, MINA } from '@/lib/config';
 /**
  * Standing notice above the tabs.
  *
- * Not dismissible on purpose: someone landing mid-outage should not be able to
- * hide the one line that explains why nothing settles, and then conclude the
- * bridge is broken.
+ * Not dismissible on purpose: someone landing after the fork should not be able
+ * to hide the one line explaining why their old balance is gone, and then
+ * conclude the bridge lost it.
  */
 export function Notice() {
   return (
@@ -23,21 +23,23 @@ export function Notice() {
           <strong style={{ color: '#e8ecf3' }}>{CONTRACTS.bridge}</strong>
         </span>
       </div>
-    <div className="notice-bar">
-      <span className="notice-dot" aria-hidden="true" />
-      <span>
-        <strong>Mina devnet upgrades on 19 August</strong> and will be down for part of
-        the day — deposits and releases will not settle while it is. Flare{' '}
-        <span className="grad">×</span> Mina follows on <strong>20 August</strong>.{' '}
-        <a
-          href="https://x.com/MinaProtocol/status/2085719449986814291"
-          target="_blank"
-          rel="noreferrer"
-        >
-          Mina&apos;s announcement
-        </a>
-      </span>
-    </div>
+      <div className="notice-bar">
+        <span className="notice-dot" aria-hidden="true" />
+        <span>
+          <strong>Mina devnet upgraded to Mesa on 19 August.</strong> Flare{' '}
+          <span className="grad">×</span> Mina now runs on o1js 3.0.0, and the wrapped-asset
+          contracts have been <strong>redeployed at new addresses</strong> — a verification key
+          cannot survive a protocol upgrade. Wrapped balances held before the fork stay on the old
+          contracts; the escrow and its bridged MINA are unaffected.{' '}
+          <a
+            href="https://x.com/MinaProtocol/status/2085719449986814291"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Mina&apos;s announcement
+          </a>
+        </span>
+      </div>
     </>
   );
 }

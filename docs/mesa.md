@@ -1,7 +1,8 @@
 # Mesa
 
-Preparation for Mina's Mesa testnet, on the `mesa` branch. **Not deployed** —
-`main` and the live server stay on devnet.
+Mina's Mesa testnet, and the protocol devnet itself upgraded to on 19 August
+2026. The `mesa` branch is merged into `main`; the live server runs devnet, now
+post-fork and on o1js 3.0.0.
 
 | | |
 |---|---|
@@ -33,7 +34,7 @@ The frontend switches on `VITE_MINA_NETWORK=mesa`. Minascan serves Mesa at
 set, because interpolating an empty one builds `/account/B62…`, a relative link
 onto the app's own 404, and the next network may arrive before its explorer.
 
-## o1js 3.0.0-mesa.rc2 — resolved
+## o1js 3.0.0 — resolved
 
 Deploying the escrow first failed at `send()` with a bare `502 Bad Gateway`, and
 the error pointed nowhere useful. What was ruled out, in order:
@@ -52,7 +53,9 @@ was handed an old-format zkApp command and refused it in a way the gateway
 reported as 502.
 
 Upgrading `o1js` and `@o1js/native` to **3.0.0-mesa.rc2** fixed it, and the
-transaction went through on the first attempt afterwards.
+transaction went through on the first attempt afterwards. The 3.0.0 final
+release produces the same verification keys, so nothing deployed here had to
+move when `main` took it.
 
 What the upgrade cost, which was less than feared:
 
@@ -69,8 +72,8 @@ What the upgrade cost, which was less than feared:
   fresh deployment, which is what this environment is.
 - The proving-key cache rebuilds from zero, so the first prover start is cold.
 
-**This is on the `mesa` branch only.** `main` and the live server stay on
-o1js 2.15: the verification keys of the deployed devnet zkApps are the old ones.
+Devnet followed on 20 August. The escrow allows a key change and was upgraded
+in place; the asset rail could not be, and was redeployed — see the README.
 
 ## Deployed on Mesa
 

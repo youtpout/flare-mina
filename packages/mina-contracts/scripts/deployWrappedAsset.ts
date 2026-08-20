@@ -1,3 +1,4 @@
+import { appendFileSync } from 'node:fs';
 import {
   Bool,
   AccountUpdate,
@@ -105,9 +106,19 @@ async function main() {
   console.log('requiredWeight :', requiredWeight.toString());
   console.log('token          :', tokenKey.toPublicKey().toBase58());
   console.log('port           :', portKey.toPublicKey().toBase58());
-  console.log('\nprivate keys (store them, they are not recoverable):');
-  console.log('  token :', tokenKey.toBase58());
-  console.log('  port  :', portKey.toBase58(), '\n');
+  // Appended, not just printed. The devnet rail deployed before this line
+  // existed lost both keys to a closed terminal, and a zkApp whose key is gone
+  // can never be given a new verification key — the next o1js bump strands it.
+  const network = process.env.MINA_NETWORK ?? 'devnet';
+  const keyFile = new URL(`.deployed-${network}.env`, import.meta.url);
+  appendFileSync(
+    keyFile,
+    `\n# ${symbol}\nMINA_${symbol.toUpperCase()}_TOKEN=${tokenKey.toPublicKey().toBase58()}\n` +
+      `MINA_${symbol.toUpperCase()}_TOKEN_KEY=${tokenKey.toBase58()}\n` +
+      `MINA_${symbol.toUpperCase()}_PORT=${portKey.toPublicKey().toBase58()}\n` +
+      `MINA_${symbol.toUpperCase()}_PORT_KEY=${portKey.toBase58()}\n`,
+  );
+  console.log('keys written to', keyFile.pathname, '(gitignored)\n');
 
   // Set before compiling, as the e2e test does: the token resolves its admin
   // class through this, and the deploy transaction reads it.

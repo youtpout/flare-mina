@@ -99,12 +99,12 @@ key that cannot sign for it.
 | | Address |
 |---|---|
 | Bridge escrow | [`B62qpRkb…mkaDr6`](https://minascan.io/devnet/account/B62qpRkbjE5wH6nFmZnVUN7yrjfAhpJPP2qXxn6z7KQsL6RojmkaDr6) |
-| bFXRP token | [`B62qnmNC…mP3XVN`](https://minascan.io/devnet/account/B62qnmNChAeU6SpLDdze7FvVjoT4LsWCcHntiqmFx1aBvrd52mP3XVN) |
-| bFXRP port | [`B62qqvnf…HEPvZAM`](https://minascan.io/devnet/account/B62qqvnfG24NDLd3Byi6et85MPztrrCbTRKCN8vsoMP19konHEPvZAM) |
-| bUSDT token | [`B62qjhVg…EH6Bg3`](https://minascan.io/devnet/account/B62qjhVgqAbso6g8wsLNosuUMTyySicoqtgEbGGPYqWJXDCdQEH6Bg3) |
-| bUSDT port | [`B62qrQ8v…xscMfY`](https://minascan.io/devnet/account/B62qrQ8v16mWqmt5sY8MEDdeLyjPqU1JE2Cg6qcvpxUuMhomZxscMfY) |
-| bC2FLR token | [`B62qiVgu…ukdQHQ`](https://minascan.io/devnet/account/B62qiVguTBzDp5vaHyTatzaQ2zTyhfU22tTi3VQ9MKfcnbnePukdQHQ) |
-| bC2FLR port | [`B62qk3V1…Bd5nrc`](https://minascan.io/devnet/account/B62qk3V13bN1DfkGPRYj8zAuzuCxGitxfHwTuwAswZ4wA3GiEBd5nrc) |
+| bFXRP token | [`B62qpQtG…Pg9o6Az`](https://minascan.io/devnet/account/B62qpQtG4pW4QxeDV14sUdb37UUorxpEcXQgNhsJsxkuzxm3Pg9o6Az) |
+| bFXRP port | [`B62qoQfC…CJXCkGEd`](https://minascan.io/devnet/account/B62qoQfC1Jt7decPXcAfPViiN3dLDaCdvt5ybFNvDah6DtTCJXCkGEd) |
+| bUSDT token | [`B62qmrUd…rWMUU7T`](https://minascan.io/devnet/account/B62qmrUdsK94YC2EsTEjiDD3brwud3MDv5cVirxeUYSvPtXUrWMUU7T) |
+| bUSDT port | [`B62qoUC7…etxBBwWK`](https://minascan.io/devnet/account/B62qoUC72bV8r7XsbTbaEbAYihYZefddUkFx62rLSeHS24uetxBBwWK) |
+| bC2FLR token | [`B62qjf97…jNbrfoDzS`](https://minascan.io/devnet/account/B62qjf97k2SeC4GNRGfMFwdLGviUk91o4pg6UF2evJGsMejNbrfoDzS) |
+| bC2FLR port | [`B62qofwR…WQ682juX`](https://minascan.io/devnet/account/B62qofwRhf8MZf6NGvKvnf7Pz2DPuXkGyXH1bmRCxWp4u55WQ682juX) |
 
 ## Honest about the limits
 

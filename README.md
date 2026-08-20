@@ -390,13 +390,20 @@ Bridged Flare assets, each a `FungibleToken` whose admin is an `AssetPort`:
 
 | Asset | Decimals | Token | Port |
 |-------|----------|-------|------|
-| bFXRP | 6 | `B62qnmNChAeU6SpLDdze7FvVjoT4LsWCcHntiqmFx1aBvrd52mP3XVN` | `B62qqvnfG24NDLd3Byi6et85MPztrrCbTRKCN8vsoMP19konHEPvZAM` |
-| bUSDT | 6 | `B62qjhVgqAbso6g8wsLNosuUMTyySicoqtgEbGGPYqWJXDCdQEH6Bg3` | `B62qrQ8v16mWqmt5sY8MEDdeLyjPqU1JE2Cg6qcvpxUuMhomZxscMfY` |
-| bC2FLR | 9 | `B62qiVguTBzDp5vaHyTatzaQ2zTyhfU22tTi3VQ9MKfcnbnePukdQHQ` | `B62qk3V13bN1DfkGPRYj8zAuzuCxGitxfHwTuwAswZ4wA3GiEBd5nrc` |
+| bFXRP | 6 | `B62qpQtG4pW4QxeDV14sUdb37UUorxpEcXQgNhsJsxkuzxm3Pg9o6Az` | `B62qoQfC1Jt7decPXcAfPViiN3dLDaCdvt5ybFNvDah6DtTCJXCkGEd` |
+| bUSDT | 6 | `B62qmrUdsK94YC2EsTEjiDD3brwud3MDv5cVirxeUYSvPtXUrWMUU7T` | `B62qoUC72bV8r7XsbTbaEbAYihYZefddUkFx62rLSeHS24uetxBBwWK` |
+| bC2FLR | 9 | `B62qjf97k2SeC4GNRGfMFwdLGviUk91o4pg6UF2evJGsMejNbrfoDzS` | `B62qofwRhf8MZf6NGvKvnf7Pz2DPuXkGyXH1bmRCxWp4u55WQ682juX` |
 
 Every port shares one verification key —
-`4521156475796503052894684743334034318326128329903794096474956123702318054773` —
+`23563529983430334510888669955082100483868831714584194691514638694622311464386` —
 because they run the same circuit against different tokens.
+
+All six were **redeployed on 20 August 2026**, after devnet's Mesa hard fork.
+o1js 3 produces different verification keys, and a `FungibleToken` deploys with
+`allowUpdates: false` by design — so the pre-fork pair could not be handed the
+new key and had to be replaced. The escrow, which does allow a key change, was
+upgraded in place and kept its address. Balances held on the old tokens stay
+there.
 
 Decimals are never converted: `100000` base units is `0.1 USDT` on both chains,
 so the backing invariant is an integer comparison. FXRP and USD₮0 are 6 on Flare

@@ -186,14 +186,20 @@ const MESA_INBOUND: Record<string, { token: string; tokenId: string }> = {
   },
 };
 
+/**
+ * Redeployed 20 August 2026, after the Mesa hard fork. o1js 3 produces
+ * different verification keys, and a `FungibleToken` deploys with
+ * `allowUpdates: false` — so the pre-fork tokens could not be given the new key
+ * and had to be replaced. Their balances stay on the old accounts.
+ */
 const DEVNET_INBOUND: InboundAsset[] = [
   { symbol: 'MINA', decimals: 9, flareSymbol: 'FMINA', live: true },
   {
     symbol: 'bC2FLR',
     decimals: 9,
     flareSymbol: 'C2FLR',
-    token: 'B62qiVguTBzDp5vaHyTatzaQ2zTyhfU22tTi3VQ9MKfcnbnePukdQHQ',
-    tokenId: 'xKJdu2C8Ljij5GKfQYjSMzFKmf1PbrR8FHySEiiGFU6wvt3ZDb',
+    token: 'B62qjf97k2SeC4GNRGfMFwdLGviUk91o4pg6UF2evJGsMejNbrfoDzS',
+    tokenId: 'wpPtoetK7hBiqkmxdKesWzCEqePzDtRNE9UfLf4PpgtzdAU6dp',
     flareToken: '0x6C790956D728ed82A75d2ec8D5c37F2e2F36b978',
     live: true,
   },
@@ -201,8 +207,8 @@ const DEVNET_INBOUND: InboundAsset[] = [
     symbol: 'bFXRP',
     decimals: 6,
     flareSymbol: 'FXRP',
-    token: 'B62qnmNChAeU6SpLDdze7FvVjoT4LsWCcHntiqmFx1aBvrd52mP3XVN',
-    tokenId: 'xPHC6du23rjWCeJVxeKZ8xzgqCCAy5tHCD7WgsLr3bX9aW3Xyw',
+    token: 'B62qpQtG4pW4QxeDV14sUdb37UUorxpEcXQgNhsJsxkuzxm3Pg9o6Az',
+    tokenId: 'xnhnnbYuqJkgx4qvh9LiK1hK3Ps3TfpTQ3tQ91jUVejHCkSBBX',
     flareToken: '0x0b6A3645c240605887a5532109323A3E12273dc7',
     live: true,
   },
@@ -210,8 +216,8 @@ const DEVNET_INBOUND: InboundAsset[] = [
     symbol: 'bUSDT',
     decimals: 6,
     flareSymbol: 'USD₮0',
-    token: 'B62qjhVgqAbso6g8wsLNosuUMTyySicoqtgEbGGPYqWJXDCdQEH6Bg3',
-    tokenId: 'woBocoVw25c3CwTmC4eiYiTTmuwMiCN5Q6ZnqMn2jrfue2sDBT',
+    token: 'B62qmrUdsK94YC2EsTEjiDD3brwud3MDv5cVirxeUYSvPtXUrWMUU7T',
+    tokenId: 'xzcUvYNfbiMM8voLKnkgfLVyfGxCKHG1rT5MGNs4rSPQ7Tc1n7',
     flareToken: '0xC1A5B41512496B80903D1f32d6dEa3a73212E71F',
     live: true,
   },
@@ -267,7 +273,7 @@ export const INBOUND_ASSETS: InboundAsset[] =
     : DEVNET_INBOUND;
 
 
-/** Mesa has no explorer, so a link there would 404. */
+/** Guarded: a network may arrive before its explorer does. */
 export const minaAccountUrl = (address: string): string | null =>
   MINA.explorer ? `${MINA.explorer}/account/${address}` : null;
 
