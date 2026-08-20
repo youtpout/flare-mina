@@ -29,10 +29,13 @@ type NetworkConfig = {
 
 const NETWORKS: Record<MinaNetworkName, NetworkConfig> = {
   devnet: {
-    // Not minascan's node here: it answers most token accounts in ~200ms and
-    // then times out on others every single time.
-    node: 'https://mina-devnet-graphql.aurowallet.com/graphql',
-    reads: 'https://api.minascan.io/node/devnet/v1/graphql',
+    // o1's own nodes, for both roles, since the 19 August hard fork. minascan
+    // kept serving a *different chain id* to the one o1 and aurowallet agree
+    // on, several hundred blocks behind — reading state from it would have been
+    // reading the abandoned fork, silently and with plausible-looking answers.
+    node: 'https://devnet-plain-1.gcp.o1test.net/graphql',
+    reads: 'https://devnet-plain-1.gcp.o1test.net/graphql',
+    archive: 'https://devnet-archive-node-api.gcp.o1test.net/',
     explorer: 'https://minascan.io/devnet',
   },
   mesa: {

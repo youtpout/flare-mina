@@ -302,7 +302,7 @@ const graphql =
   process.env.MINA_GRAPHQL ??
   (MESA
     ? 'https://mesa.minataur.net/graphql'
-    : 'https://mina-devnet-graphql.aurowallet.com/graphql');
+    : 'https://devnet-plain-1.gcp.o1test.net/graphql');
 // Both endpoints, explicitly. Given only a node URL, o1js leaves the archive
 // endpoint at its default and something in transaction building reaches for
 // it — which cost a flat 60s per deposit, the exact timeout of the public

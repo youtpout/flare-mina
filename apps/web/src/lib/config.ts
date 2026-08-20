@@ -237,11 +237,11 @@ const MINA_NETWORKS = {
     /**
      * Read-only. Used for balances; the wallet has its own endpoint for sending.
      *
-     * Not minascan's node, which answers most token accounts in ~200ms and then
-     * times out on others every single time — measured 2/2 on bC2FLR while this
-     * one answered in under 180ms on every attempt.
+     * o1's node since the 19 August hard fork. minascan stayed on a different
+     * chain id, several hundred blocks behind, and answered balance queries from
+     * it without any sign that the chain was the wrong one.
      */
-    graphql: 'https://mina-devnet-graphql.aurowallet.com/graphql',
+    graphql: 'https://devnet-plain-1.gcp.o1test.net/graphql',
   },
   mesa: {
     network: 'mesa',

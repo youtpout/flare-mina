@@ -41,7 +41,7 @@ class Counter extends SmartContract {
 }
 
 const GRAPHQL =
-  process.env.MINA_DEVNET_GRAPHQL ?? 'https://api.minascan.io/node/devnet/v1/graphql';
+  process.env.MINA_DEVNET_GRAPHQL ?? 'https://devnet-plain-1.gcp.o1test.net/graphql';
 const FEE = 100_000_000;
 const BUMPS = 5;
 

@@ -29,7 +29,7 @@ import { TransferChain } from '../src/TransferChain.js';
  * than defaulted.
  */
 
-const GRAPHQL = process.env.MINA_DEVNET_GRAPHQL ?? 'https://api.minascan.io/node/devnet/v1/graphql';
+const GRAPHQL = process.env.MINA_DEVNET_GRAPHQL ?? 'https://devnet-plain-1.gcp.o1test.net/graphql';
 const FEE = 200_000_000; // 0.2 MINA
 
 function required(name: string): string {

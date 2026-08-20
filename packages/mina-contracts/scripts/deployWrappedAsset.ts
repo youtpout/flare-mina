@@ -48,7 +48,7 @@ import { FdcLeaf, FdcAttestation } from '../src/FdcAttestation.js';
  */
 
 const GRAPHQL =
-  process.env.MINA_DEVNET_GRAPHQL ?? 'https://api.minascan.io/node/devnet/v1/graphql';
+  process.env.MINA_DEVNET_GRAPHQL ?? 'https://devnet-plain-1.gcp.o1test.net/graphql';
 const FEE = 200_000_000; // 0.2 MINA
 
 function required(name: string): string {
