@@ -109,9 +109,16 @@ setBackend('native');
 await initializeBindings();
 
 async function main() {
-  const [what, symbol] = process.argv.slice(2);
-  if (what !== 'bridge' && what !== 'port' && what !== 'repair-admin') {
-    throw new Error('usage: migrateState.js <bridge|port|repair-admin> [symbol]');
+  const [what, symbol, cursor] = process.argv.slice(2);
+  if (
+    what !== 'bridge' &&
+    what !== 'port' &&
+    what !== 'repair-admin' &&
+    what !== 'set-cursor'
+  ) {
+    throw new Error(
+      'usage: migrateState.js <bridge|port|repair-admin|set-cursor> [symbol] [head]',
+    );
   }
 
   Mina.setActiveInstance(Mina.Network(GRAPHQL));
@@ -142,7 +149,22 @@ async function main() {
   // this is the step that is easy to get subtly wrong and impossible to check
   // afterwards from the values alone.
   let after: Field[];
-  if (what === 'repair-admin') {
+  if (what === 'set-cursor') {
+    // Only slot [2]. A port redeployed against a TransferChain that already has
+    // history starts its cursor at zero and has to replay every past lock —
+    // two proofs and two blocks each, minting to whoever locked back then —
+    // before it reaches anything current. This skips that walk.
+    //
+    // Destructive by design: the locks stepped over can never be minted here.
+    if (cursor === undefined) throw new Error('set-cursor needs a chain head');
+    if (before[5]!.toString() !== '0') {
+      // Rewriting the cursor under an armed authorisation would leave the port
+      // holding a commitment to a lock it can no longer prove, and no mint can
+      // clear it.
+      throw new Error('a mint is armed; let it settle before moving the cursor');
+    }
+    after = [...before.slice(0, 2), Field(cursor), ...before.slice(3)];
+  } else if (what === 'repair-admin') {
     // Only slot [7]. Everything else is already in its new place, so recomputing
     // the whole layout from a state that has already moved would be wrong.
     // The same fallback the prover uses to sign a rotation. They have to agree,

@@ -42,6 +42,17 @@ import { FdcLeaf, FdcAttestation } from '../src/FdcAttestation.js';
  * must cross through `BridgeWrapper` on the Flare side first, which is why its
  * port is deployed against `bWC2FLR` at 9.
  *
+ * # A new port starts at the beginning of the chain
+ *
+ * `processedLockState` initialises to zero, and the Flare `TransferChain` is
+ * shared and long-lived. So a port deployed against a chain that already has
+ * history must replay every past lock of its asset — two proofs and two blocks
+ * each, minting to whoever locked back then — before it reaches anything
+ * current. Redeploying three ports cost hours of that.
+ *
+ * Fast-forward it afterwards, unless replaying really is what you want:
+ *   node dist/scripts/migrateState.js set-cursor BFXRP <head>
+ *
  * Usage, from the repository root:
  *   set -a && . ./.env && set +a
  *   pnpm --filter @minaport/mina-contracts exec tsx \
